@@ -1,0 +1,4 @@
+# Install a matched torch/torchvision build for CPU or CUDA first (see README).
+-e ../Pipeline
+ultralytics==8.4.150
+huggingface-hub==1.11.0
