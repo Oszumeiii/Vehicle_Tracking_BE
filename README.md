@@ -1,7 +1,7 @@
 # Vehicle Tracking BE — API cắt biển số
 
 FastAPI nhận video, SQLite lưu hàng đợi/kết quả, một worker riêng gọi package `plate_pipeline`.
-Hỗ trợ `yolov8`, `yolo11n`, `yolo11m`, `yolo26n`; một model cho mỗi video. Chưa có OCR/tracking.
+Luồng video hỗ trợ `yolov8`, `yolo11n`, `yolo11m`, `yolo26n`; endpoint model riêng nhận đúng 5 frame để nhận dạng biển số.
 
 ## Thiết lập trên Windows / PowerShell
 
@@ -31,7 +31,8 @@ trong môi trường ML, đặt `PLATE_DEVICE=cuda`, kiểm tra lệnh sau trả
 ```
 
 Có GPU NVIDIA không đồng nghĩa PyTorch hiện tại có CUDA. Không tự chuyển về CPU khi cấu hình `cuda` bị lỗi.
-Có thể tách môi trường API và ML bằng `PLATE_PIPELINE_PYTHON`; môi trường ML phải cài `requirements-ml.txt`.
+Có thể tách worker Pipeline khỏi API bằng `PLATE_PIPELINE_PYTHON`; môi trường worker phải cài `requirements-ml.txt`.
+Endpoint inference trong API cần PyTorch, NumPy và OpenCV cài trong chính interpreter chạy FastAPI.
 Đường dẫn tương đối trong `.env` được tính từ thư mục backend.
 
 ## Chạy
@@ -71,6 +72,25 @@ Mỗi crop gồm `frame_index` (1-based), `timestamp_seconds`, `confidence`, `bb
 dạng `[x1,y1,x2,y2]` theo pixel ảnh gốc. `crop_bbox` gồm padding và clamp theo Pipeline.
 Timestamp dùng FPS của sampler, không phải PTS chính xác của video biến thiên FPS. Số crop không phải số xe duy nhất.
 YOLOv8 là mặc định kỹ thuật, không phải kết luận về độ chính xác.
+
+## API inference 5 frame
+
+Inference 5 frame được phục vụ chung trên FastAPI hiện tại. Cài môi trường ML, đặt `MODEL_CHECKPOINT` trỏ tới file
+checkpoint hoặc thư mục checkpoint PyTorch đã bung; mặc định là `app/models/single_model_best`. Model được nạp khi
+gọi inference lần đầu. Decoder dùng constrained CTC beam search; `MODEL_PLATE_POSITION_CLASSES` mặc định là
+`LLLDDDD` (3 chữ và 4 số). Gọi endpoint:
+
+```powershell
+curl.exe -X POST http://127.0.0.1:8000/api/v1/model/predict `
+  -F "frames=@D:/frames/lr-001.jpg" -F "frames=@D:/frames/lr-002.jpg" `
+  -F "frames=@D:/frames/lr-003.jpg" -F "frames=@D:/frames/lr-004.jpg" `
+  -F "frames=@D:/frames/lr-005.jpg"
+```
+
+Gửi đúng 5 ảnh theo thứ tự bằng multipart field `frames` tới `POST /api/v1/model/predict`. Mỗi ảnh được resize về `128x32` và
+chuẩn hóa như nhau; phản hồi gồm text giải mã CTC và trọng số fusion của từng frame. `MODEL_DEVICE` nhận `cpu` hoặc
+`cuda`; cấu hình checkpoint, thiết bị, định dạng biển số và giới hạn dung lượng ảnh nằm trong `.env`. Kiểm tra trạng thái
+model tại `GET /api/v1/model/health`.
 
 MP4/AVI/MOV tối đa 500 MiB mặc định. Video giả đuôi hoặc hỏng được worker kiểm tra giải mã và đánh dấu thất bại.
 Không có detection vẫn thành công với `items=[]`. Kết quả chưa sẵn sàng trả `409`, không tìm thấy trả `404`,
