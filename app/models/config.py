@@ -30,8 +30,8 @@ class Config:
     IDX2CHAR = {idx + 1: char for idx, char in enumerate(CHARS)}
     NUM_CLASSES = len(CHARS) + 1
 
-    IMG_HEIGHT = 32
-    IMG_WIDTH = 128
+    IMG_HEIGHT = 48
+    IMG_WIDTH = 192
     NUM_FRAMES = 5
 
     STN_MAX_AFFINE_DELTA = float(os.getenv("MODEL_STN_MAX_AFFINE_DELTA", "0.15"))
@@ -43,10 +43,11 @@ class Config:
     CHECKPOINT_PATH = _absolute(os.getenv("MODEL_CHECKPOINT", "app/models/single_model_best"))
     DEVICE = os.getenv("MODEL_DEVICE", "cpu").strip().lower()
     MAX_FRAME_BYTES = int(os.getenv("MODEL_MAX_FRAME_MIB", "8")) * 1024 * 1024
+    MAX_IMAGE_PIXELS = int(os.getenv("MODEL_MAX_IMAGE_PIXELS", "40000000"))
 
     if DEVICE not in {"cpu", "cuda"}:
         raise ValueError("MODEL_DEVICE must be cpu or cuda")
-    if MAX_FRAME_BYTES <= 0:
-        raise ValueError("MODEL_MAX_FRAME_MIB must be positive")
+    if MAX_FRAME_BYTES <= 0 or MAX_IMAGE_PIXELS <= 0:
+        raise ValueError("Model image limits must be positive")
     if not PLATE_POSITION_CLASSES or any(cls not in {"L", "D", "A"} for cls in PLATE_POSITION_CLASSES):
         raise ValueError("MODEL_PLATE_POSITION_CLASSES must use L, D, or A and cannot be empty")

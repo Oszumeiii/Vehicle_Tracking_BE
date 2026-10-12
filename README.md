@@ -90,7 +90,7 @@ curl.exe -X POST http://127.0.0.1:8000/api/v1/model/predict `
 Gửi đúng 5 ảnh theo thứ tự bằng multipart field `frames` tới `POST /api/v1/model/predict`. Mỗi ảnh được resize về `128x32` và
 chuẩn hóa như nhau; phản hồi gồm text giải mã CTC và trọng số fusion của từng frame. `MODEL_DEVICE` nhận `cpu` hoặc
 `cuda`; cấu hình checkpoint, thiết bị, định dạng biển số và giới hạn dung lượng ảnh nằm trong `.env`. Kiểm tra trạng thái
-model tại `GET /api/v1/model/health`.
+model tại `GET /api/v1/model/health`. `MODEL_MAX_IMAGE_PIXELS` giới hạn tổng số pixel mỗi ảnh; mặc định là 40 triệu.
 
 MP4/AVI/MOV tối đa 500 MiB mặc định. Video giả đuôi hoặc hỏng được worker kiểm tra giải mã và đánh dấu thất bại.
 Không có detection vẫn thành công với `items=[]`. Kết quả chưa sẵn sàng trả `409`, không tìm thấy trả `404`,

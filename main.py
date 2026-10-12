@@ -86,7 +86,7 @@ def predict_model(request: Request, frames: list[UploadFile] = File(...)):
 
     batch = torch.stack(tensors).unsqueeze(0).to(device)
     with torch.inference_mode():
-        logits, _, _, _, frame_weights = model(batch)
+        logits, frame_weights = model(batch, return_aux=False, return_weights=True)
     text, _, valid = decode_constrained(logits, model_config.IDX2CHAR)
     if not valid:
         raise HTTPException(status_code=500, detail="No candidate matched the configured plate format.")

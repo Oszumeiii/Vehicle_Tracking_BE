@@ -25,7 +25,11 @@ def main():
     model = load_model(Config.CHECKPOINT_PATH, device)
 
     with torch.inference_mode():
-        logits, _, _, _, frame_weights = model(frames.to(device))
+        logits, frame_weights = model(
+            frames.to(device),
+            return_aux=False,
+            return_weights=True,
+        )
 
     predicted_text, score, valid = decode_constrained(logits, Config.IDX2CHAR)
     if not valid:
