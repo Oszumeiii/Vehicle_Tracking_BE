@@ -1,4 +1,5 @@
 import logging
+from typing_extensions import Annotated
 
 from fastapi import APIRouter, FastAPI, File, HTTPException, Request, UploadFile
 
@@ -35,7 +36,10 @@ def get_model_runtime(application: FastAPI):
                 raise RuntimeError("MODEL_DEVICE is cuda, but CUDA is not available")
             if not ModelConfig.CHECKPOINT_PATH.exists():
                 raise FileNotFoundError(f"Model checkpoint not found: {ModelConfig.CHECKPOINT_PATH}")
+            # Load the model and move it to the specified device
             model = load_model(ModelConfig.CHECKPOINT_PATH, device)
+            
+            
         except Exception as exc:
             logger.exception("Could not load the inference model")
             raise HTTPException(
@@ -47,15 +51,13 @@ def get_model_runtime(application: FastAPI):
         application.state.inference_device = device
         application.state.inference_config = ModelConfig
         return model, device, ModelConfig
+    
+    
 
 
-@router.get("/health")
-def model_health(request: Request):
-    return {"status": "ok", "model_loaded": request.app.state.inference_model is not None}
-
-
+# Predict endpoint for the model inference for a list of frames ( 5 frames)
 @router.post("/predict")
-def predict_model(request: Request, frames: list[UploadFile] = File(...)):
+def predict_model(request: Request, frames: Annotated[list[UploadFile], File(...)]):
     model, device, model_config = get_model_runtime(request.app)
     if len(frames) != model_config.NUM_FRAMES:
         raise HTTPException(
@@ -89,3 +91,9 @@ def predict_model(request: Request, frames: list[UploadFile] = File(...)):
         "text": text,
         "frame_weights": frame_weights[0].float().cpu().tolist(),
     }
+
+
+
+@router.get("/health")
+def model_health(request: Request):
+    return {"status": "ok", "model_loaded": request.app.state.inference_model is not None}

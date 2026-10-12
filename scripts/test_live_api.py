@@ -57,9 +57,7 @@ def main():
             check("Missing upload", client.post(base), 422)
             check("Unsupported extension", post(client, b"x", filename="test.txt"), 415)
             check("Empty upload", post(client, b""), 422)
-            for fields in ({"model": "unknown"}, {"confidence": "0"}, {"confidence": "1.1"}, {"confidence": "nan"}):
-                check(f"Invalid parameters {fields}", post(client, b"x", **fields), 422)
-
+            check("Invalid model", post(client, b"x", model="unknown"), 422)
             # Send only oversized headers: middleware should reject before any large upload.
             parts = urlsplit(args.base_url)
             cls = http.client.HTTPSConnection if parts.scheme == "https" else http.client.HTTPConnection
@@ -80,7 +78,7 @@ def main():
             for model in args.models:
                 started = time.monotonic()
                 with args.video.open("rb") as source:
-                    response = check(f"Upload {model}", post(client, source, filename=args.video.name, model=model, confidence="0.25"), 202)
+                    response = check(f"Upload {model}", post(client, source, filename=args.video.name, model=model), 202)
                 accepted = response.json()
                 url = accepted["status_url"]
                 report["models"][model] = {"job_id": accepted["job_id"], "status_url": url}
@@ -89,6 +87,7 @@ def main():
                 check("Delete unfinished job", client.delete(url), 409)
                 status, polls = finish(client, url)
                 assert status["status"] == "succeeded", status
+                assert status["model"] == model
                 assert "input_path" not in status
                 for query in ("limit=0", "limit=201", "offset=-1"):
                     check(f"Invalid pagination {query}", client.get(url + "/plates?" + query), 422)

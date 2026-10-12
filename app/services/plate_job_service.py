@@ -25,7 +25,7 @@ class JobService:
     def job_dir(self, job_id):
         return safe_path(self.settings.data_dir / "jobs", job_id)
 
-    def upload(self, file: UploadFile, model: str, confidence: float):
+    def upload(self, file: UploadFile, model: str):
         folder = None
         created = False
         try:
@@ -48,7 +48,12 @@ class JobService:
                 raise HTTPException(422, "Video is empty.")
             destination = folder / f"input{suffix}"
             temporary.replace(destination)
-            self.repo.create(job_id, model, confidence, destination)
+            self.repo.create(
+                job_id,
+                model,
+                self.settings.detection_confidence,
+                destination,
+            )
             return {"job_id": job_id, "status": "queued", "status_url": f"/api/v1/plate-jobs/{job_id}"}
         except BaseException:
             if created and folder is not None:
@@ -56,6 +61,21 @@ class JobService:
             raise
         finally:
             file.file.close()
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
+            
 
     def get(self, job_id, ready=False):
         job = self.repo.get(job_id)

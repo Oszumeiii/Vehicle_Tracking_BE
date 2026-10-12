@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 import os
+import re
 
 from app.ai.recognition.config import Config
 
@@ -28,11 +29,14 @@ class Settings:
     use_tta: bool = field(default_factory=lambda: _boolean("MODEL_USE_TTA", False))
     decoder: str = "beam_constrained"
     beam_width: int = 8
+    min_beam_score: float = 0.80
 
     def __post_init__(self):
-        if self.device not in {"cpu", "cuda"}:
-            raise ValueError("MODEL_DEVICE must be cpu or cuda")
+        if self.device not in {"cpu", "cuda"} and not re.fullmatch(r"cuda:\d+", self.device):
+            raise ValueError("MODEL_DEVICE must be cpu, cuda, or cuda:N")
         if min(self.max_file_bytes, self.max_image_pixels, self.cpu_threads, self.beam_width) <= 0:
             raise ValueError("Inference limits, CPU threads and beam width must be positive")
-        if self.decoder != "beam_constrained":
-            raise ValueError("Only the beam_constrained decoder is supported")
+        if not 0 < self.min_beam_score <= 1:
+            raise ValueError("Minimum relative beam score must be in (0, 1]")
+        if self.decoder not in {"greedy", "beam_plain", "beam_filter", "beam_constrained"}:
+            raise ValueError("Unsupported recognition decoder")

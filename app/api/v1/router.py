@@ -6,6 +6,8 @@ from app.api.v1.endpoints.recognition import router as recognition_router
 
 
 router = APIRouter()
+
+# Include routers for different endpoints
 router.include_router(health_router)
 router.include_router(plate_jobs_router)
 router.include_router(recognition_router)

@@ -1,4 +1,5 @@
 import hashlib
+import math
 import threading
 import time
 
@@ -8,8 +9,14 @@ import torch
 from torch.nn import functional as F
 
 from app.ai.recognition.config import Config as ModelConfig
-from app.ai.recognition.decoder import ctc_prefix_beam_search_constrained
-from app.ai.recognition.errors import InferenceBusy, InferenceUnavailable
+from app.ai.recognition.decoder import (
+    ctc_prefix_beam_search,
+    ctc_prefix_beam_search_constrained,
+    ctc_prefix_beam_search_nbest,
+    decode_greedy,
+    is_valid_plate_format,
+)
+from app.ai.recognition.errors import InferenceBusy, InferenceUnavailable, NoValidPlateCandidate
 from app.ai.recognition.model import SingleLRLPRModel, load_model
 from app.ai.recognition.preprocessing import decode_image, preprocess_bgr
 from app.ai.settings import Settings
@@ -40,6 +47,38 @@ def affine_variant(images, scale, tx, ty):
     grid = F.affine_grid(theta[None].expand(b * t, -1, -1), x.size(), align_corners=False)
     warped = F.grid_sample(x, grid, mode='bilinear', padding_mode='border', align_corners=False)
     return warped.view(b, t, c, h, w).to(images.dtype)
+
+
+def _decode_prediction(log_probs, settings):
+    decoder = settings.decoder
+    if decoder == "greedy":
+        text = decode_greedy(torch.from_numpy(log_probs)[None, ...], ModelConfig.IDX2CHAR)
+        valid = is_valid_plate_format(text, ModelConfig.PLATE_POSITION_CLASSES)
+        return text, None, valid, None
+    if decoder == "beam_plain":
+        candidates = ctc_prefix_beam_search_nbest(
+            log_probs, ModelConfig.IDX2CHAR, beam_width=settings.beam_width
+        )
+        text, score = candidates[0] if candidates else ("", -1e9)
+        valid = is_valid_plate_format(text, ModelConfig.PLATE_POSITION_CLASSES)
+        return text, score, valid, None
+    if decoder == "beam_filter":
+        unconstrained = ctc_prefix_beam_search_nbest(
+            log_probs, ModelConfig.IDX2CHAR, beam_width=settings.beam_width
+        )
+        best_score = unconstrained[0][1] if unconstrained else -1e9
+        text, score, valid = ctc_prefix_beam_search(
+            log_probs, ModelConfig.IDX2CHAR, beam_width=settings.beam_width,
+            format_constrained=True,
+        )
+        relative_score = math.exp(min(0.0, score - best_score)) if valid else 0.0
+        return text, score, valid and relative_score >= settings.min_beam_score, relative_score
+    return ctc_prefix_beam_search_constrained(
+        log_probs,
+        ModelConfig.IDX2CHAR,
+        position_classes=ModelConfig.PLATE_POSITION_CLASSES,
+        beam_width=settings.beam_width,
+    ) + (None,)
 
 
 class PlateRecognizer:
@@ -114,17 +153,13 @@ class PlateRecognizer:
             averaged = F.log_softmax(torch.stack(log_probs).mean(0), dim=-1)
             # .cpu() synchronizes GPU completion before timings and decoding.
             lp = averaged[0].cpu().numpy()
-            text, score, valid = ctc_prefix_beam_search_constrained(
-                lp,
-                ModelConfig.IDX2CHAR,
-                position_classes=ModelConfig.PLATE_POSITION_CLASSES,
-                beam_width=self.settings.beam_width,
-            )
+            text, score, valid, relative_beam_score = _decode_prediction(lp, self.settings)
             if not valid:
-                raise InferenceUnavailable('No candidate matched the configured plate format.')
+                raise NoValidPlateCandidate('No candidate matched the configured plate format.')
             return {
                 'text': text,
                 'ctc_log_probability': score,
+                'relative_beam_score': relative_beam_score,
                 'frame_weights': original_weights,
                 'num_frames': 5,
                 'device': self.device_label,

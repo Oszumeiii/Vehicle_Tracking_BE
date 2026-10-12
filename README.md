@@ -1,7 +1,8 @@
 # Vehicle Tracking BE — API cắt biển số
 
-FastAPI nhận video, SQLite lưu hàng đợi/kết quả, một worker riêng gọi package `plate_pipeline`.
-Luồng video hỗ trợ `yolov8`, `yolo11n`, `yolo11m`, `yolo26n`; endpoint model riêng nhận đúng 5 frame để nhận dạng biển số.
+FastAPI nhận video, SQLite lưu hàng đợi/kết quả, một worker riêng chạy pipeline nội bộ: adaptive sampling,
+YOLO, BoT-SORT, chọn năm crop theo track và nhận dạng biển số.
+Các model video được hỗ trợ là `yolo11l`, `yolo11n`, `yolo11m`, `yolo26n`.
 
 ## Cây thư mục
 
@@ -46,16 +47,23 @@ Vehicle_Tracking_BE/
 │   │
 │   └── ai/
 │       ├── pipelines/
-│       │   └── plate_pipeline.py
-│       │
+│       │   ├── config.py
+│       │   ├── plate_pipeline.py
+│       │   └── video_pipeline.py
+│       ├── detect_tracking_boundingbox/
+│       │   ├── botsort_tracker.py
+│       │   ├── empty_scene_gate.py
+│       │   └── yolo_detector.py
 │       ├── recognition/
 │       │   ├── model.py
 │       │   ├── config.py
 │       │   ├── decoder.py
 │       │   ├── preprocessing.py
 │       │   ├── errors.py
-│       │   └── inference.py
-│       │
+│       │   ├── inference.py
+│       │   └── track_predictor.py
+│       ├── video/
+│       │   └── frame_extractor.py
 │       └── settings.py
 │
 ├── checkpoints/
@@ -66,6 +74,7 @@ Vehicle_Tracking_BE/
 │
 ├── tests/
 │   ├── test_plate_jobs.py
+│   ├── test_video_pipeline.py
 │   └── fixtures/
 │       └── test_track/
 │           ├── lr-001.jpg ... lr-005.jpg
@@ -79,8 +88,6 @@ Vehicle_Tracking_BE/
 │
 ├── main.py                 # Entrypoint tương thích ngược
 ├── requirements.txt
-├── requirements-dev.txt
-├── requirements-ml.txt
 ├── .env.example
 ├── .gitignore
 ├── README.md
@@ -92,22 +99,19 @@ Celery/Redis, ORM, Docker và migrations chưa được tạo. `app/worker.py` c
 
 ## Thiết lập trên Windows / PowerShell
 
-Dùng Python 3.12. Đặt hai repository cạnh nhau: `Vehicle_Tracking_BE` và `Pipeline`.
-Dependency local được khai báo trong `requirements-ml.txt`; nếu đặt Pipeline ở nơi khác, sửa dòng `-e` tương ứng.
-Không cần sao chép mã Pipeline vào backend.
+Dùng Python 3.12 trở lên. Pipeline video nằm trong backend; không cần cài package `plate_pipeline` riêng.
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-# Bản CPU để kiểm tra local:
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+# Cài PyTorch/torchvision theo nền tảng và thiết bị tại pytorch.org.
 .\.venv\Scripts\python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-.\.venv\Scripts\python.exe -m pip install -r requirements-ml.txt
 Copy-Item .env.example .env
 .\.venv\Scripts\python.exe -m scripts.prepare_models
 ```
 
-Chỉ sao chép `.env.example` nếu chưa có cấu hình riêng trong `.env`. Bốn checkpoint được tải và kiểm tra inference
-trong bước chuẩn bị. Cần Internet lần đầu; worker dùng cache offline, không cài dependency khi nhận video.
+Chỉ sao chép `.env.example` nếu chưa có cấu hình riêng trong `.env`. Bốn checkpoint YOLO được tải và kiểm tra inference
+trong bước chuẩn bị; checkpoint nhận dạng phải tồn tại tại `MODEL_CHECKPOINT`. Cần Internet lần đầu; worker dùng cache offline.
 Sau khi đổi interpreter, thiết bị hoặc checkpoint, chạy lại `scripts.prepare_models`.
 
 Muốn chạy GPU: cài cặp PyTorch/torchvision có CUDA theo [hướng dẫn PyTorch](https://pytorch.org/get-started/locally/)
@@ -118,7 +122,8 @@ trong môi trường ML, đặt `PLATE_DEVICE=cuda`, kiểm tra lệnh sau trả
 ```
 
 Có GPU NVIDIA không đồng nghĩa PyTorch hiện tại có CUDA. Không tự chuyển về CPU khi cấu hình `cuda` bị lỗi.
-Có thể tách worker Pipeline khỏi API bằng `PLATE_PIPELINE_PYTHON`; môi trường worker phải cài `requirements-ml.txt`.
+Có thể tách worker khỏi API bằng `PLATE_PIPELINE_PYTHON`; môi trường worker cần `requirements.txt`
+và PyTorch/torchvision.
 Endpoint inference trong API cần PyTorch, NumPy và OpenCV cài trong chính interpreter chạy FastAPI.
 Đường dẫn tương đối trong `.env` được tính từ thư mục backend.
 
@@ -145,7 +150,7 @@ Windows Job Object dừng cả cây tiến trình model nếu worker chết ho�
 
 ```powershell
 curl.exe -X POST http://127.0.0.1:8000/api/v1/plate-jobs `
-  -F "file=@D:/videos/traffic.mp4" -F "model=yolov8" -F "confidence=0.25"
+  -F "file=@D:/videos/traffic.mp4" -F "model=yolo11l"
 ```
 
 Trả `202` với `job_id`, `status=queued`, `status_url`. Sau đó:
@@ -158,7 +163,8 @@ Trả `202` với `job_id`, `status=queued`, `status_url`. Sau đó:
 Mỗi crop gồm `frame_index` (1-based), `timestamp_seconds`, `confidence`, `bbox` và `crop_bbox`
 dạng `[x1,y1,x2,y2]` theo pixel ảnh gốc. `crop_bbox` gồm padding và clamp theo Pipeline.
 Timestamp dùng FPS của sampler, không phải PTS chính xác của video biến thiên FPS. Số crop không phải số xe duy nhất.
-YOLOv8 là mặc định kỹ thuật, không phải kết luận về độ chính xác.
+Model detect có thể chọn từ FE: `yolo11l`, `yolo11n`, `yolo11m` hoặc `yolo26n`; mặc định là `yolo11l`.
+Ngưỡng detect cố định phía backend là `0.25`, cấu hình trong `app/core/config.py`; FE không cần gửi `confidence`.
 
 ## API inference 5 frame
 
@@ -203,7 +209,7 @@ Xem [TESTING.md](TESTING.md) để test từng API trên Swagger, các mã lỗi
 .\.venv\Scripts\python.exe -m scripts.smoke_local --video "../Pipeline/reference/assets/data/traffic_cam_01.mp4"
 ```
 
-Unit/integration tests dùng pipeline giả, không cần checkpoint. Smoke test chạy toàn bộ video với cả bốn model thật,
+Unit/integration tests dùng pipeline giả, không cần checkpoint. Smoke test chạy toàn bộ video với cả bốn model,
 poll health/trạng thái trong khi worker chạy, đối chiếu mọi bbox/timestamp/confidence và nội dung crop với manifest.
 Dữ liệu smoke được giữ riêng trong `data/smoke-*/`; `verification.json` ghi bằng chứng và thiết bị thực tế.
 Smoke test cần môi trường ML và cả bốn model đã chuẩn bị; thời gian CPU có thể dài.

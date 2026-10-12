@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Literal
 from pydantic import BaseModel
 
-ModelName = Literal["yolov8", "yolo11n", "yolo11m", "yolo26n"]
+ModelName = Literal["yolo11l", "yolo11n", "yolo11m", "yolo26n"]
 JobState = Literal["queued", "running", "succeeded", "failed"]
 
 

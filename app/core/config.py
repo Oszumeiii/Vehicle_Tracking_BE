@@ -7,7 +7,7 @@ import sys
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-MODELS = ("yolov8", "yolo11n", "yolo11m", "yolo26n")
+MODELS = ("yolo11l", "yolo11n", "yolo11m", "yolo26n")
 
 
 def absolute(value: str) -> Path:
@@ -24,6 +24,7 @@ class Settings:
     max_upload_bytes: int = 500 * 1024 * 1024
     poll_seconds: float = 2
     job_timeout_seconds: float = 7200
+    detection_confidence: float = 0.25
 
     @property
     def db_path(self) -> Path:
@@ -47,4 +48,6 @@ class Settings:
         limits = (settings.max_upload_bytes, settings.poll_seconds, settings.job_timeout_seconds)
         if not all(math.isfinite(value) and value > 0 for value in limits):
             raise ValueError("Upload, poll and timeout limits must be positive")
+        if not math.isfinite(settings.detection_confidence) or not 0 < settings.detection_confidence <= 1:
+            raise ValueError("Detection confidence must be greater than 0 and at most 1")
         return settings

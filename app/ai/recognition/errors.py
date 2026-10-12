@@ -8,3 +8,7 @@ class InferenceBusy(RuntimeError):
 
 class InferenceUnavailable(RuntimeError):
     """The model cannot complete inference with the current resources."""
+
+
+class NoValidPlateCandidate(InferenceUnavailable):
+    """Inference completed but no candidate matched the configured plate format."""

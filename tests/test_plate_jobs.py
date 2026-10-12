@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from filelock import FileLock, Timeout
 import pytest
 
-from app.core.config import Settings
+from app.core.config import MODELS, Settings
 from app.core.processes import run_process
 from app.services.plate_job_service import JobService, safe_path
 from app.worker import JobFailure, process_one
@@ -63,6 +63,8 @@ def test_complete_lifecycle_and_pagination(client):
     job_id = response.json()["job_id"]
     service = client.app.state.jobs
     assert client.get(url).json()["status"] == "queued"
+    assert client.get(url).json()["model"] == "yolo11m"
+    assert client.get(url).json()["confidence"] == service.settings.detection_confidence == 0.25
     assert client.get(url + "/plates").status_code == 409
     assert client.delete(url).status_code == 409
     assert process_one(service, fake_runner)
@@ -86,10 +88,25 @@ def test_complete_lifecycle_and_pagination(client):
     assert service.repo.plates(job_id, 50, 0) == []
 
 
-@pytest.mark.parametrize("fields", [{"model": "bad"}, {"confidence": "0"},
-                                   {"confidence": "1.1"}, {"confidence": "nan"}, {"confidence": "inf"}])
-def test_invalid_parameters(client, fields):
-    assert upload(client, **fields).status_code == 422
+def test_invalid_model(client):
+    assert upload(client, model="bad").status_code == 422
+
+
+def test_default_model_and_backend_confidence(client):
+    response = upload(client)
+    assert response.status_code == 202
+    status = client.get(response.json()["status_url"]).json()
+    assert status["model"] == "yolo11l"
+    assert status["confidence"] == 0.25
+
+
+def test_upload_openapi_has_model_but_not_confidence(client):
+    openapi = client.get("/openapi.json").json()
+    body_schema = openapi["paths"][BASE]["post"]["requestBody"]["content"]["multipart/form-data"]["schema"]
+    if "$ref" in body_schema:
+        schema_name = body_schema["$ref"].rsplit("/", maxsplit=1)[-1]
+        body_schema = openapi["components"]["schemas"][schema_name]
+    assert set(body_schema["properties"]) == {"file", "model"}
 
 
 def test_upload_limits_and_formats(client):
@@ -132,11 +149,15 @@ def test_not_found_and_pagination_validation(client):
     assert client.get(url + "/plates?offset=-1").status_code == 422
 
 
-@pytest.mark.parametrize("model", ["yolov8", "yolo11n", "yolo11m", "yolo26n"])
+@pytest.mark.parametrize("model", MODELS)
 def test_supported_models_and_empty_detection(client, model):
-    url = upload(client, model=model).json()["status_url"]
+    response = upload(client, model=model)
+    assert response.status_code == 202, response.text
+    url = response.json()["status_url"]
     process_one(client.app.state.jobs, lambda *args: fake_runner(*args, count=0))
-    assert client.get(url).json()["status"] == "succeeded"
+    status = client.get(url).json()
+    assert status["model"] == model
+    assert status["status"] == "succeeded"
     assert client.get(url + "/plates").json()["total"] == 0
 
 

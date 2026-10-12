@@ -32,8 +32,7 @@ Kỳ vọng: HTTP `200`, nội dung `{"status":"ok"}`.
 Mở `POST /api/v1/plate-jobs` → **Try it out**:
 
 - `file`: chọn `D:\Documents\PBL6\Pipeline\reference\assets\data\traffic_cam_01.mp4`.
-- `model`: chọn `yolov8` trước; sau đó có thể thử `yolo11n`, `yolo11m`, `yolo26n`.
-- `confidence`: `0.25`.
+- `model`: chọn `yolo11l` trước; sau đó có thể thử `yolo11n`, `yolo11m`, `yolo26n`.
 - Nhấn **Execute**, chờ upload xong.
 
 Kỳ vọng HTTP `202`, ví dụ:
@@ -96,9 +95,9 @@ Xóa job `queued`/`running` trả `409`; không dùng endpoint này để hủy 
 ## 3. Các tình huống lỗi nên thử
 
 - Không chọn file: `422`.
+- Model ngoài danh sách `yolo11l`, `yolo11n`, `yolo11m`, `yolo26n`: `422`.
 - File `.txt` thay vì MP4/AVI/MOV: `415`.
 - File rỗng: `422`.
-- Model ngoài bốn lựa chọn hoặc confidence bằng `0`, lớn hơn `1`: `422`.
 - `limit=0`, `limit=201` hoặc `offset=-1`: `422`.
 - Job không tồn tại: `404`.
 - Lấy kết quả trước khi `succeeded`: `409`.
@@ -112,17 +111,11 @@ Thiếu checkpoint trả lỗi tác vụ `CHECKPOINT_MISSING`; chọn CUDA trong
 
 ## 4. Chạy tự động toàn bộ API qua HTTP thật
 
-Cần API và worker đang chạy. Lệnh sau kiểm tra các endpoint, lỗi đầu vào, chạy bốn model, phân trang,
+Khởi động API và worker. Lệnh sau kiểm tra các endpoint, lỗi đầu vào, chạy bốn model, phân trang,
 tải tất cả crop và xóa một job thử nghiệm thất bại:
 
 ```powershell
 .\.venv\Scripts\python.exe -m scripts.test_live_api --video "../Pipeline/reference/assets/data/traffic_cam_01.mp4"
-```
-
-Để thử nhanh chỉ YOLOv8:
-
-```powershell
-.\.venv\Scripts\python.exe -m scripts.test_live_api --video "../Pipeline/reference/assets/data/traffic_cam_01.mp4" --models yolov8
 ```
 
 Mỗi phép kiểm tra in `PASS`. Cuối lượt phải có `All HTTP checks passed` và `passed: true` trong

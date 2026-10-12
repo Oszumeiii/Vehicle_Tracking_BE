@@ -15,9 +15,8 @@ Service = Annotated[JobService, Depends(get_job_service)]
              responses={413: {"description": "Upload too large"}, 415: {"description": "Unsupported video format"}},
              summary="Upload a video and queue plate extraction")
 def create_job(jobs: Service, file: Annotated[UploadFile, File()],
-               model: Annotated[ModelName, Form()] = "yolov8",
-               confidence: Annotated[float, Form(gt=0, le=1, allow_inf_nan=False)] = 0.25):
-    return jobs.upload(file, model, confidence)
+               model: Annotated[ModelName, Form()] = "yolo11l"):
+    return jobs.upload(file, model)
 
 
 @router.get("/{job_id}", response_model=JobStatus, summary="Poll job status (every two seconds)")
