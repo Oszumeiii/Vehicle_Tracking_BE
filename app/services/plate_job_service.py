@@ -3,7 +3,7 @@ import shutil
 import uuid
 from fastapi import HTTPException, UploadFile
 from app.core.config import Settings
-from app.repositories.plate_jobs import JobRepository
+from app.repositories.plate_job_repository import JobRepository
 
 
 def safe_path(root: Path, relative: str) -> Path:
@@ -51,7 +51,7 @@ class JobService:
             self.repo.create(job_id, model, confidence, destination)
             return {"job_id": job_id, "status": "queued", "status_url": f"/api/v1/plate-jobs/{job_id}"}
         except BaseException:
-            if created:
+            if created and folder is not None:
                 shutil.rmtree(folder)
             raise
         finally:

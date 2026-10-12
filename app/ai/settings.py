@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import os
 
-from app.models.config import Config
+from app.ai.recognition.config import Config
 
 
 def _boolean(name: str, default: bool) -> bool:

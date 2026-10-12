@@ -15,9 +15,9 @@ import pytest
 
 from app.core.config import Settings
 from app.core.processes import run_process
-from app.services.plate_jobs import JobService, safe_path
+from app.services.plate_job_service import JobService, safe_path
 from app.worker import JobFailure, process_one
-from main import create_app
+from app.main import create_app
 
 BASE = "/api/v1/plate-jobs"
 

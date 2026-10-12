@@ -3,7 +3,7 @@ import math
 import numpy as np
 import torch
 
-from app.models.config import Config
+from app.ai.recognition.config import Config
 
 
 BeamStates = dict[tuple[int, ...], tuple[float, float]]
@@ -224,4 +224,3 @@ def decode_constrained(logits, idx2char, position_classes=None, beam_width=8):
     return ctc_prefix_beam_search_constrained(
         log_probs, idx2char, position_classes=position_classes, beam_width=beam_width,
     )
-

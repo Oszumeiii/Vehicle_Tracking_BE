@@ -3,6 +3,93 @@
 FastAPI nhận video, SQLite lưu hàng đợi/kết quả, một worker riêng gọi package `plate_pipeline`.
 Luồng video hỗ trợ `yolov8`, `yolo11n`, `yolo11m`, `yolo26n`; endpoint model riêng nhận đúng 5 frame để nhận dạng biển số.
 
+## Cây thư mục
+
+```text
+Vehicle_Tracking_BE/
+│
+├── app/
+│   ├── __init__.py
+│   ├── main.py
+│   │
+│   ├── api/
+│   │   ├── __init__.py
+│   │   ├── deps.py
+│   │   └── v1/
+│   │       ├── router.py
+│   │       └── endpoints/
+│   │           ├── health.py
+│   │           ├── plate_jobs.py
+│   │           └── recognition.py
+│   │
+│   ├── core/
+│   │   ├── config.py
+│   │   ├── processes.py
+│   │   ├── security.py
+│   │   └── upload_limit.py
+│   │
+│   ├── db/
+│   │   └── __init__.py
+│   │
+│   ├── schemas/
+│   │   ├── plate_job.py
+│   │   └── recognition.py
+│   │
+│   ├── repositories/
+│   │   ├── plate_job_repository.py
+│   │
+│   ├── services/
+│   │   ├── plate_job_service.py
+│   │
+│   ├── workers/
+│   │   ├── job_executor.py
+│   │
+│   └── ai/
+│       ├── pipelines/
+│       │   └── plate_pipeline.py
+│       │
+│       ├── recognition/
+│       │   ├── model.py
+│       │   ├── config.py
+│       │   ├── decoder.py
+│       │   ├── preprocessing.py
+│       │   ├── errors.py
+│       │   └── inference.py
+│       │
+│       └── settings.py
+│
+├── checkpoints/
+│   └── single_model_best/
+│
+├── data/
+│   └── model-cache/
+│
+├── tests/
+│   ├── test_plate_jobs.py
+│   └── fixtures/
+│       └── test_track/
+│           ├── lr-001.jpg ... lr-005.jpg
+│           └── annotations.json
+│
+├── scripts/
+│   ├── smoke_local.py
+│   ├── test_live_api.py
+│   ├── prepare_models.py
+│   └── run_inference.py
+│
+├── main.py                 # Entrypoint tương thích ngược
+├── requirements.txt
+├── requirements-dev.txt
+├── requirements-ml.txt
+├── .env.example
+├── .gitignore
+├── README.md
+└── TESTING.md
+```
+
+Cây trên chỉ liệt kê các thành phần hiện đã có và đang được sử dụng; các module camera/vehicle,
+Celery/Redis, ORM, Docker và migrations chưa được tạo. `app/worker.py` cũng giữ entrypoint worker cũ.
+
 ## Thiết lập trên Windows / PowerShell
 
 Dùng Python 3.12. Đặt hai repository cạnh nhau: `Vehicle_Tracking_BE` và `Pipeline`.
@@ -16,12 +103,12 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 .\.venv\Scripts\python.exe -m pip install -r requirements-ml.txt
 Copy-Item .env.example .env
-.\.venv\Scripts\python.exe -m app.prepare_models
+.\.venv\Scripts\python.exe -m scripts.prepare_models
 ```
 
 Chỉ sao chép `.env.example` nếu chưa có cấu hình riêng trong `.env`. Bốn checkpoint được tải và kiểm tra inference
 trong bước chuẩn bị. Cần Internet lần đầu; worker dùng cache offline, không cài dependency khi nhận video.
-Sau khi đổi interpreter, thiết bị hoặc checkpoint, chạy lại `app.prepare_models`.
+Sau khi đổi interpreter, thiết bị hoặc checkpoint, chạy lại `scripts.prepare_models`.
 
 Muốn chạy GPU: cài cặp PyTorch/torchvision có CUDA theo [hướng dẫn PyTorch](https://pytorch.org/get-started/locally/)
 trong môi trường ML, đặt `PLATE_DEVICE=cuda`, kiểm tra lệnh sau trả `True` rồi chạy lại bước chuẩn bị:
@@ -40,13 +127,13 @@ Endpoint inference trong API cần PyTorch, NumPy và OpenCV cài trong chính i
 Terminal thứ nhất:
 
 ```powershell
-.\.venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
 Terminal thứ hai:
 
 ```powershell
-.\.venv\Scripts\python.exe -m app.worker
+.\.venv\Scripts\python.exe -m app.workers.job_executor
 ```
 
 Mở [Swagger](http://127.0.0.1:8000/docs). API và worker phải dùng cùng `.env`.
@@ -76,7 +163,7 @@ YOLOv8 là mặc định kỹ thuật, không phải kết luận về độ ch�
 ## API inference 5 frame
 
 Inference 5 frame được phục vụ chung trên FastAPI hiện tại. Cài môi trường ML, đặt `MODEL_CHECKPOINT` trỏ tới file
-checkpoint hoặc thư mục checkpoint PyTorch đã bung; mặc định là `app/models/single_model_best`. Model được nạp khi
+checkpoint hoặc thư mục checkpoint PyTorch đã bung; mặc định là `checkpoints/single_model_best`. Model được nạp khi
 gọi inference lần đầu. Decoder dùng constrained CTC beam search; `MODEL_PLATE_POSITION_CLASSES` mặc định là
 `LLLDDDD` (3 chữ và 4 số). Gọi endpoint:
 

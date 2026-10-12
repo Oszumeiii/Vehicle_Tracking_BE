@@ -1,17 +1,11 @@
 import os
-from pathlib import Path
 
 from dotenv import load_dotenv
 
+from app.core.config import PROJECT_ROOT, absolute
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
 load_dotenv(PROJECT_ROOT / ".env")
-
-
-def _absolute(value: str) -> Path:
-    path = Path(value).expanduser()
-    return (PROJECT_ROOT / path).resolve() if not path.is_absolute() else path.resolve()
-
 
 def _boolean(name: str, default: bool) -> bool:
     value = os.getenv(name)
@@ -40,7 +34,10 @@ class Config:
     FP32_SEQUENCE_DECODER = _boolean("MODEL_FP32_SEQUENCE_DECODER", True)
     PLATE_POSITION_CLASSES = os.getenv("MODEL_PLATE_POSITION_CLASSES", "LLLDDDD").strip().upper()
 
-    CHECKPOINT_PATH = _absolute(os.getenv("MODEL_CHECKPOINT", "app/models/single_model_best"))
+    checkpoint = os.getenv("MODEL_CHECKPOINT", "checkpoints/single_model_best")
+    if checkpoint.replace("\\", "/") == "app/models/single_model_best":
+        checkpoint = "checkpoints/single_model_best"
+    CHECKPOINT_PATH = absolute(checkpoint)
     DEVICE = os.getenv("MODEL_DEVICE", "cpu").strip().lower()
     MAX_FRAME_BYTES = int(os.getenv("MODEL_MAX_FRAME_MIB", "8")) * 1024 * 1024
     MAX_IMAGE_PIXELS = int(os.getenv("MODEL_MAX_IMAGE_PIXELS", "40000000"))

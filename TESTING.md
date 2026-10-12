@@ -8,13 +8,13 @@ Nếu API và worker đang chạy thì giữ nguyên, không mở thêm worker.
 Nếu chưa chạy, terminal thứ nhất:
 
 ```powershell
-.\.venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
 Terminal thứ hai:
 
 ```powershell
-.\.venv\Scripts\python.exe -m app.worker
+.\.venv\Scripts\python.exe -m app.workers.job_executor
 ```
 
 Vào [Swagger](http://127.0.0.1:8000/docs). Model đã được chuẩn bị trên máy này bằng CPU.

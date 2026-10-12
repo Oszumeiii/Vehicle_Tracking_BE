@@ -12,7 +12,7 @@ import time
 from fastapi.testclient import TestClient
 
 from app.core.config import MODELS, Settings
-from main import create_app
+from app.main import create_app
 
 
 def run():
@@ -34,7 +34,7 @@ def run():
             url = response.json()["status_url"]
             job_id = response.json()["job_id"]
             with (settings.data_dir / f"{model}-worker.log").open("w") as log:
-                worker = subprocess.Popen([sys.executable, "-m", "app.worker", "--once"], env=env,
+                worker = subprocess.Popen([sys.executable, "-m", "app.workers.job_executor", "--once"], env=env,
                                           stdout=log, stderr=subprocess.STDOUT)
                 polls = 0
                 try:

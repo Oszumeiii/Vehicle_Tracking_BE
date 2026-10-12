@@ -7,12 +7,12 @@ import numpy as np
 import torch
 from torch.nn import functional as F
 
-from app.models.config import Config as ModelConfig
-from app.models.decoder import ctc_prefix_beam_search_constrained
-from app.models.errors import InferenceBusy, InferenceUnavailable
-from app.models.model import SingleLRLPRModel, load_model
-from app.models.preprocessing import decode_image, preprocess_bgr
-from app.inference.settings import Settings
+from app.ai.recognition.config import Config as ModelConfig
+from app.ai.recognition.decoder import ctc_prefix_beam_search_constrained
+from app.ai.recognition.errors import InferenceBusy, InferenceUnavailable
+from app.ai.recognition.model import SingleLRLPRModel, load_model
+from app.ai.recognition.preprocessing import decode_image, preprocess_bgr
+from app.ai.settings import Settings
 
 TTA_VARIANTS = ((1., 0., 0.), (1., .03, 0.), (1., -.03, 0.), (.96, 0., 0.), (1.04, 0., 0.))
 

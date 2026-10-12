@@ -3,14 +3,14 @@ from pathlib import Path
 
 import torch
 
-from app.models.config import Config
-from app.models.decoder import decode_constrained
-from app.models.model import load_model
-from app.models.preprocessing import preprocess_image
+from app.ai.recognition.config import Config
+from app.ai.recognition.decoder import decode_constrained
+from app.ai.recognition.model import load_model
+from app.ai.recognition.preprocessing import preprocess_image
 
 
 def main():
-    test_dir = Path(__file__).resolve().parent
+    test_dir = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "test_track"
     frame_paths = sorted(test_dir.glob("lr-*.jpg"))
     if len(frame_paths) != Config.NUM_FRAMES:
         raise ValueError(f"Expected {Config.NUM_FRAMES} frames, found {len(frame_paths)}")

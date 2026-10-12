@@ -1,17 +1,14 @@
 from typing import Annotated
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
 from fastapi.responses import FileResponse, Response
-from app.schemas.plate_jobs import AcceptedJob, JobStatus, ModelName, PlatePage
-from app.services.plate_jobs import JobService
+from app.api.deps import get_job_service
+from app.schemas.plate_job import AcceptedJob, JobStatus, ModelName, PlatePage
+from app.services.plate_job_service import JobService
 
 router = APIRouter(prefix="/api/v1/plate-jobs", tags=["plate-jobs"])
 
 
-def service(request: Request) -> JobService:
-    return request.app.state.jobs
-
-
-Service = Annotated[JobService, Depends(service)]
+Service = Annotated[JobService, Depends(get_job_service)]
 
 
 @router.post("", status_code=202, response_model=AcceptedJob,

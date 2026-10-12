@@ -1,0 +1,1 @@
+"""Pipeline command-line integration."""

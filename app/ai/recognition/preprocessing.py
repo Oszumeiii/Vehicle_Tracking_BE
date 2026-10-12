@@ -6,9 +6,9 @@ import numpy as np
 import torch
 from PIL import Image, UnidentifiedImageError
 
-from app.models.config import Config
-from app.models.errors import InvalidImage
-from app.models.model import Config as ArchitectureConfig
+from app.ai.recognition.config import Config
+from app.ai.recognition.errors import InvalidImage
+from app.ai.recognition.model import Config as ArchitectureConfig
 
 
 HEIGHT = ArchitectureConfig.IMG_HEIGHT
