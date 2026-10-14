@@ -71,6 +71,6 @@ So hash với bảng trên trước khi chạy. Sai checksum thì `/api/v2/pipel
 .\.venv\Scripts\python.exe -m pytest tests/test_icpr_adapter.py tests/test_ml_adapter.py -q
 ```
 
-Test kiểm tra tên/shape state_dict, tiền xử lý 48×192, các decoder và định dạng biển, load an toàn/checksum, gate, chọn 5 crop theo chất lượng và `merge_tracks`, bằng trọng số tổng hợp, không đo accuracy.
+Test kiểm tra tên/shape state_dict, tiền xử lý 48×192, các decoder và định dạng biển, load an toàn/checksum, gate, chọn 5 crop theo chất lượng và `merge_tracks`, bằng trọng số tổng hợp, không đo accuracy. Riêng `test_trained_checkpoint_reads_labelled_icpr_track` chạy checkpoint thật (tự bỏ qua nếu chưa tải) trên một track ICPR có nhãn trong `tests/fixtures/test_track` và phải đọc đúng `BCY4440`; đây là kiểm tra hồi quy một mẫu, không phải số đo độ chính xác.
 
 Ngày 14/10/2026 đã chạy ML runner thật trên CPU với hai checkpoint trên và `Pipeline/validation/new_short_video.avi` (30 frame): 13 frame được sampling, 2 track đủ 5 crop, OCR trả `ASL1231` và `LRV1121` (`format_valid=true`, proxy 0.50 và 0.67); kết quả qua `validateResult` của worker NestJS. Video không có nhãn chuẩn nên lần chạy này chỉ chứng minh pipeline hoạt động, không chứng minh đọc đúng.

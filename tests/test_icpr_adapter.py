@@ -1,5 +1,7 @@
-"""Joint-five inference contract tests using synthetic weights, not accuracy tests."""
+"""Joint-five inference contract tests; synthetic weights except one labelled real track."""
+import json
 import math
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -231,3 +233,19 @@ def test_conflicting_or_unknown_config_is_rejected(config):
 def test_valid_config_fills_notebook_defaults():
     assert validate_config({}) == {"decoder": "beam_filter", "beam_width": 8, "use_tta": False}
     assert validate_config({"decoder": "beam_constrained", "beam_width": 4, "use_tta": True})["beam_width"] == 4
+
+
+REAL_CHECKPOINT = Path(__file__).resolve().parents[1] / "models" / "icpr_resnet34c_single_model_best.pt"
+REAL_SHA256 = "e934a8644f06e28631a291b01c04a95274a546c19013f874c8b1995b30423c9c"
+
+
+@pytest.mark.skipif(not REAL_CHECKPOINT.is_file(), reason="trained checkpoint is not downloaded")
+def test_trained_checkpoint_reads_labelled_icpr_track():
+    """One labelled ICPR track (5 low-resolution crops); a regression check, not an accuracy score."""
+    folder = Path(__file__).parent / "fixtures" / "test_track"
+    expected = json.loads((folder / "annotations.json").read_text(encoding="utf-8"))["plate_text"]
+    recognize = create_recognizer({"checkpoint": str(REAL_CHECKPOINT), "sha256": REAL_SHA256, "config": {}})
+    images = [Image.open(folder / f"lr-{index:03d}.jpg").convert("RGB") for index in range(1, 6)]
+    result = recognize(images)
+    assert result["raw_text"] == expected == "BCY4440"
+    assert result["decoding"]["format_valid"] is True
