@@ -1,0 +1,42 @@
+@startuml
+skinparam defaultFontName Arial
+skinparam defaultFontSize 16
+skinparam shadowing false
+skinparam backgroundColor white
+start
+:Upload video và chọn profile;
+:Xác thực và kiểm tra quyền nguồn;
+if (Đầu vào và profile hợp lệ?) then (Có)
+  :Tạo job queued;
+  :Trả 202 và job_id;
+else (Không)
+  :Trả 401 / 404 / 422 / 503;
+  stop
+endif
+:Nhận job và kiểm tra snapshot;
+:Adaptive sampling 8/12/15 fps;
+:Empty-scene gate bỏ frame nghi trống;
+:YOLO11l phát hiện biển số;
+:BoT-SORT; chọn 5 crop theo
+chất lượng và thời gian;
+:Thống kê track bị loại;
+while (Còn track đủ 5 frame?) is (Có)
+  :OCR SE-ResNet34-C đọc đồng thời 5 crop;
+:Giải mã beam_filter;
+  if (Chuỗi chuẩn hóa rỗng?) then (Có)
+    :machine_status = unreadable;
+  else (Không)
+    :machine_status = readable;
+  endif
+  :Lưu vào manifest một prediction joint;
+endwhile (Không)
+:Gợi ý gộp track cùng xe (vehicle_groups);
+if (Xử lý và manifest hợp lệ?) then (Có)
+  :Transaction lưu bằng chứng và dự đoán;
+  :Job succeeded và review pending;
+else (Không)
+  :Job failed và ghi mã lỗi;
+endif
+:Xem trạng thái và kết quả;
+stop
+@enduml

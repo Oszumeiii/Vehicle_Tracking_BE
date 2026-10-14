@@ -1,0 +1,44 @@
+@startuml
+title Kiểm duyệt và phát hiện cập nhật đồng thời
+skinparam defaultFontName Arial
+skinparam defaultFontSize 16
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+hide footbox
+boundary "Client A" as A
+boundary "Client B" as B
+control "NestJS API" as N
+database "PostgreSQL" as D
+A -> N : GET result/{id}
+N -> D : Kiểm quyền; đọc kết quả
+N --> A : Dữ liệu, revision=0
+B -> N : GET result/{id}
+N --> B : Dữ liệu, revision=0
+A -> N : POST reviews\n(correct, corrected_text, expected_revision=0)
+group Transaction review A
+  N -> D : BEGIN; đọc appearance thuộc quyền\njob succeeded; FOR UPDATE OF appearance
+  D --> N : revision=0, machine_text
+  N -> N : So sánh revision; kiểm action; chuẩn hóa text
+  N -> D : UPDATE effective_text, review_status, revision=1
+  N -> D : INSERT recognition_reviews(revision=1)
+  N -> D : COMMIT
+end
+N --> A : 201 review mới, revision=1
+B -> N : POST reviews\n(action, expected_revision=0)
+group Transaction review B
+  N -> D : BEGIN; khóa appearance FOR UPDATE
+  D --> N : revision=1
+  N -> N : expected_revision khác revision hiện tại
+  N -> D : ROLLBACK
+end
+N --> B : 409; tải lại trước khi sửa
+B -> N : GET result/{id}
+N --> B : Text hiệu lực, revision=1, lịch sử
+note over N,D
+Mỗi review hợp lệ thêm lịch sử và đổi text hiệu lực nguyên tử.
+Không UPDATE machine_text hoặc OCR prediction.
+Confirm cần text máy; correct cần text mới không rỗng.
+Unreadable/reject đặt effective_text=null.
+end note
+@enduml

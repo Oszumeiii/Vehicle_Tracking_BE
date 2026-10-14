@@ -1,0 +1,36 @@
+@startuml
+skinparam defaultFontName Arial
+skinparam defaultFontSize 16
+skinparam shadowing false
+skinparam backgroundColor white
+start
+:Mở kết quả và lấy revision;
+:Đối chiếu crop, frame và dự đoán;
+:Chọn action và gửi expected_revision;
+:Kiểm tra phiên, quyền và body;
+:BEGIN và khóa appearance;
+if (Revision còn đúng?) then (Không)
+  :ROLLBACK và trả 409;
+  :Tải lại kết quả trước khi sửa;
+  stop
+else (Có)
+endif
+switch (Action)
+case (confirm)
+  :Dùng machine_text;
+case (correct)
+  :Chuẩn hóa corrected_text;
+case (unreadable / reject)
+  :effective_text = NULL;
+endswitch
+if (confirm hoặc correct thiếu text?) then (Có)
+  :ROLLBACK và trả 422;
+  stop
+else (Không)
+endif
+:Tăng revision và cập nhật effective_text;
+:INSERT lịch sử review;
+:COMMIT và trả 201;
+:Nhận kết luận mới;
+stop
+@enduml

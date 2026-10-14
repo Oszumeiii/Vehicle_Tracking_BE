@@ -1,155 +1,91 @@
-# Tự kiểm thử API cắt biển số
+# Kiểm thử backend NestJS + PostgreSQL
 
-## 1. Chuẩn bị
+Xem cách chuẩn bị Node, PostgreSQL và Python tại [README.md](README.md).
 
-Mở PowerShell tại `D:\Documents\PBL6\Vehicle_Tracking_BE`.
-Nếu API và worker đang chạy thì giữ nguyên, không mở thêm worker.
-
-Nếu chưa chạy, terminal thứ nhất:
+## Kiểm thử tự động
 
 ```powershell
-.\.venv\Scripts\python.exe -m uvicorn main:app --host 127.0.0.1 --port 8000
-```
-
-Terminal thứ hai:
-
-```powershell
-.\.venv\Scripts\python.exe -m app.worker
-```
-
-Vào [Swagger](http://127.0.0.1:8000/docs). Model đã được chuẩn bị trên máy này bằng CPU.
-Nếu cài lại môi trường hoặc chuyển máy, làm theo phần thiết lập trong README trước.
-
-## 2. Test trên Swagger theo đúng thứ tự
-
-### Kiểm tra server
-
-Mở `GET /health` → **Try it out** → **Execute**.
-Kỳ vọng: HTTP `200`, nội dung `{"status":"ok"}`.
-
-### Upload video
-
-Mở `POST /api/v1/plate-jobs` → **Try it out**:
-
-- `file`: chọn `D:\Documents\PBL6\Pipeline\reference\assets\data\traffic_cam_01.mp4`.
-- `model`: chọn `yolov8` trước; sau đó có thể thử `yolo11n`, `yolo11m`, `yolo26n`.
-- `confidence`: `0.25`.
-- Nhấn **Execute**, chờ upload xong.
-
-Kỳ vọng HTTP `202`, ví dụ:
-
-```json
-{
-  "job_id": "ma_job_do_server_tra_ve",
-  "status": "queued",
-  "status_url": "/api/v1/plate-jobs/ma_job_do_server_tra_ve"
-}
-```
-
-**Sao chép giá trị `job_id` thực tế**, không dùng nguyên chuỗi ví dụ.
-`202` chỉ có nghĩa server đã nhận và xếp hàng, chưa có nghĩa video đã xử lý xong.
-
-### Theo dõi xử lý
-
-Mở `GET /api/v1/plate-jobs/{job_id}` → **Try it out** → dán `job_id` → **Execute**.
-Bấm lại mỗi khoảng hai giây. Trạng thái chuyển `queued` → `running` → `succeeded` hoặc `failed`.
-
-- Khi `succeeded`: đọc `selected_frames`, `total_crops`, `started_at`, `finished_at`.
-- Khi `failed`: đọc `error_code`, `error_message`; xem thêm `data/jobs/{job_id}/worker.log`.
-- Nếu cứ `queued`: kiểm tra terminal worker và việc API/worker có dùng chung `.env` hay không.
-- Trong khi đang chạy, gọi lại `/health` để xác nhận API vẫn phản hồi.
-
-Video mẫu có 1.814 frame; cấu hình sampling hiện tại chọn 154 frame. Chạy CPU thường mất từ khoảng một
-đến vài phút cho mỗi model trên máy này; đây không phải thời gian được đảm bảo.
-
-### Lấy danh sách ảnh biển số
-
-Sau khi `succeeded`, mở `GET /api/v1/plate-jobs/{job_id}/plates`:
-
-- `job_id`: mã vừa tạo.
-- `limit`: `5`.
-- `offset`: `0`.
-
-Kỳ vọng HTTP `200`, có `total` và `items`. Đổi `offset=5` để xem trang kế tiếp.
-`bbox` và `crop_bbox` là `[x1,y1,x2,y2]`, tính theo pixel ảnh gốc; vùng crop có thêm padding.
-`frame_index` bắt đầu từ 1. `timestamp_seconds` là thời điểm theo sampler.
-
-### Xem ảnh crop
-
-Lấy `crop_id` từ một phần tử của `items`. Mở `GET /api/v1/plate-jobs/{job_id}/crops/{crop_id}`,
-điền cả hai mã và **Execute**. Kỳ vọng HTTP `200`, `Content-Type: image/jpeg`.
-
-Cũng có thể mở trực tiếp trong trình duyệt bằng cách ghép `http://127.0.0.1:8000` với `crop_url`.
-Nếu `items=[]`, video đã xử lý thành công nhưng model không phát hiện biển số ở ngưỡng đã chọn.
-
-Khi xem ảnh, kiểm tra bằng mắt xem crop có thực sự là biển số không. Trong lượt thử video mẫu,
-YOLOv8 ở ngưỡng `0.25` có trường hợp nhận nhầm chữ quảng cáo `www.0511.vn` với confidence khoảng `0.318`.
-Đây là lỗi nhận diện của model; HTTP thành công và số crop lớn không chứng minh độ chính xác cao.
-Có thể thử ngưỡng cao hơn để so sánh, nhưng cần kiểm tra cả biển số bị bỏ sót.
-
-### Xóa job thử nghiệm
-
-Chỉ làm khi đã xem hoặc lưu xong ảnh. Mở `DELETE /api/v1/plate-jobs/{job_id}`, nhập mã job **do bạn vừa tạo**.
-Kỳ vọng `204`, không có body. Gọi lại status hoặc crop của job đó phải trả `404`.
-Xóa job `queued`/`running` trả `409`; không dùng endpoint này để hủy tác vụ đang chạy.
-
-## 3. Các tình huống lỗi nên thử
-
-- Không chọn file: `422`.
-- File `.txt` thay vì MP4/AVI/MOV: `415`.
-- File rỗng: `422`.
-- Model ngoài bốn lựa chọn hoặc confidence bằng `0`, lớn hơn `1`: `422`.
-- `limit=0`, `limit=201` hoặc `offset=-1`: `422`.
-- Job không tồn tại: `404`.
-- Lấy kết quả trước khi `succeeded`: `409`.
-- Crop không tồn tại trong job đã thành công: `404`.
-- File MP4 giả/hỏng: upload vẫn có thể trả `202`, sau đó worker trả trạng thái `failed`, mã `INVALID_VIDEO`.
-- File lớn hơn 500 MiB mặc định: `413`. Script HTTP bên dưới kiểm tra chặn sớm bằng header,
-  không cần gửi một file lớn; bộ pytest kiểm tra thêm nội dung và upload chunked.
-
-Thiếu checkpoint trả lỗi tác vụ `CHECKPOINT_MISSING`; chọn CUDA trong môi trường PyTorch CPU trả
-`CUDA_UNAVAILABLE`. Không cần xóa model hay sửa môi trường đang hoạt động để thử hai lỗi này thủ công.
-
-## 4. Chạy tự động toàn bộ API qua HTTP thật
-
-Cần API và worker đang chạy. Lệnh sau kiểm tra các endpoint, lỗi đầu vào, chạy bốn model, phân trang,
-tải tất cả crop và xóa một job thử nghiệm thất bại:
-
-```powershell
-.\.venv\Scripts\python.exe -m scripts.test_live_api --video "../Pipeline/reference/assets/data/traffic_cam_01.mp4"
-```
-
-Để thử nhanh chỉ YOLOv8:
-
-```powershell
-.\.venv\Scripts\python.exe -m scripts.test_live_api --video "../Pipeline/reference/assets/data/traffic_cam_01.mp4" --models yolov8
-```
-
-Mỗi phép kiểm tra in `PASS`. Cuối lượt phải có `All HTTP checks passed` và `passed: true` trong
-`data/live-api-test-<thời gian>/report.json`. Các job thành công được giữ để xem trên Swagger;
-script chỉ xóa job lỗi do chính nó tạo. Báo cáo có job ID, response trạng thái, metadata crop mẫu;
-thư mục này cũng chứa ảnh crop mẫu và JSON danh sách của từng model.
-
-Nếu server đổi cổng, thêm `--base-url http://127.0.0.1:8001`. Nếu đổi giới hạn upload,
-truyền `--max-upload-mib` đúng bằng cấu hình server.
-
-## 5. Bộ kiểm thử nội bộ và đối chiếu Pipeline
-
-Không cần server đang chạy để chạy kiểm thử nội bộ:
-
-```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+npm test
 .\.venv\Scripts\python.exe -m pytest -q
+npm run format:check
 ```
 
-Bộ này kiểm tra thêm transaction SQLite, phục hồi sau khởi động lại, nhận job không trùng,
-khóa worker, chặn đường dẫn vượt thư mục, timeout và tiến trình con khi worker bị tắt trên Windows.
-Các bài test dùng thư mục tạm, không xóa job của bạn.
+`npm test` build TypeScript rồi kiểm thử HTTP NestJS, migration, quyền sở hữu,
+review đồng thời, import SQLite và worker với PostgreSQL thật trong database tạm.
+Chi tiết cấu hình và phạm vi: [TESTING_NEST.md](docs/TESTING_NEST.md).
 
-Muốn đối chiếu mọi bbox, confidence, timestamp và byte ảnh với manifest Pipeline cho cả bốn model:
+Python kiểm thử các primitive extraction cũ, giao diện tracking 5 frame, adapter
+ICPR và công cụ đánh giá. Fixture model chỉ phục vụ kiểm tra luồng; không chứng
+minh accuracy OCR.
 
-```powershell
-.\.venv\Scripts\python.exe -m scripts.smoke_local --video "../Pipeline/reference/assets/data/traffic_cam_01.mp4"
-```
+Lần chạy toàn bộ trước đợt rà soát API ngày 09/10/2026: **48 test Node và 98 test Python đều đạt**.
+Node gồm 17 test API, 8 test DB/CLI, 4 test joint OCR, 5 test OpenAPI và 14 test
+worker/registry/sidecar (tính cả test cha). Các suite tích hợp dùng PostgreSQL 18
+tạm độc lập. TypeScript build và Prettier cũng đạt.
 
-Lệnh này tự chạy worker trong thư mục kiểm thử riêng và dùng TestClient; nó khác với script HTTP thật ở mục 4.
-Chỉ nên chạy một lượt kiểm thử model nặng tại một thời điểm để tránh tranh tài nguyên CPU/GPU.
+Sau đợt rà soát API cùng ngày, đã sửa Range ngoài file trả `416`/JSON thay vì
+`500`, bổ sung kiểm tra version/checksum migration cho readiness và cập nhật
+Swagger. Chạy lại **24/24 test API/OpenAPI đạt** (18 API + 6 OpenAPI, tính cả test
+cha); build và format check đạt. Test mới xác nhận thiếu/sai migration OCR trả
+`503` nhưng liveness vẫn hoạt động. Phần ML không thay đổi trong đợt rà soát này.
+
+Checkpoint Kaggle thật đã strict-load và chạy inference thành công trên CPU.
+Smoke test qua ML subprocess trên clip thật khoảng 3 giây xử lý 85 frame, chọn
+43 frame và tạo một track với 5 crop ở frame `1, 21, 43, 65, 85`; manifest vượt
+qua validator Node. Kết quả này xác nhận tích hợp chạy được, chưa đo accuracy do
+chưa có nhãn chuẩn. Chi tiết tại [OCR_KAGGLE.md](docs/OCR_KAGGLE.md).
+
+Đợt rà soát source ngày **11/10/2026**: **50 test Node và 98 test Python đạt**;
+TypeScript build và Prettier đạt. Node chạy đủ các suite theo hai đợt: 18 API +
+8 DB/CLI đã đạt trước khi phiên thực thi bị ngắt; sau đó chạy riêng ba suite
+joint-results/OpenAPI/recognition, đạt 24 test (tính cả test cha), không fail,
+cancel hoặc skip. `pip check` không thấy dependency hỏng; `npm audit --omit=dev`
+trả 0 advisory production tại thời điểm kiểm tra.
+
+Rà soát thêm bằng ca tái hiện độc lập phát hiện **6 lỗi P2 chưa nằm trong bộ test**:
+EXIF orientation, checksum LF/CRLF, độ dài sau chuẩn hóa, NUL trong đầu vào,
+oversized JSON và ánh xạ lỗi ảnh vượt giới hạn pixel. Test đạt không có nghĩa các
+lỗi này đã được sửa. Chi tiết trigger, vị trí code và regression test cần thêm ở
+[SOURCE_REVIEW_2026-10-11.md](docs/SOURCE_REVIEW_2026-10-11.md).
+
+## Nghiệm thu qua Swagger
+
+Chạy migration, tạo Admin và mở hai terminal `npm start`, `npm run worker` theo
+README. Swagger ở `http://127.0.0.1:3000/docs`.
+
+1. Login Admin bằng `/api/v2/auth/login`, copy access token vào **Authorize**.
+2. Tạo hai User bằng `/api/v2/users`. Dùng hai phiên riêng để kiểm tra quyền.
+3. User A upload một PNG/JPG bằng `/api/v2/media`. Đối chiếu kích thước, MIME,
+   `content_url`; User B không đọc được URL này.
+4. Gọi `/api/v2/pipelines`. Cấu hình Kaggle có profile `task=prepare` không yêu
+   cầu OCR và `pbl6-resnet34c-joint5-v1` nhận diện video. Thiếu checkpoint/code/Python
+   phải thấy `ready=false` và tạo job trả `503`.
+5. Với detector đã cấu hình, tạo job từ `media_id` và `pipeline_id`, đợi trạng
+   thái kết thúc. Ảnh đã crop dùng `input_mode=plate_crop`; video dùng `scene`.
+6. Mở results/detail: ảnh có một kết quả cho mỗi detection; video mỗi track hợp
+   lệ có đúng năm crop từ năm frame khác nhau. Track thiếu năm frame nằm trong
+   thống kê bị loại, không được nhân bản crop cho đủ.
+7. Với prepare, OCR phải `not_run` và predictions rỗng. Nhập tay bằng `correct`
+   với `expected_revision=0`; gửi lại revision cũ phải nhận `409`. Trạng thái OCR
+   còn nguyên, review mới tăng revision và đổi effective text; `confirm` trả `422`.
+   Với Kaggle joint, mỗi track có một prediction cấp appearance, liên kết đúng
+   năm detection theo thời gian; `agreement_count=null`, `ocr_score=null` và năm
+   `frame_weights`. Không có prediction riêng từng crop. Ảnh đơn hoặc video
+   `plate_crop` gửi vào profile joint phải trả `422` trước khi tạo job.
+8. Tra cứu bằng effective text mới. Chạy lại cùng media phải tạo ID job khác;
+   tra cứu dùng lượt nhận diện thành công mới nhất. Lượt cũ còn xem qua job ID.
+9. Xuất CSV có cả kết quả máy, kết quả hiệu lực và vị trí frame/timestamp. User B
+   không đọc được job, result, crop, keyframe hoặc CSV của User A.
+10. Xóa job đã kết thúc: nguồn vẫn còn. Media còn job tham chiếu phải trả `409`
+    khi xóa. Job queued/running không được xóa.
+11. Admin khóa tài khoản A: token cũ của A phải trả `401`. Logout và reset password
+    cũng thu hồi phiên theo hợp đồng API.
+
+Với dữ liệu thật, thử thêm ảnh không/một/nhiều biển số, video thiếu năm frame,
+track ghép sai, OCR rỗng/sai, file hỏng và worker bị gián đoạn. Với adapter đọc
+từng crop riêng, thử thêm các dự đoán bất đồng. Sau restart,
+job đang chạy bị gián đoạn chuyển `failed` với lỗi `WORKER_INTERRUPTED`; chạy lại
+bằng một job mới. `succeeded` chỉ khẳng định xử lý hoàn tất.
+
+Độ chính xác phải đo với nhãn độc lập theo [EVALUATION.md](docs/EVALUATION.md).

@@ -1,0 +1,79 @@
+@startuml
+!pragma layout smetana
+left to right direction
+skinparam defaultFontName Arial
+skinparam defaultFontSize 16
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam linetype ortho
+skinparam nodesep 30
+skinparam ranksep 45
+skinparam classBackgroundColor #F8FAFC
+skinparam classBorderColor #475569
+skinparam ArrowColor #64748B
+hide circle
+title Chi tiết OCR — một parent, hai cách suy luận
+
+entity "plate_appearances" as appearances {
+  * id : varchar(32) <<PK>>
+  --
+  machine_text : varchar(128)
+  recognition_method : varchar(32)
+  agreement_count : integer
+}
+entity "plate_detections" as detections {
+  * id : varchar(32) <<PK>>
+  --
+  * appearance_id : varchar(32) <<FK>>
+  * selected_order : integer
+  frame_index : integer
+  * crop_storage_key : text
+}
+entity "ocr_predictions" as predictions {
+  * id : varchar(32) <<PK>>
+  --
+  detection_id : varchar(32) <<FK, nullable>>
+  appearance_id : varchar(32) <<FK, nullable>>
+  * variant : varchar(32)
+  input_storage_key : text
+  input_storage_keys : jsonb
+  frame_weights : jsonb
+  decoding : jsonb
+  ocr_score : double precision
+  --
+  XOR(detection_id, appearance_id)
+  UQ(detection_id, variant)
+  UQ(appearance_id, variant)
+}
+
+appearances ||--o{ detections : bằng chứng
+detections |o--o{ predictions : parent theo crop
+appearances |o--o{ predictions : parent joint
+
+note top of appearances
+  Joint hiện hành dùng 5 detection:
+  5 frame thực, khác nhau, theo thời gian.
+  Không nhân bản ảnh đơn để đủ 5 ảnh.
+end note
+note bottom of predictions
+  Nhánh một crop:
+  detection_id có giá trị;
+  input_storage_key có giá trị;
+  appearance_id, input_storage_keys,
+  frame_weights đều NULL.
+  ----
+  Nhánh joint Kaggle hiện hành:
+  appearance_id có giá trị;
+  input_storage_keys là mảng dài 5;
+  detection_id, input_storage_key NULL;
+  frame_weights NULL hoặc mảng dài 5;
+  decoding NULL hoặc object (decoder, beam score).
+  OCR score không được model cung cấp: NULL.
+end note
+note bottom of detections
+  Worker đối chiếu 5 keys với 5 crop;
+  xác minh thứ tự frame, timestamp,
+  file ảnh, geometry và tổng weights.
+  SQL CHECK chỉ kiểm tra hình dạng mảng.
+end note
+@enduml

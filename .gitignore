@@ -5,3 +5,12 @@ __pycache__/
 .env
 data/
 *.egg-info/
+node_modules/
+dist/
+coverage/
+.env.nest
+*.tsbuildinfo
+models/*.pt
+models/*.pth
+models/*.onnx
+models/*.ckpt

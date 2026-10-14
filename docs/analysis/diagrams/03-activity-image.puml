@@ -1,0 +1,38 @@
+@startuml
+skinparam defaultFontName Arial
+skinparam defaultFontSize 16
+skinparam shadowing false
+skinparam backgroundColor white
+start
+:Upload ảnh;
+:Chọn profile prepare;
+:Kiểm tra quyền và tạo job;
+:Trả 202;
+if (input_mode = plate_crop?) then (Có)
+  :Dùng toàn ảnh làm vùng biển số;
+else (scene)
+  :YOLO11l phát hiện các biển số;
+endif
+:Tạo một appearance mỗi detection;
+:Lưu crop và ảnh nguồn;
+:machine_status = not_run;
+:machine_text = null;
+:Không tạo OCR prediction;
+:Job succeeded nếu lưu thành công;
+if (Có appearance để kiểm duyệt?) then (Không)
+  :Xem kết quả rỗng;
+  stop
+else (Có)
+endif
+:Xem bằng chứng;
+if (Người dùng chọn kiểm duyệt?) then (Có)
+  if (Đọc được biển số?) then (Có)
+    :Gửi correct và corrected_text;
+  else (Không)
+    :Gửi unreadable hoặc reject;
+  endif
+  :Kiểm tra revision và lưu review;
+else (Không)
+endif
+stop
+@enduml

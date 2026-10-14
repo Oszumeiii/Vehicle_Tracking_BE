@@ -1,0 +1,43 @@
+@startuml
+title Đăng nhập và cấp phiên
+skinparam defaultFontName Arial
+skinparam defaultFontSize 16
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+hide footbox
+actor "Người dùng" as U
+boundary "Client" as C
+control "NestJS API" as A
+database "PostgreSQL" as D
+U -> C : Nhập email, mật khẩu
+C -> A : POST /api/v2/auth/login
+A -> A : Kiểm cấu trúc; chuẩn hóa email
+A -> D : SELECT users theo email
+D --> A : Tài khoản / không tồn tại
+A -> A : Verify scrypt\n(dùng dummy hash nếu không có tài khoản)
+alt Sai mật khẩu hoặc tài khoản khóa
+  A --> C : 401; không cấp token
+else Hợp lệ
+  A -> A : Tạo token ngẫu nhiên và hạn dùng
+  group Transaction tạo phiên
+    A -> D : BEGIN; khóa user FOR UPDATE
+    D --> A : is_active, password_hash hiện tại
+    alt Tài khoản đổi trong lúc đăng nhập
+      A -> D : ROLLBACK
+      A --> C : 401; yêu cầu đăng nhập lại
+    else Tài khoản vẫn hợp lệ
+      A -> D : INSERT auth_sessions(token_hash, expires_at)
+      A -> D : COMMIT
+      A --> C : 200 access_token, token_type, expires_at
+    end
+  end
+end
+note over C,D
+Token gốc chỉ được trả khi tạo phiên; DB lưu hash.
+Request sau gửi Bearer token; guard kiểm phiên và user hiện tại.
+end note
+C -> A : POST /api/v2/auth/logout + Bearer token
+A -> D : Xác thực; UPDATE revoked_at của phiên hiện tại
+A --> C : 204
+@enduml

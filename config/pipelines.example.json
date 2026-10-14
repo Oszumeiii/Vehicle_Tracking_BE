@@ -1,0 +1,45 @@
+{
+  "pipelines": [
+    {
+      "id": "custom-single-crop-ocr-v1",
+      "name": "YOLO11l + BoT-SORT → OCR từng crop (mẫu adapter)",
+      "version": "1",
+      "task": "recognize",
+      "detector": {
+        "model": "yolo11l",
+        "version": "morsetechlab/yolov11-license-plate-detection/license-plate-finetune-v1l.pt@251a30d7daedca065f56e04b0af04052c907c68f",
+        "checkpoint": "../models/license-plate-finetune-v1l.pt",
+        "sha256": "f3d25e066e4ff41c64c2bcbf4fd35fa85abaad5a37769b61c804de8f3291ff2c"
+      },
+      "recognizer": {
+        "version": "team-recognizer-v1",
+        "checkpoint": "../models/recognizer.pt",
+        "module_root": "../models",
+        "factory": "recognizer_adapter:create_recognizer",
+        "preprocessing_version": "team-preprocessing-v1",
+        "config": {}
+      },
+      "sampling": {
+        "low_fps": 8,
+        "med_fps": 12,
+        "high_fps": 15,
+        "threshold_low": 2,
+        "threshold_high": 6
+      },
+      "tracking": {
+        "imgsz": 1280,
+        "batch": 16,
+        "track_buffer_seconds": 1.5,
+        "crop_padding": 0.15,
+        "crop_confidence": 0.25
+      },
+      "empty_scene_gate": {
+        "enabled": true,
+        "probe_seconds": 0.25,
+        "empty_confirmations": 3,
+        "motion_fraction": 0.003,
+        "warmup_frames": 60
+      }
+    }
+  ]
+}
