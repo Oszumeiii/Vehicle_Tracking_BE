@@ -1,0 +1,162 @@
+[
+  {
+    "number": 1,
+    "source": "01-use-case",
+    "title": "Use case tổng quan",
+    "orientation": "portrait",
+    "render_size": [
+      746,
+      1040
+    ]
+  },
+  {
+    "number": 2,
+    "source": "02-activity-video",
+    "title": "Hoạt động nhận diện video",
+    "orientation": "portrait",
+    "render_size": [
+      576,
+      1410
+    ]
+  },
+  {
+    "number": 3,
+    "source": "03-activity-image",
+    "title": "Hoạt động chuẩn bị ảnh",
+    "orientation": "portrait",
+    "render_size": [
+      555,
+      1316
+    ]
+  },
+  {
+    "number": 4,
+    "source": "04-activity-review",
+    "title": "Hoạt động kiểm duyệt",
+    "orientation": "portrait",
+    "render_size": [
+      657,
+      1205
+    ]
+  },
+  {
+    "number": 5,
+    "source": "05-activity-search",
+    "title": "Hoạt động tra cứu và xuất CSV",
+    "orientation": "portrait",
+    "render_size": [
+      597,
+      872
+    ]
+  },
+  {
+    "number": 6,
+    "source": "06-seq-login",
+    "title": "Sequence đăng nhập",
+    "orientation": "portrait",
+    "render_size": [
+      1018,
+      1051
+    ]
+  },
+  {
+    "number": 7,
+    "source": "07-seq-submit",
+    "title": "Sequence upload và tạo job",
+    "orientation": "portrait",
+    "render_size": [
+      1049,
+      1122
+    ]
+  },
+  {
+    "number": 8,
+    "source": "08-seq-worker",
+    "title": "Sequence worker joint-five",
+    "orientation": "portrait",
+    "render_size": [
+      965,
+      1390
+    ]
+  },
+  {
+    "number": 9,
+    "source": "09-seq-review",
+    "title": "Sequence kiểm duyệt",
+    "orientation": "portrait",
+    "render_size": [
+      824,
+      1091
+    ]
+  },
+  {
+    "number": 10,
+    "source": "10-seq-delete",
+    "title": "Sequence xóa job và nguồn",
+    "orientation": "portrait",
+    "render_size": [
+      899,
+      1192
+    ]
+  },
+  {
+    "number": 11,
+    "source": "11-state-job",
+    "title": "Trạng thái job",
+    "orientation": "portrait",
+    "render_size": [
+      696,
+      570
+    ]
+  },
+  {
+    "number": 12,
+    "source": "14-state-review",
+    "title": "Trạng thái kiểm duyệt",
+    "orientation": "landscape",
+    "render_size": [
+      1381,
+      390
+    ]
+  },
+  {
+    "number": 13,
+    "source": "12-erd",
+    "title": "ERD tổng thể",
+    "orientation": "portrait",
+    "render_size": [
+      512,
+      994
+    ]
+  },
+  {
+    "number": 14,
+    "source": "13-erd-ocr",
+    "title": "Chi tiết quan hệ OCR",
+    "orientation": "landscape",
+    "render_size": [
+      1318,
+      674
+    ]
+  },
+  {
+    "number": 15,
+    "source": "15-architecture",
+    "title": "Kiến trúc thành phần",
+    "orientation": "portrait",
+    "render_size": [
+      712,
+      767
+    ]
+  },
+  {
+    "number": 16,
+    "source": "16-deployment",
+    "title": "Triển khai bản đầu",
+    "orientation": "landscape",
+    "render_size": [
+      1229,
+      553
+    ]
+  }
+]

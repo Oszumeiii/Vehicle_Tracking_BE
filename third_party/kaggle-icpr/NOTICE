@@ -1,0 +1,26 @@
+PBL6 PIPELINE (team notebook) and ICPR 2026 SE-ResNet34-C checkpoint
+Pipeline source: https://www.kaggle.com/code/trnvnhun/pbl6-pipeline
+Checkpoint source: https://www.kaggle.com/datasets/trnvnhun/icpr-2026-model
+  file icpr_checkpoints_resnet34c/single_model_best.pt
+Source license: Apache License, Version 2.0
+
+The model lineage derives from ICPR_2026_LRP_REG by Huấn Trần (Kaggle:
+huantranvan, https://www.kaggle.com/code/huantranvan/icpr-2026-lrp-reg), itself
+listed as copied from https://www.kaggle.com/code/trungnguyen0510/icpr-2026-lrp-reg.
+
+app/recognition/icpr_model.py retains the notebook's inference architecture
+with original module names for strict state_dict loading; the training-only
+super-resolution branch, dataset indexing, training, optimization and notebook
+side effects are not included.
+
+app/recognition/icpr_adapter.py and ctc_decoders.py implement the notebook's
+preprocessing, optional TTA averaging and greedy/beam CTC decoders.
+app/recognition/video_tracking.py ports the notebook's adaptive sampling,
+empty-scene gate, BoT-SORT clock, quality-based five-crop selection and crop
+export. Tests use synthetic weights unless stated otherwise.
+
+Selected checkpoint: single_model_best.pt (126,084,235 bytes)
+SHA-256: e934a8644f06e28631a291b01c04a95274a546c19013f874c8b1995b30423c9c
+Provenance is recorded in models/icpr-source.json. Binaries are not included
+in the Git repository. The notebook's reported evaluation metrics are not
+application accuracy measurements.

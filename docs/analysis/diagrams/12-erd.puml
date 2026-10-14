@@ -1,0 +1,77 @@
+@startuml
+skinparam defaultFontName Arial
+skinparam defaultFontSize 16
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam linetype ortho
+skinparam nodesep 35
+skinparam ranksep 28
+skinparam classBackgroundColor #F8FAFC
+skinparam classBorderColor #475569
+skinparam ArrowColor #64748B
+hide circle
+title ERD — 8 bảng nghiệp vụ PostgreSQL
+
+entity "users" as users {
+  * id <<PK>>
+  * email <<UQ>>
+  * role
+}
+entity "auth_sessions" as sessions {
+  * id <<PK>>
+  * user_id <<FK>>
+  * token_hash <<UQ>>
+}
+entity "media_assets" as media {
+  * id <<PK>>
+  * owner_id <<FK>>
+  * storage_key <<UQ>>
+}
+entity "recognition_jobs" as jobs {
+  * id <<PK>>
+  * media_id <<FK>>
+  * status
+}
+entity "plate_appearances" as appearances {
+  * id <<PK>>
+  * job_id <<FK>>
+  effective_text
+  * revision
+}
+entity "plate_detections" as detections {
+  * id <<PK>>
+  * appearance_id <<FK>>
+  * selected_order
+}
+entity "ocr_predictions" as predictions {
+  * id <<PK>>
+  detection_id <<FK>>
+  appearance_id <<FK>>
+  * variant
+}
+entity "recognition_reviews" as reviews {
+  * id <<PK>>
+  * appearance_id <<FK>>
+  * reviewer_id <<FK>>
+  * revision
+}
+
+users ||--o{ sessions : sở hữu phiên
+users ||--o{ media : upload
+media ||--o{ jobs : chạy lại
+jobs ||--o{ appearances : tạo kết quả
+appearances ||--o{ detections : có bằng chứng
+appearances ||--o{ reviews : được kiểm duyệt
+users ||--o{ reviews : thực hiện
+detections |o--o{ predictions : OCR một crop
+appearances |o--o{ predictions : OCR joint
+
+note bottom of predictions
+  XOR: đúng một parent có giá trị.
+  Chi tiết joint/crop ở sơ đồ OCR.
+end note
+legend bottom
+  * = NOT NULL. Từ điển DB liệt kê toàn bộ cột.
+  schema_migrations là bảng kỹ thuật độc lập.
+endlegend
+@enduml

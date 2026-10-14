@@ -1,1 +1,0 @@
-"""Video input processing components."""

@@ -1,0 +1,44 @@
+{
+  "name": "low-resolution-plate-recognition-be",
+  "version": "1.0.0",
+  "private": true,
+  "description": "NestJS + PostgreSQL recognition, review and search backend",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/src/main.js",
+    "start:dev": "ts-node src/main.ts",
+    "worker": "node dist/src/worker.js",
+    "db:migrate": "node dist/src/cli.js migrate",
+    "admin:create": "node dist/src/cli.js create-admin",
+    "test": "npm run build && node --test --test-concurrency=1 dist/tests/*.test.js",
+    "format": "prettier --write \"src/**/*.ts\" \"tests/*.ts\" package.json tsconfig.json",
+    "format:check": "prettier --check \"src/**/*.ts\" \"tests/*.ts\" package.json tsconfig.json"
+  },
+  "dependencies": {
+    "@nestjs/common": "12.1.2",
+    "@nestjs/core": "12.1.2",
+    "@nestjs/platform-express": "12.1.2",
+    "@nestjs/swagger": "12.0.2",
+    "dotenv": "^17.2.0",
+    "multer": "^2.0.2",
+    "pg": "8.23.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2",
+    "zod": "^4.1.0"
+  },
+  "devDependencies": {
+    "@nestjs/testing": "12.1.2",
+    "@types/express": "^5.0.3",
+    "@types/multer": "^2.0.0",
+    "@types/node": "^22.18.0",
+    "@types/pg": "^8.15.5",
+    "@types/supertest": "^6.0.3",
+    "prettier": "^3.9.9",
+    "supertest": "^7.1.4",
+    "ts-node": "^10.9.2",
+    "typescript": "~5.9.3"
+  }
+}

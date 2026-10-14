@@ -1,0 +1,27 @@
+@startuml
+skinparam defaultFontName Arial
+skinparam defaultFontSize 16
+skinparam shadowing false
+skinparam backgroundColor white
+left to right direction
+node "Máy người dùng" {
+  artifact "HTTP client\nSwagger hoặc frontend" as client
+}
+node "Host ứng dụng bản đầu" {
+  artifact "NestJS API\nnpm start" as api
+  artifact "Node worker\nnpm run worker" as worker
+  artifact "Python environment\nCPU hoặc CUDA" as python
+  folder "Storage data" as storage
+  folder "app/recognition\nProfile và checkpoint" as model
+}
+node "PostgreSQL host\nCó thể cùng máy" {
+  database "Business database" as db
+}
+client --> api : HTTP(S) theo cấu hình triển khai
+api --> db : DATABASE_URL
+worker --> db : DATABASE_URL và advisory lock
+api --> storage : PLATE_DATA_DIR
+worker --> python : Subprocess được giám sát
+python --> storage : Nguồn / crop / keyframe
+python --> model : Snapshot và checksum
+@enduml

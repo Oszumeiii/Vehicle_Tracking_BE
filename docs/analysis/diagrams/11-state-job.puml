@@ -1,0 +1,24 @@
+@startuml
+skinparam defaultFontName Arial
+skinparam defaultFontSize 16
+skinparam shadowing false
+skinparam backgroundColor white
+hide empty description
+[*] --> queued : POST tạo job hợp lệ
+queued --> running : Worker claim nguyên tử
+running --> succeeded : Commit toàn bộ kết quả
+running --> failed : Inference hoặc validation lỗi
+running --> failed : Timeout / worker bị gián đoạn
+succeeded --> [*] : Xóa job kết thúc
+failed --> [*] : Xóa job kết thúc
+note right of running
+Stage: validating
+detection_tracking
+recognition nếu có OCR
+persisting
+end note
+note bottom of failed
+Chạy lại tạo ID job mới.
+Không chuyển failed về queued.
+end note
+@enduml

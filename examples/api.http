@@ -1,0 +1,286 @@
+# VS Code REST Client: run requests individually from top to bottom.
+# Passwords are prompted at send time; this file contains no working credentials.
+# Use the Admin email provisioned with npm run admin:create.
+# The create-user step creates a REAL account. Change userEmail to an unused email.
+# Upload uses REAL existing local files. Sections 4-13 demonstrate image preparation
+# and manual review. Sections V1-V8 demonstrate actual joint-five-frame video OCR.
+# Both profiles are available with config/pipelines.kaggle.json when ready.
+@baseUrl = http://127.0.0.1:3000
+@adminEmail = admin@example.com
+@userEmail = reviewer@example.com
+@pipelineId = pbl6-yolo11l-botsort-prepare-v1
+@ocrPipelineId = pbl6-resnet34c-joint5-v1
+
+### Database/schema readiness (does not check ML or the worker)
+GET {{baseUrl}}/health/ready
+
+### 1. Admin login
+# @name adminLogin
+# @prompt password Enter the existing Admin password
+POST {{baseUrl}}/api/v2/auth/login
+Content-Type: application/json
+
+{
+  "email": "{{adminEmail}}",
+  "password": "{{password}}"
+}
+
+### 2. Admin creates a User (choose the password; at least 12 characters)
+# @name createUser
+# @prompt password Choose a password for this User (12+ characters)
+POST {{baseUrl}}/api/v2/users
+Authorization: Bearer {{adminLogin.response.body.$.access_token}}
+Content-Type: application/json
+
+{
+  "email": "{{userEmail}}",
+  "password": "{{password}}",
+  "display_name": "Plate reviewer",
+  "role": "user"
+}
+
+### 3. User login (enter the password chosen above)
+# @name userLogin
+# @prompt password Enter the User password
+POST {{baseUrl}}/api/v2/auth/login
+Content-Type: application/json
+
+{
+  "email": "{{userEmail}}",
+  "password": "{{password}}"
+}
+
+### Current User and role
+GET {{baseUrl}}/api/v2/auth/me
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+
+### 4. Upload an image
+# @name uploadMedia
+# @prompt imagePath Absolute path to an existing JPG image (use forward slashes on Windows)
+POST {{baseUrl}}/api/v2/media
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+Content-Type: multipart/form-data; boundary=plate-recognition-boundary
+
+--plate-recognition-boundary
+Content-Disposition: form-data; name="file"; filename="plate-source.jpg"
+Content-Type: image/jpeg
+
+< {{imagePath}}
+--plate-recognition-boundary--
+
+### List this User's sources
+GET {{baseUrl}}/api/v2/media?limit=50&offset=0
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+
+### Read the exact uploaded source
+GET {{baseUrl}}/api/v2/media/{{uploadMedia.response.body.$.id}}/content
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+
+### 5. Check readiness. Continue to job creation only when selected profile is ready.
+# Prepare needs the detector, Python and Pipeline repo; it does not need OCR.
+# Joint-five-frame OCR also needs the pinned Kaggle checkpoint. Check media_types.
+# Missing required resources => ready=false; job creation then returns 503.
+GET {{baseUrl}}/api/v2/pipelines
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+
+### 6. Create an asynchronous prepare job; 202 returns job_id
+# @name createJob
+# scene detects plates in the source; change to plate_crop only for a pre-cropped image.
+# Video uploads must use scene (change upload filename/MIME to match the actual video).
+POST {{baseUrl}}/api/v2/recognition-jobs
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+Content-Type: application/json
+
+{
+  "media_id": "{{uploadMedia.response.body.$.id}}",
+  "pipeline_id": "{{pipelineId}}",
+  "input_mode": "scene"
+}
+
+### 7. Poll until succeeded or failed; worker must run in another terminal
+# @name jobStatus
+GET {{baseUrl}}/api/v2/recognition-jobs/{{createJob.response.body.$.job_id}}
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+
+### 8. Results; 409 until succeeded. Stop the review flow if items is empty.
+# @name jobResults
+GET {{baseUrl}}/api/v2/recognition-jobs/{{createJob.response.body.$.job_id}}/results?limit=50&offset=0
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+
+### 9. Inspect first result, predictions, evidence URLs and review history
+# @name resultDetail
+# Re-send this GET before every review so expected_revision stays current.
+GET {{baseUrl}}/api/v2/recognition-results/{{jobResults.response.body.$.items[0].id}}
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+
+### Read first crop (when detections is nonempty)
+GET {{baseUrl}}{{resultDetail.response.body.$.detections[0].crop_url}}
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+
+### Read first keyframe (only if frame_url is non-null)
+GET {{baseUrl}}{{resultDetail.response.body.$.detections[0].frame_url}}
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+
+### 10A. Confirm machine text ONLY when a recognize profile returned readable text
+# Choose ONE review action; a second action needs a refreshed resultDetail first.
+# The image prepare profile has machine_status=not_run: SKIP this request and use 10B.
+# A machine result without readable text cannot be confirmed (422).
+POST {{baseUrl}}/api/v2/recognition-results/{{resultDetail.response.body.$.id}}/reviews
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+Content-Type: application/json
+
+{
+  "action": "confirm",
+  "note": "Checked against source evidence",
+  "expected_revision": {{resultDetail.response.body.$.revision}}
+}
+
+### 10B. Enter plate text manually for prepare (or correct OCR output)
+# Refresh resultDetail before sending if any review has already been submitted.
+# @prompt correctedPlate Enter the plate text read from the evidence
+POST {{baseUrl}}/api/v2/recognition-results/{{resultDetail.response.body.$.id}}/reviews
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+Content-Type: application/json
+
+{
+  "action": "correct",
+  "corrected_text": "{{correctedPlate}}",
+  "note": "Plate text read manually from source evidence",
+  "expected_revision": {{resultDetail.response.body.$.revision}}
+}
+
+### 10C. Mark unreadable instead (refresh resultDetail before sending)
+POST {{baseUrl}}/api/v2/recognition-results/{{resultDetail.response.body.$.id}}/reviews
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+Content-Type: application/json
+
+{
+  "action": "unreadable",
+  "expected_revision": {{resultDetail.response.body.$.revision}}
+}
+
+### 10D. Reject a false detection or wrongly merged track instead
+# Refresh resultDetail before sending. No corrected_text is allowed for reject.
+POST {{baseUrl}}/api/v2/recognition-results/{{resultDetail.response.body.$.id}}/reviews
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+Content-Type: application/json
+
+{
+  "action": "reject",
+  "note": "False detection or incorrect track association",
+  "expected_revision": {{resultDetail.response.body.$.revision}}
+}
+
+### 11. History remains in result detail; machine predictions remain unchanged
+GET {{baseUrl}}/api/v2/recognition-results/{{jobResults.response.body.$.items[0].id}}
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+
+### 12. Search current normalized effective text
+# @prompt searchPlate Enter a plate to search (uppercase, without spaces or hyphens)
+GET {{baseUrl}}/api/v2/recognition-results?plate={{searchPlate}}&limit=50&offset=0
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+
+### Pending results of the latest successful business job for this source
+GET {{baseUrl}}/api/v2/recognition-results?media_id={{uploadMedia.response.body.$.id}}&review_status=pending&limit=50&offset=0
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+
+### Job history for this source, including prior runs
+GET {{baseUrl}}/api/v2/recognition-jobs?media_id={{uploadMedia.response.body.$.id}}&limit=50&offset=0
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+
+### 13. Export this successful job as CSV
+GET {{baseUrl}}/api/v2/recognition-jobs/{{createJob.response.body.$.job_id}}/export?format=csv
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+
+### V1. Upload a video for the joint-five-frame OCR model
+# @name uploadVideo
+# @prompt videoPath Absolute path to an existing MP4 video (forward slashes on Windows)
+POST {{baseUrl}}/api/v2/media
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+Content-Type: multipart/form-data; boundary=plate-video-boundary
+
+--plate-video-boundary
+Content-Disposition: form-data; name="file"; filename="plate-video.mp4"
+Content-Type: video/mp4
+
+< {{videoPath}}
+--plate-video-boundary--
+
+### V2. Create real OCR job; the selected profile must be ready
+# @name createOcrJob
+# Only video + scene is supported by this profile; an image returns 422.
+# Each eligible track supplies five real crops from five distinct ordered frames.
+POST {{baseUrl}}/api/v2/recognition-jobs
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+Content-Type: application/json
+
+{
+  "media_id": "{{uploadVideo.response.body.$.id}}",
+  "pipeline_id": "{{ocrPipelineId}}",
+  "input_mode": "scene"
+}
+
+### V3. Poll until succeeded or failed; inspect statistics and errors
+GET {{baseUrl}}/api/v2/recognition-jobs/{{createOcrJob.response.body.$.job_id}}
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+
+### V4. OCR results; 409 until succeeded
+# @name ocrResults
+# An empty items array is valid if no track had five eligible frames; skip V5-V7.
+GET {{baseUrl}}/api/v2/recognition-jobs/{{createOcrJob.response.body.$.job_id}}/results?limit=50&offset=0
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+
+### V5. Inspect machine text, five evidence images and joint prediction
+# @name ocrDetail
+# predictions is at result level, each with five ordered detection_ids.
+# recognition_method=joint_multiframe; agreement_count and ocr_score are null.
+# frame_weights describe learned feature fusion; they are not confidence or votes.
+# Re-send this GET before each review to obtain the current revision.
+GET {{baseUrl}}/api/v2/recognition-results/{{ocrResults.response.body.$.items[0].id}}
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+
+### Read a selected OCR crop; inspect indices 0..4 and their source frames before review
+GET {{baseUrl}}{{ocrDetail.response.body.$.detections[0].crop_url}}
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+
+### Read the crop's source frame (only if frame_url is non-null)
+GET {{baseUrl}}{{ocrDetail.response.body.$.detections[0].frame_url}}
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+
+### V6. Confirm ONLY readable text checked against all source evidence
+# Choose V6 or V7; refresh ocrDetail before making a second review.
+# Use unreadable/reject actions instead when appropriate (see image flow above).
+POST {{baseUrl}}/api/v2/recognition-results/{{ocrDetail.response.body.$.id}}/reviews
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+Content-Type: application/json
+
+{
+  "action": "confirm",
+  "note": "Checked plate text and track association against all five source frames",
+  "expected_revision": {{ocrDetail.response.body.$.revision}}
+}
+
+### V7. Correct the OCR text instead; machine prediction stays immutable
+# @prompt correctedOcrPlate Enter the correct plate text from the source evidence
+POST {{baseUrl}}/api/v2/recognition-results/{{ocrDetail.response.body.$.id}}/reviews
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+Content-Type: application/json
+
+{
+  "action": "correct",
+  "corrected_text": "{{correctedOcrPlate}}",
+  "note": "Corrected after inspecting the five source frames",
+  "expected_revision": {{ocrDetail.response.body.$.revision}}
+}
+
+### V8. Export OCR machine text, effective text, review state and temporal locations
+GET {{baseUrl}}/api/v2/recognition-jobs/{{createOcrJob.response.body.$.job_id}}/export?format=csv
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+
+### 14. User logout (run after completing the desired flows; revokes the token)
+POST {{baseUrl}}/api/v2/auth/logout
+Authorization: Bearer {{userLogin.response.body.$.access_token}}
+
+### Admin logout
+POST {{baseUrl}}/api/v2/auth/logout
+Authorization: Bearer {{adminLogin.response.body.$.access_token}}

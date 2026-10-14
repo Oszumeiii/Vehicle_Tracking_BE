@@ -1,0 +1,21 @@
+{
+  "pipeline_notebook": "https://www.kaggle.com/code/trnvnhun/pbl6-pipeline",
+  "ocr": {
+    "source_dataset": "https://www.kaggle.com/datasets/trnvnhun/icpr-2026-model",
+    "dataset_file": "icpr_checkpoints_resnet34c/single_model_best.pt",
+    "checkpoint_file": "icpr_resnet34c_single_model_best.pt",
+    "sha256": "e934a8644f06e28631a291b01c04a95274a546c19013f874c8b1995b30423c9c",
+    "size_bytes": 126084235,
+    "downloaded_date": "2026-10-14",
+    "license": "Apache-2.0"
+  },
+  "detector": {
+    "source": "https://huggingface.co/morsetechlab/yolov11-license-plate-detection",
+    "file": "license-plate-finetune-v1l.pt",
+    "revision": "251a30d7daedca065f56e04b0af04052c907c68f",
+    "checkpoint_file": "license-plate-finetune-v1l.pt",
+    "sha256": "f3d25e066e4ff41c64c2bcbf4fd35fa85abaad5a37769b61c804de8f3291ff2c",
+    "size_bytes": 51189266,
+    "downloaded_date": "2026-10-14"
+  }
+}

@@ -1,0 +1,47 @@
+@startuml
+title Upload, tạo job và theo dõi bất đồng bộ
+skinparam defaultFontName Arial
+skinparam defaultFontSize 16
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+hide footbox
+boundary "Client đã đăng nhập" as C
+control "NestJS API" as A
+participant "Filesystem riêng" as F
+participant "Python probe" as P
+database "PostgreSQL" as D
+C -> A : POST /api/v2/media (multipart file)
+A -> F : Guard, giới hạn file; lưu nguồn và tính hash
+A -> P : Kiểm tra giải mã và metadata
+P --> A : Loại thực, kích thước, thời lượng
+alt File không hợp lệ / probe lỗi
+  A -> F : Dọn file của upload lỗi
+  A --> C : 413 / 415 / 422 / 503 theo nguyên nhân
+else Upload hợp lệ
+  A -> D : INSERT media_assets(owner, metadata, storage_key)
+  A --> C : 201 media_id, metadata
+end
+note over C,A : Client chọn profile phù hợp từ GET /pipelines.
+C -> A : POST /api/v2/recognition-jobs\n(media_id, pipeline_id, input_mode)
+A -> D : Kiểm quyền nguồn
+A -> A : Resolve profile; kiểm file/checksum, loại input
+group Transaction tạo job
+  A -> D : BEGIN; khóa media FOR UPDATE
+  A -> D : INSERT job queued + snapshot; COMMIT
+end
+A --> C : 202 job_id, status_url
+note over C,D
+HTTP không chờ OCR; worker lấy job từ DB.
+Chạy lại POST cùng media_id tạo một job mới.
+end note
+loop Client thăm dò đến khi job kết thúc
+  C -> A : GET /api/v2/recognition-jobs/{id}
+  A -> D : Kiểm quyền; đọc trạng thái
+  D --> A : status, stage, statistics, error
+  A --> C : 200 trạng thái hiện tại
+end
+C -> A : GET /api/v2/recognition-jobs/{id}/results
+A -> D : Kiểm quyền và status=succeeded
+A --> C : 200 kết quả; hoặc 409 khi chưa succeeded
+@enduml

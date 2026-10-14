@@ -1,0 +1,25 @@
+@startuml
+skinparam defaultFontName Arial
+skinparam defaultFontSize 16
+skinparam shadowing false
+skinparam backgroundColor white
+start
+:User hoặc Admin gửi bộ lọc;
+:Xác thực và xác định phạm vi dữ liệu;
+:Chọn job v2 succeeded mới nhất mỗi media;
+:Lọc effective_text, review, nguồn và ngày upload;
+:Trả trang kết quả và trạng thái duyệt;
+if (Muốn xem lịch sử cũ?) then (Có)
+  :Mở job cụ thể và kiểm tra quyền;
+  :Xem appearances của job đó;
+else (Không)
+endif
+if (Muốn xuất CSV?) then (Có)
+  :Chọn job cần xuất;
+  :API kiểm tra quyền và status succeeded;
+  :Xuất machine và effective text\ncùng frame và timestamp;
+else (Không)
+  :Mở chi tiết và ảnh bằng chứng;
+endif
+stop
+@enduml

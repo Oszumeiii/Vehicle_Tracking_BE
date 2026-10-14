@@ -1,0 +1,53 @@
+@startuml
+title Worker xử lý video: OCR joint-five
+skinparam defaultFontName Arial
+skinparam defaultFontSize 16
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+hide footbox
+control "Worker Node" as W
+database "PostgreSQL" as D
+participant "Storage" as F
+participant "Python" as P
+participant "Models" as M
+W -> D : Giữ advisory lock; phục hồi\nrunning cũ thành failed
+group Transaction nhận một job
+  W -> D : BEGIN; claim queued\nFOR UPDATE SKIP LOCKED
+  W -> D : UPDATE running/validating; COMMIT
+  D --> W : Job, snapshot, nguồn
+end
+W -> F : Kiểm path/hash nguồn, model, code; ghi payload
+W -> P : Spawn supervisor, timeout
+P -> M : Sampling -> gate -> YOLO11l\n-> BoT-SORT (no ReID)
+M --> P : Tracks và observations
+P -> P : Chọn 5 frame theo chất lượng\nvà thời gian; loại track thiếu frame
+loop Mỗi track đủ điều kiện
+  P -> F : Lưu 5 crop và keyframe
+  P -> M : OCR joint: 5 crop RGB
+  M --> P : Log-prob, weights; beam_filter\n-> text, decoding; score=null
+  P -> P : Chuẩn hóa text;\n1 prediction/appearance
+end
+P -> P : Gợi ý gộp track (vehicle_groups)
+P -> F : Ghi progress và manifest
+note over W,P
+Node đọc progress, cập nhật stage vào DB.
+Python không ghi PostgreSQL.
+end note
+P --> W : Mã thoát; manifest
+alt Pipeline hoàn tất và manifest hợp lệ
+  W -> F : Kiểm artifacts, bbox, 5 input và prediction
+  group Transaction công bố kết quả
+    W -> D : BEGIN; khóa job running
+    W -> D : INSERT appearances,\ndetections, predictions
+    W -> D : UPDATE succeeded, statistics; COMMIT
+  end
+else Timeout / gián đoạn / lỗi model / manifest
+  W -> P : Dừng cây tiến trình nếu còn
+  W -> F : Lưu log
+  W -> D : ROLLBACK nếu đang ghi;\nUPDATE failed + mã lỗi
+end
+note over W,D
+Succeeded vẫn có thể rỗng hoặc đọc sai.
+end note
+@enduml

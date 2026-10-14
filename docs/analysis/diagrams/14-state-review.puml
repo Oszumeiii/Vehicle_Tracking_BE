@@ -1,0 +1,23 @@
+@startuml
+skinparam defaultFontName Arial
+skinparam defaultFontSize 16
+skinparam shadowing false
+skinparam backgroundColor white
+hide empty description
+state "Chọn hành động hợp lệ\nrevision khớp và có quyền" as action <<choice>>
+[*] --> pending
+pending --> action : Gửi review
+confirmed --> action : Review tiếp theo
+corrected --> action : Review tiếp theo
+unreadable --> action : Review tiếp theo
+rejected --> action : Review tiếp theo
+action --> confirmed : confirm và có text máy
+action --> corrected : correct và có text mới
+action --> unreadable : unreadable
+action --> rejected : reject
+note bottom of action
+Mỗi commit tăng revision và ghi lịch sử.
+Sai revision trả 409, giữ trạng thái cũ.
+Không sửa prediction máy.
+end note
+@enduml

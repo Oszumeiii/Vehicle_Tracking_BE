@@ -1,0 +1,25 @@
+@startuml
+skinparam defaultFontName Arial
+skinparam defaultFontSize 16
+skinparam shadowing false
+skinparam backgroundColor white
+skinparam componentStyle rectangle
+top to bottom direction
+actor "User / Admin" as user
+component "Client / Swagger" as client
+package "Backend nghiệp vụ" {
+  component "API NestJS\nAuth và ownership\nMedia, job, review, search" as api
+  component "Worker Node\nClaim và recovery\nKiểm manifest, transaction" as worker
+}
+database "PostgreSQL\n8 bảng nghiệp vụ\nHàng đợi trong jobs" as db
+folder "Filesystem riêng\nNguồn, crop, frame\nManifest và log" as files
+component "Python ML subprocess\nYOLO11l, BoT-SORT\nSE-ResNet34-C joint 5 frame" as ml
+user --> client
+client --> api : HTTP và\nBearer token
+api --> db : Metadata và\ntransaction
+api --> files : Upload / đọc\ncó quyền
+worker --> db : Claim / trạng thái\n/ kết quả
+worker <--> ml : Payload snapshot\nManifest kết quả
+ml --> files : Đọc nguồn /\nghi bằng chứng
+worker --> files : Kiểm tra\nbằng chứng
+@enduml

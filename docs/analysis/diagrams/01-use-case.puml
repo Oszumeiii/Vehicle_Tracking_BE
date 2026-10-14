@@ -1,0 +1,60 @@
+@startuml
+!pragma layout smetana
+left to right direction
+skinparam defaultFontName Arial
+skinparam defaultFontSize 16
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam roundCorner 8
+skinparam ArrowColor #475569
+skinparam ActorBorderColor #334155
+skinparam UsecaseBorderColor #334155
+skinparam UsecaseBackgroundColor #F8FAFC
+skinparam RectangleBorderColor #64748B
+skinparam packageStyle rectangle
+skinparam nodesep 22
+skinparam ranksep 36
+scale max 1100 width
+title Use case — Nhận diện biển số độ phân giải thấp
+
+actor "User" as U
+actor "Admin" as A
+A --|> U
+
+rectangle "HỆ THỐNG NHẬN DIỆN BIỂN SỐ" {
+  usecase "UC01\nQuản lý phiên" as UC01
+  usecase "UC02\nQuản lý tài khoản" as UC02
+  usecase "UC03\nUpload và xem nguồn" as UC03
+  usecase "UC04\nTạo / chạy lại job" as UC04
+  usecase "UC05\nTheo dõi xử lý" as UC05
+  usecase "UC06\nXem kết quả / bằng chứng" as UC06
+  usecase "UC07\nKiểm duyệt kết quả" as UC07
+  usecase "UC08\nTra cứu biển số" as UC08
+  usecase "UC09\nXuất CSV" as UC09
+  usecase "UC10\nXóa job đã kết thúc" as UC10
+  usecase "UC11\nXóa nguồn hết tham chiếu" as UC11
+  usecase "UC12\nPrepare / nhập thủ công" as UC12
+}
+
+U -- UC01
+A -- UC02
+U -- UC03
+U -- UC04
+U -- UC05
+U -- UC06
+U -- UC07
+U -- UC08
+U -- UC09
+U -- UC10
+U -- UC11
+U -- UC12
+UC12 ..> UC04 : <<extend>>\n[task = prepare]
+
+legend bottom
+User: dữ liệu của mình. Admin: toàn hệ thống.
+Mọi nghiệp vụ trừ đăng nhập đều cần phiên hợp lệ.
+OCR hiện tại nhận 5 crop video; ảnh dùng prepare.
+UC12: luồng thay thế tại bước chọn profile của UC04.
+Nhập thủ công sau xử lý dùng UC07, do người dùng chọn.
+endlegend
+@enduml

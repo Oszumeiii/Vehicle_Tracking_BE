@@ -1,0 +1,51 @@
+@startuml
+title Xóa job hoặc nguồn và phối hợp DB với filesystem
+skinparam defaultFontName Arial
+skinparam defaultFontSize 16
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+hide footbox
+boundary "Client đã đăng nhập" as C
+control "NestJS API" as A
+database "PostgreSQL" as D
+participant "Filesystem riêng" as F
+C -> A : DELETE job/{id} hoặc media/{id}
+A -> D : BEGIN; kiểm quyền; khóa media FOR UPDATE
+alt Xóa job v2
+  A -> D : Khóa job FOR UPDATE; đọc trạng thái
+  alt Queued / running
+    A -> D : ROLLBACK
+    A --> C : 409; job chưa kết thúc
+  else Succeeded / failed
+    A -> F : Rename recognition/{id} -> trash/{uuid}
+    A -> D : DELETE job (cascade dữ liệu phát sinh)
+    note right of D : Giữ file nguồn.
+  end
+else Xóa media
+  A -> D : Kiểm còn job tham chiếu
+  alt Còn ít nhất một job
+    A -> D : ROLLBACK
+    A --> C : 409; xóa job trước
+  else Không còn job
+    A -> F : Rename media/{id} -> trash/{uuid}
+    A -> D : DELETE media_assets
+  end
+end
+opt Đủ điều kiện xóa và không trả lỗi trước đó
+  alt DB transaction thành công
+    A -> D : COMMIT
+    A -> F : Purge trash (best effort)
+    A --> C : 204
+  else Có lỗi trước khi commit hoàn tất
+    A -> D : ROLLBACK
+    A -> F : Restore về đường dẫn cũ
+    A --> C : Lỗi tương ứng
+  end
+end
+note over A,F
+Khóa media -> job thống nhất với tạo job.
+Purge lỗi để lại trash không được API phục vụ.
+Crash giữa rename/commit cần đối soát DB/file.
+end note
+@enduml
