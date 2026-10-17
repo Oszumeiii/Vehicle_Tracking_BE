@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vehicle Tracking Backend"
+  short_description: "FastAPI, plate OCR, and Supabase project workflow"
+  default_prompt: "Use $vehicle-tracking-backend to implement and verify the requested change in Vehicle_Tracking_BE."
