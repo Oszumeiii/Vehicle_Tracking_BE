@@ -25,6 +25,8 @@ class Settings:
     poll_seconds: float = 2
     job_timeout_seconds: float = 7200
     detection_confidence: float = 0.25
+    db_backend: str = "sqlite"
+    node_id: str = "local"
 
     @property
     def db_path(self) -> Path:
@@ -42,7 +44,14 @@ class Settings:
             max_upload_bytes=int(os.getenv("PLATE_MAX_UPLOAD_MIB", "500")) * 1024 * 1024,
             poll_seconds=float(os.getenv("PLATE_POLL_SECONDS", "2")),
             job_timeout_seconds=float(os.getenv("PLATE_JOB_TIMEOUT_SECONDS", "7200")),
+            db_backend=os.getenv("PLATE_DB_BACKEND", "sqlite").strip(),
+            node_id=os.getenv("PLATE_NODE_ID", "local").strip(),
         )
+        if settings.db_backend not in ("sqlite", "supabase"):
+            raise ValueError("PLATE_DB_BACKEND must be sqlite or supabase")
+        if settings.db_backend == "supabase":
+            if not settings.node_id:
+                raise ValueError("PLATE_NODE_ID is required")
         if settings.device not in ("cpu", "cuda"):
             raise ValueError("PLATE_DEVICE must be cpu or cuda")
         limits = (settings.max_upload_bytes, settings.poll_seconds, settings.job_timeout_seconds)

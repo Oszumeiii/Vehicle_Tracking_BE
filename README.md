@@ -1,5 +1,12 @@
 # Vehicle Tracking BE — API cắt biển số
 
+## Supabase PostgreSQL và Storage (tùy chọn)
+
+Đã có migration, repository PostgreSQL, đăng nhập Supabase Auth và RLS cho dữ liệu dùng chung,
+upload crop private và tra cứu biển số. Xem [hướng dẫn triển khai](docs/SUPABASE_SETUP.md).
+Mặc định vẫn dùng SQLite; bật `PLATE_DB_BACKEND=supabase` sau khi cấu hình database, chạy
+migration. Phần hướng dẫn local bên dưới mô tả chế độ SQLite.
+
 FastAPI nhận video, SQLite lưu hàng đợi/kết quả, một worker riêng chạy pipeline nội bộ: adaptive sampling,
 YOLO, BoT-SORT, chọn năm crop theo track và nhận dạng biển số.
 Các model video được hỗ trợ là `yolo11l`, `yolo11n`, `yolo11m`, `yolo26n`.
@@ -95,7 +102,9 @@ Vehicle_Tracking_BE/
 ```
 
 Cây trên chỉ liệt kê các thành phần hiện đã có và đang được sử dụng; các module camera/vehicle,
-Celery/Redis, ORM, Docker và migrations chưa được tạo. `app/worker.py` cũng giữ entrypoint worker cũ.
+Celery/Redis, ORM và Docker chưa được tạo. Migration Supabase nằm trong `supabase/migrations/`;
+các module PostgreSQL/Auth/Storage mới được mô tả trong `docs/SUPABASE_SETUP.md`.
+`app/worker.py` cũng giữ entrypoint worker cũ.
 
 ## Thiết lập trên Windows / PowerShell
 
@@ -198,7 +207,8 @@ khoảng chờ hàng đợi (2 giây), thời hạn xử lý (7200 giây). Khôn
 Chi tiết lỗi nằm trong log; API chỉ trả mã và thông báo an toàn. Không công khai thư mục dữ liệu bằng static mount.
 Thành công chỉ được ghi sau khi Pipeline trả `complete`, manifest hợp lệ và transaction nhập kết quả thành công.
 Hàng đợi/lịch sử giữ qua lần khởi động lại API; kết quả giữ đến khi xóa. Theo dõi dung lượng đĩa khi xử lý nhiều video.
-Bản này phục vụ local qua loopback, chưa có xác thực/phân quyền hay hàng đợi phân tán.
+Chế độ SQLite phục vụ local qua loopback, chưa có xác thực/phân quyền. Chế độ Supabase
+yêu cầu đăng nhập Supabase Auth cho job/search API; xem giới hạn triển khai trong hướng dẫn Supabase.
 
 ## Kiểm thử
 

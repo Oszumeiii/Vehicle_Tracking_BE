@@ -42,11 +42,12 @@ The user chose Supabase PostgreSQL for metadata and Supabase Storage for extract
 - Use versioned schema migrations. Do not run migrations automatically from every API/worker startup against the shared development database.
 - Prefer a private configurable bucket, initially `vehicle-frames`. Store bucket and object path in metadata, and generate short-lived signed URLs when serving authorized image requests.
 - Keep privileged credentials server-side. Do not make a bucket public to fix authorization errors. Check job/image access before signing a URL.
-- Use stable names such as `{job_id}/{track_id}/crop-{frame_index}.jpg`; distinguish full video frames from plate crops.
+- Use stable names such as `{job_id}/{crop_id}.jpg`; distinguish full video frames from plate crops. Existing Storage objects may retain their old team-prefixed paths.
 - PostgreSQL and Storage do not share a transaction. Design retry-safe uploads and result import, bounded retries, and compensating cleanup for partial failures. Cleanup must target only objects owned by the relevant job/attempt, including when attempts overlap.
 - Shared PostgreSQL does not make local video paths readable on other machines. Define shared input/output access before distributing workers.
 - The original worker lock and restart recovery assume a single worker. Before enabling multiple workers, replace claiming/recovery with ownership-aware atomic claims and leases or an equivalent design. Never fail another live worker's jobs on startup.
 - For plate search, preserve raw OCR alongside a normalized search value; normalize queries identically. Index exact searches, keep sightings separate, and show fuzzy matches explicitly instead of silently merging vehicle identities.
+- The current Supabase schema is one shared workspace without teams. Every authenticated user can read shared results and use the job API; keep public sign-up closed until a replacement access policy exists. The initial migration creates this schema from empty app tables; `supabase/reset_vehicle_tracking.sql` removes only project metadata when an explicit reset is requested. Never drop Supabase auth/storage system tables.
 - Store capture time only when source metadata supplies it; never substitute upload time.
 - Do not invent current provider quotas or SDK signatures; check official documentation when those details matter.
 

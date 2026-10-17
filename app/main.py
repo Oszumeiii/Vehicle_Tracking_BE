@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 import threading
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from app.core.config import Settings
 from app.core.upload_limit import UploadLimitMiddleware
 from app.api.v1.router import router as api_router
@@ -23,6 +24,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.state.inference_config = None
     application.state.inference_lock = threading.Lock()
     application.include_router(api_router)
+    @application.exception_handler(PermissionError)
+    async def permission_denied(request, exc):
+        return JSONResponse(status_code=403, content={"detail": "Access denied."})
     application.add_middleware(UploadLimitMiddleware)
 
     @application.get("/")

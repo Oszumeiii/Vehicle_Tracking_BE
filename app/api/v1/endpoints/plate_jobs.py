@@ -1,6 +1,6 @@
 from typing import Annotated
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, RedirectResponse
 from app.api.deps import get_job_service
 from app.schemas.plate_job import AcceptedJob, JobStatus, ModelName, PlatePage
 from app.services.plate_job_service import JobService
@@ -33,6 +33,9 @@ def list_plates(job_id: str, jobs: Service, limit: Annotated[int, Query(ge=1, le
 @router.get("/{job_id}/crops/{crop_id}", response_class=FileResponse,
             responses={200: {"content": {"image/jpeg": {}}}}, summary="View a plate crop")
 def get_crop(job_id: str, crop_id: str, jobs: Service):
+    if jobs.storage:
+        return RedirectResponse(jobs.crop_url(job_id, crop_id), status_code=307,
+                                headers={"Cache-Control": "no-store"})
     return FileResponse(jobs.crop(job_id, crop_id), media_type="image/jpeg")
 
 

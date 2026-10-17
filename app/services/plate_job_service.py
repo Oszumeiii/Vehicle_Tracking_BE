@@ -1,6 +1,7 @@
 from pathlib import Path
 import shutil
 import uuid
+import json
 from fastapi import HTTPException, UploadFile
 from app.core.config import Settings
 from app.repositories.plate_job_repository import JobRepository
@@ -18,9 +19,16 @@ def safe_path(root: Path, relative: str) -> Path:
 
 
 class JobService:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, user_id=None):
         self.settings = settings
-        self.repo = JobRepository(settings.db_path)
+        self.storage = None
+        if settings.db_backend == "supabase":
+            from app.repositories.postgres_job_repository import PostgresJobRepository
+            from app.services.supabase_storage import CropStorage
+            self.repo = PostgresJobRepository(settings.node_id, user_id)
+            self.storage = CropStorage()
+        else:
+            self.repo = JobRepository(settings.db_path)
 
     def job_dir(self, job_id):
         return safe_path(self.settings.data_dir / "jobs", job_id)
@@ -106,7 +114,51 @@ class JobService:
         job = self.get(job_id)
         if job["status"] not in ("succeeded", "failed"):
             raise HTTPException(409, "Queued or running jobs cannot be deleted.")
+        if self.storage:
+            if job["node_id"] != self.settings.node_id:
+                raise HTTPException(409, "Delete this job through its source node API.")
+            artifacts = self.repo.artifacts(job_id)  # Checks write permission before side effects.
+            paths = {r["object_path"] for r in artifacts}
+            journal = self.job_dir(job_id) / "storage-uploads.json"
+            if journal.exists():
+                prefix = f"{job_id}/"
+                for path in json.loads(journal.read_text(encoding="utf-8")):
+                    if not isinstance(path, str) or not path.startswith(prefix) or ".." in path:
+                        raise ValueError("Invalid upload journal")
+                    paths.add(path)
+            self.storage.remove(sorted(paths))
         folder = self.job_dir(job_id)
         if folder.exists():
             shutil.rmtree(folder)
         self.repo.delete(job_id)
+
+    def crop_url(self, job_id, crop_id):
+        self.get(job_id, ready=True)
+        row = self.repo.crop(job_id, crop_id)
+        if row is None:
+            raise HTTPException(404, "Crop not found.")
+        return self.storage.signed_url(row["object_path"])
+
+    def complete(self, job_id, frame_count, crops):
+        if not self.storage:
+            return self.repo.succeed(job_id, frame_count, crops)
+        folder = self.job_dir(job_id)
+        # Paths are stable within a job. Failed uploads may have succeeded remotely,
+        # so record the attempted path before sending the request.
+        attempted = []
+        planned = [f"{job_id}/{c['crop_id']}.jpg" for c in crops]
+        (folder / "storage-uploads.json").write_text(json.dumps(planned), encoding="utf-8")
+        try:
+            for crop in crops:
+                if not crop.get("track_id") or not crop.get("track_summary"):
+                    raise ValueError("Missing track metadata in pipeline results.")
+                path = f"{job_id}/{crop['crop_id']}.jpg"
+                attempted.append(path)
+                self.storage.upload(path, safe_path(folder, crop["path"]))
+                crop.update(bucket=self.storage.bucket, object_path=path)
+        except Exception:
+            self.storage.remove(attempted)
+            raise
+        # A DB commit error may mean commit succeeded but acknowledgement was lost.
+        # Keep uploaded files on ambiguous failure; cleanup can reconcile later.
+        self.repo.succeed(job_id, frame_count, crops)

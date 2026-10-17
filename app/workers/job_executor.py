@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import time
 import traceback
+from contextlib import nullcontext
 
 from filelock import FileLock, Timeout
 
@@ -78,6 +79,7 @@ def collect_results(folder, model, result):
     if frame_count < 1 or frame_count != report["frame_count"]:
         raise ValueError("Frame count mismatch")
     crops = []
+    tracks = {str(t["track_id"]): t for t in report.get("tracks", [])}
     with (run_dir / "ocr_crop_manifest.csv").open(encoding="utf-8-sig", newline="") as source:
         for index, row in enumerate(csv.DictReader(source)):
             if row["model"] != model:
@@ -91,6 +93,8 @@ def collect_results(folder, model, result):
                 "bbox": [float(row[k]) for k in ("x1", "y1", "x2", "y2")],
                 "crop_bbox": [int(row[k]) for k in ("crop_x1", "crop_y1", "crop_x2", "crop_y2")],
                 "path": path.relative_to(folder.resolve()).as_posix(),
+                "track_id": row.get("track_id"),
+                "track_summary": tracks.get(row.get("track_id")),
             }
             values = [crop["timestamp_seconds"], crop["confidence"], *crop["bbox"]]
             if not all(math.isfinite(value) for value in values) or not 0 <= crop["confidence"] <= 1:
@@ -117,7 +121,7 @@ def process_one(service, runner=execute_pipeline):
         result = runner(service.settings, job, folder)
         stage = "results"
         frame_count, crops = collect_results(folder, job["model"], result)
-        service.repo.succeed(job["job_id"], frame_count, crops)
+        service.complete(job["job_id"], frame_count, crops)
     except BaseException as exc:
         code = getattr(exc, "code", "RESULT_INVALID" if stage == "results" else "PIPELINE_FAILED")
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
@@ -143,8 +147,10 @@ def main():
     settings = Settings.from_env()
     service = JobService(settings)
     service.repo.initialize()
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
     try:
-        with FileLock(str(settings.data_dir / "worker.lock"), timeout=0):
+        with FileLock(str(settings.data_dir / "worker.lock"), timeout=0), \
+             (service.repo.worker_lock() if settings.db_backend == "supabase" else nullcontext()):
             service.repo.recover()
             while True:
                 worked = process_one(service)
