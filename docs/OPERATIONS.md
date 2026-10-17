@@ -60,7 +60,7 @@ Terminal 2, cũng ở thư mục backend và dùng cùng cấu hình, chạy wor
 npm run worker
 ```
 
-`npm run worker -- --once` xử lý tối đa một job rồi thoát; nếu hàng đợi rỗng thì thoát ngay. Chỉ một worker được giữ advisory lock trên mỗi database. Tiến trình thứ hai báo lỗi thay vì giành job của worker đang chạy.
+`npm run worker -- --once` xử lý tối đa một job rồi thoát; nếu hàng đợi rỗng thì thoát ngay. Chỉ một worker được giữ advisory lock trên mỗi database. Tiến trình thứ hai báo lỗi thay vì giành job của worker đang chạy. Muốn xử lý nhiều job cùng lúc thì tăng `PLATE_WORKER_CONCURRENCY` (1-8) cho worker đó, không chạy thêm tiến trình worker: các luồng nhận job bằng `FOR UPDATE SKIP LOCKED` nên không trùng job. Mỗi job chạy một tiến trình Python và nạp model riêng; với GPU 8 GB nên để 2. `--once` luôn xử lý tối đa một job.
 
 Kiểm tra `GET http://127.0.0.1:3000/health/ready`, rồi mở [Swagger](http://127.0.0.1:3000/docs), đăng nhập và Authorize bằng `access_token`. Có bộ request chạy từng bước tại [`examples/api.http`](../examples/api.http), dùng [REST Client cho VS Code](https://github.com/Huachao/vscode-restclient#usage). Request sau lấy token/ID từ response trước; gửi lần lượt và kiểm tra status. Mật khẩu được hỏi khi gửi. Vì biến được chèn vào JSON, giá trị chứa dấu nháy kép hoặc dấu gạch chéo ngược cần JSON escaping; có thể dùng Swagger để nhập trực tiếp các giá trị đó.
 

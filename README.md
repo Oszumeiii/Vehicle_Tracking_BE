@@ -92,7 +92,7 @@ Xem [API.md](docs/API.md), [TESTING.md](TESTING.md), [hướng dẫn vận hành
 - Password dùng scrypt; session token chỉ lưu SHA-256 và có thể thu hồi.
 - Prediction máy giữ nguyên; mỗi review thêm một bản ghi và tăng revision trong transaction.
 - Job đang chờ/chạy không được xóa. Xóa job giữ nguồn; chỉ xóa nguồn khi không còn job tham chiếu.
-- Worker dùng advisory lock; job running cũ được đánh dấu `WORKER_INTERRUPTED` khi worker khởi động lại. Chạy lại bằng job mới.
+- Một tiến trình worker giữ advisory lock và chạy song song tối đa `PLATE_WORKER_CONCURRENCY` job (mặc định 1; mỗi job là một tiến trình Python riêng, nên VRAM tăng theo số job). Job running cũ được đánh dấu `WORKER_INTERRUPTED` khi worker khởi động lại. Chạy lại bằng job mới.
 - Không công khai thư mục data bằng static serving.
 
 ## Kiểm thử
