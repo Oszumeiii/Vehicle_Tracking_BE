@@ -5,3 +5,4 @@
 *.pdf binary
 *.pt binary
 *.pth binary
+*.cmd text eol=crlf
