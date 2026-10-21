@@ -47,6 +47,10 @@ npm run worker
 npm run worker -- --once
 ```
 
+### Chạy cả hệ thống một lần
+
+Sau khi đã có `.env`, tài khoản admin và môi trường inference, nhấp đúp `start-all.cmd` (hoặc chạy `.\start-all.cmd`). Script bật Docker Desktop/PostgreSQL, build, migrate, rồi mở API, worker và FE (`../Vehicle_Tracking_FE_test`) mỗi cái một cửa sổ và mở trình duyệt. Dịch vụ đang chạy sẽ được giữ nguyên nên chạy lại không làm gián đoạn job. Tùy chọn: `-SkipBuild`, `-NoBrowser`, `-FrontendDir <đường dẫn>`. Đóng cửa sổ nào thì dừng dịch vụ đó; đóng cửa sổ worker khi job đang chạy sẽ đánh dấu job `WORKER_INTERRUPTED`.
+
 Mở Swagger tại `http://127.0.0.1:3000/docs`. `POST /api/v2/auth/login`, lấy `access_token`, bấm **Authorize** và nhập token. Mọi endpoint nghiệp vụ đều cần Bearer token. `/health` chỉ là liveness; `/health/ready` kiểm tra database/schema, không xác nhận model hoặc worker đang chạy.
 
 ## Chuẩn bị inference
