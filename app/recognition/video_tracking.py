@@ -276,6 +276,18 @@ def detect_plates(model, images, cfg):
     return boxes
 
 
+def check_frame_count(decoded, declared, fps):
+    """Stream-copied cuts often declare a few trailing frames that never decode.
+
+    Accept only such a short tail (<= 1% or 2 s of video); any surplus or larger
+    gap still means the metadata, and so the timestamps, cannot be trusted.
+    """
+    if declared <= 0 or decoded == declared:
+        return
+    if decoded > declared or declared - decoded > max(declared // 100, round(2 * fps)):
+        raise RuntimeError("Decoded frame count differs from video metadata")
+
+
 def video_config(video, snapshot):
     """Notebook run_tracking() configuration for one video and pipeline snapshot."""
     cap = cv2.VideoCapture(str(video))
@@ -401,8 +413,8 @@ def track_video(video, model, cfg, out):
                 finish(tid)
         finally:
             cap.release()
-    if not cfg["max_seconds"] and cfg["declared_frames"] > 0 and len(pts) != cfg["declared_frames"]:
-        raise RuntimeError("Decoded frame count differs from video metadata")
+    if not cfg["max_seconds"]:
+        check_frame_count(len(pts), cfg["declared_frames"], cfg["fps"])
     summary = dict(decoded_frames=len(pts), sampled_frames=sampled, candidates=len(candidates),
                    rejected=dict(rejected), frame_gate=gate.summary(),
                    elapsed_seconds=time.perf_counter() - started)

@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from app.recognition.runner import _video_detections
-from app.recognition.video_tracking import video_config
+from app.recognition.video_tracking import check_frame_count, video_config
 
 SAMPLING = {"low_fps": 10., "med_fps": 10., "high_fps": 10., "threshold_low": 2., "threshold_high": 6.}
 TRACKING = {"imgsz": 320, "batch": 4, "track_buffer_seconds": 1.5, "crop_padding": .15, "crop_confidence": .25}
@@ -231,3 +231,12 @@ def test_empty_scene_gate_skips_quiet_frames_only_after_confirmations():
     assert gate.decide(0.4) == (False, "idle_skip")
     gate.observe_detection(1, True)
     assert gate.decide(0.5) == (True, "live_track")
+
+
+def test_frame_count_tolerates_only_a_short_missing_tail():
+    check_frame_count(49584, 49584, 27.5)
+    check_frame_count(49567, 49584, 27.5)  # stream-copied cut: 17 trailing frames never decode
+    check_frame_count(30, 0, 10.)  # container without a frame count
+    for decoded in (49585, 49000):  # surplus, or a gap beyond max(1%, 2 s)
+        with pytest.raises(RuntimeError, match="frame count"):
+            check_frame_count(decoded, 49584, 27.5)
