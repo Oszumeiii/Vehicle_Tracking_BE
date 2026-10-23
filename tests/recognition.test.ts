@@ -15,6 +15,7 @@ import {
 } from '../src/recognition/engine';
 import { fusePredictions, normalizePlate } from '../src/recognition/fusion';
 import { PipelineRegistry, sha256 } from '../src/recognition/registry';
+import { livePayload } from '../src/cli';
 import { newId, seedUser, startTestDatabase } from './helpers';
 
 test('Whole-plate fusion keeps abstentions and never converts letter O to zero', () => {
@@ -161,6 +162,70 @@ test('Registry pins local code/checkpoints, sanitizes public metadata and refuse
     if (previous.python === undefined) delete process.env.PLATE_PIPELINE_PYTHON;
     else process.env.PLATE_PIPELINE_PYTHON = previous.python;
     // mkdtemp's exact returned path is the only cleanup target.
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('Live payload pins the same joint-OCR snapshot as a job and accepts only YouTube', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'plate-live-'));
+  const previous = {
+    config: process.env.PLATE_PIPELINES_CONFIG,
+    python: process.env.PLATE_PIPELINE_PYTHON,
+  };
+  try {
+    await mkdir(path.join(root, 'adapter'));
+    await writeFile(path.join(root, 'adapter/ocr.py'), '# test-only adapter source');
+    await writeFile(path.join(root, 'detector.pt'), 'test-checkpoint');
+    await writeFile(path.join(root, 'ocr.pt'), 'test-checkpoint');
+    const recognizer = {
+      factory: 'ocr:create',
+      module_root: 'adapter',
+      checkpoint: 'ocr.pt',
+      version: 'test',
+      preprocessing_version: 'test-rgb',
+    };
+    const detector = { model: 'yolo11l', checkpoint: 'detector.pt', version: 'yolo11l' };
+    const config = path.join(root, 'pipelines.json');
+    await writeFile(
+      config,
+      JSON.stringify({
+        pipelines: [
+          {
+            id: 'joint',
+            version: '1',
+            detector,
+            recognizer: { ...recognizer, input_mode: 'five_frame_joint' },
+          },
+          { id: 'single', version: '1', detector, recognizer },
+        ],
+      }),
+    );
+    process.env.PLATE_PIPELINES_CONFIG = config;
+    process.env.PLATE_PIPELINE_PYTHON = process.execPath; // File-readiness test, no inference.
+    const out = path.join(root, 'payload.json');
+    const url = 'https://www.youtube.com/watch?v=5Xl6pSgiy3A';
+    assert.equal(
+      await livePayload(['live-payload', '--pipeline', 'joint', '--url', url, '--out', out]),
+      out,
+    );
+    const payload = JSON.parse(await readFile(out, 'utf8'));
+    assert.deepEqual(payload.source, { type: 'youtube', url });
+    assert.deepEqual(payload.pipeline_snapshot, await new PipelineRegistry().resolve('joint'));
+    for (const [pipeline, link, reason] of [
+      ['joint', 'https://example.com/watch?v=x', /YouTube/],
+      ['single', url, /five_frame_joint/],
+      ['missing', url, /Unknown pipeline/],
+    ] as const)
+      await assert.rejects(
+        livePayload(['live-payload', '--pipeline', pipeline, '--url', link, '--out', out]),
+        reason,
+      );
+    await assert.rejects(livePayload(['live-payload', '--url', url]), /Use: live-payload/);
+  } finally {
+    if (previous.config === undefined) delete process.env.PLATE_PIPELINES_CONFIG;
+    else process.env.PLATE_PIPELINES_CONFIG = previous.config;
+    if (previous.python === undefined) delete process.env.PLATE_PIPELINE_PYTHON;
+    else process.env.PLATE_PIPELINE_PYTHON = previous.python;
     await rm(root, { recursive: true, force: true });
   }
 });

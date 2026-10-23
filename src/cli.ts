@@ -1,8 +1,10 @@
 import 'reflect-metadata';
 import 'dotenv/config';
 import { randomBytes, randomUUID, scryptSync } from 'node:crypto';
+import { writeFile } from 'node:fs/promises';
 import { Database } from './database/database';
 import { migrate } from './database/migrate';
+import { PipelineRegistry } from './recognition/registry';
 import { z } from 'zod';
 
 function argument(args: string[], name: string): string | undefined {
@@ -10,11 +12,38 @@ function argument(args: string[], name: string): string | undefined {
   return index < 0 ? undefined : args[index + 1];
 }
 
+const YOUTUBE_HOSTS = ['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be'];
+
+/** Payload for `python -m app.live`: the same pinned snapshot a job gets, plus the source. */
+export async function livePayload(args: string[]): Promise<string> {
+  const pipeline = argument(args, '--pipeline');
+  const url = argument(args, '--url');
+  const out = argument(args, '--out');
+  if (!pipeline || !url || !out)
+    throw new Error('Use: live-payload --pipeline ID --url YOUTUBE_URL --out FILE');
+  const parsed = z.url().safeParse(url);
+  if (!parsed.success || !YOUTUBE_HOSTS.includes(new URL(url).hostname))
+    throw new Error('Provide a YouTube watch or live URL.');
+  const snapshot = await new PipelineRegistry().resolve(pipeline);
+  if (snapshot.task !== 'recognize' || snapshot.recognizer?.input_mode !== 'five_frame_joint')
+    throw new Error('Live recognition needs a five_frame_joint recognition pipeline.');
+  await writeFile(
+    out,
+    JSON.stringify({ pipeline_snapshot: snapshot, source: { type: 'youtube', url } }, null, 2),
+  );
+  return out;
+}
+
 export async function main(args = process.argv.slice(2)): Promise<void> {
   const [command] = args;
+  if (command === 'live-payload') {
+    console.log(`Live payload written: ${await livePayload(args)}`);
+    return;
+  }
   if (!['migrate', 'create-admin'].includes(command ?? '')) {
     throw new Error(
-      'Run npm run build first, then use: npm run db:migrate | npm run admin:create -- --email EMAIL',
+      'Run npm run build first, then use: npm run db:migrate | npm run admin:create -- --email EMAIL' +
+        ' | node dist/src/cli.js live-payload --pipeline ID --url YOUTUBE_URL --out FILE',
     );
   }
   const database = new Database();

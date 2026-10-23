@@ -132,6 +132,24 @@ def _image_detections(payload, model, folder, data_dir):
     return appearances, {"total_detections": len(appearances), "rejected_tracks": {}, "selected_frames": 1}
 
 
+def build_appearance(candidate, manifest_rows, out, data_dir, start_seconds, end_seconds, timestamp_source):
+    """One track's appearance from its five manifest rows (evidence files under out)."""
+    rows = sorted(manifest_rows, key=lambda row: row["selected_order"])
+    frame_indices = [row["frame_index"] for row in rows]
+    if len(rows) != 5 or len(set(frame_indices)) != 5 or frame_indices != sorted(frame_indices):
+        raise ValueError("Five-frame tracking produced invalid selection")
+    detections = [dict(selected_order=row["selected_order"], frame_index=row["frame_index"],
+        timestamp_seconds=row["timestamp_seconds"], timestamp_source=timestamp_source,
+        bbox=[float(row[key]) for key in ("x1", "y1", "x2", "y2")],
+        crop_bbox=[int(row[key]) for key in ("crop_x1", "crop_y1", "crop_x2", "crop_y2")],
+        detection_score=row["confidence"], crop_storage_key=_key(out / row["crop_path"], data_dir),
+        frame_storage_key=_key(out / row["sampled_frame_path"], data_dir),
+        crop_width=row["crop_width"], crop_height=row["crop_height"]) for row in rows]
+    return dict(source_track_id=str(candidate["track_id"]), first_frame=candidate["first_frame"],
+                last_frame=candidate["last_frame"], start_seconds=start_seconds, end_seconds=end_seconds,
+                detections=detections)
+
+
 def _video_detections(payload, model, folder, data_dir):
     from app.recognition.video_tracking import export_crops, track_video, video_config, write_json as dump
     video = Path(payload["input_path"])
@@ -147,20 +165,9 @@ def _video_detections(payload, model, folder, data_dir):
     appearances = []
     for candidate in candidates:
         track_id = str(candidate["track_id"])
-        rows = sorted(grouped[track_id], key=lambda row: row["selected_order"])
-        frame_indices = [row["frame_index"] for row in rows]
-        if len(rows) != 5 or len(set(frame_indices)) != 5 or frame_indices != sorted(frame_indices):
-            raise ValueError("Five-frame tracking produced invalid selection")
-        detections = [dict(selected_order=row["selected_order"], frame_index=row["frame_index"],
-            timestamp_seconds=row["timestamp_seconds"], timestamp_source="video_pts",
-            bbox=[float(row[key]) for key in ("x1", "y1", "x2", "y2")],
-            crop_bbox=[int(row[key]) for key in ("crop_x1", "crop_y1", "crop_x2", "crop_y2")],
-            detection_score=row["confidence"], crop_storage_key=_key(out / row["crop_path"], data_dir),
-            frame_storage_key=_key(out / row["sampled_frame_path"], data_dir),
-            crop_width=row["crop_width"], crop_height=row["crop_height"]) for row in rows]
         first, last = candidate["first_frame"], candidate["last_frame"]
-        appearances.append(dict(source_track_id=track_id, first_frame=first, last_frame=last,
-                                start_seconds=pts[first - 1], end_seconds=pts[last - 1], detections=detections))
+        appearances.append(build_appearance(candidate, grouped[track_id], out, data_dir,
+                                            pts[first - 1], pts[last - 1], "video_pts"))
     rejected = summary["rejected"]
     return appearances, {"decoded_frames": len(pts), "selected_frames": len(frames),
                          "accepted_tracks": len(appearances), "total_detections": len(manifest),

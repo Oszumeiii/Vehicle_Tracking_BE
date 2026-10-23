@@ -317,8 +317,15 @@ def video_config(video, snapshot):
             raise ValueError("Video metadata or timing is invalid")
     finally:
         cap.release()
+    return tracking_config(width, height, fps, declared, snapshot, video.stem, video_path=str(video))
+
+
+def tracking_config(width, height, fps, declared, snapshot, video_id, video_path=""):
+    """Tracking configuration from source metadata; live sources have no declared frame count (0)."""
+    if width <= 0 or height <= 0 or not math.isfinite(fps) or fps <= 0 or declared < 0:
+        raise ValueError("Source metadata or timing is invalid")
     tracking = snapshot["tracking"]
-    return dict(video_path=str(video), video_id=video.stem, width=width, height=height, fps=fps,
+    return dict(video_path=video_path, video_id=video_id, width=width, height=height, fps=fps,
                 declared_frames=declared, max_seconds=0, batch=tracking["batch"], imgsz=tracking["imgsz"],
                 device="cpu" if snapshot["device"] == "cpu" else 0,
                 crop_confidence=tracking["crop_confidence"], crop_padding=tracking["crop_padding"],
@@ -473,6 +480,10 @@ class TrackSession:
     def retained_frames(self):
         return len(self._jpeg_bytes)
 
+    @property
+    def retained_bytes(self):
+        return sum(map(len, self._jpeg_bytes.values()))
+
     def summary(self):
         return dict(sampled_frames=self.sampled, rejected=dict(self.rejected), frame_gate=self.gate.summary())
 
@@ -485,7 +496,9 @@ class TrackSession:
         selected, reason = select_five(rows, self.cfg)
         if selected:
             candidate = dict(track_id=str(tid), rows=selected, observations=len(rows),
-                             first_frame=rows[0]["frame_index"], last_frame=rows[-1]["frame_index"])
+                             first_frame=rows[0]["frame_index"], last_frame=rows[-1]["frame_index"],
+                             first_seconds=rows[0]["timestamp_seconds"], last_seconds=rows[-1]["timestamp_seconds"],
+                             first_box=rows[0]["box"], last_box=rows[-1]["box"])
             if self.retain_images:
                 candidate["jpeg"] = {r["frame_index"]: self._jpeg_bytes[r["frame_index"]] for r in selected}
             self._finished.append(candidate)
