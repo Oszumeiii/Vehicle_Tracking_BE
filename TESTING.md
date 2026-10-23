@@ -89,3 +89,26 @@ job đang chạy bị gián đoạn chuyển `failed` với lỗi `WORKER_INTERR
 bằng một job mới. `succeeded` chỉ khẳng định xử lý hoàn tất.
 
 Độ chính xác phải đo với nhãn độc lập theo [EVALUATION.md](docs/EVALUATION.md).
+
+## Nghiệm thu live CLI (YouTube Live)
+
+Cách chạy xem [README](README.md#nhận-diện-youtube-live-thử-nghiệm-chưa-nối-api). Cần GPU, `node` trong PATH và mạng.
+
+1. Phát lại không bỏ frame: payload nguồn file với `realtime: false` và `--max-track-seconds 0`. Biển số, thời điểm và crop của từng track phải giống job upload cùng clip.
+2. Phát lại theo nhịp thật (`realtime: true`): `frames_dropped` gần 0, `lag_seconds` dưới khoảng 1 s. Nếu bỏ nhiều frame, kiểm tra `--buffer-seconds` và GPU có đang bị tiến trình khác chiếm không.
+3. Livestream thật ít nhất 60 phút: theo dõi bộ nhớ tiến trình và VRAM (không tăng dần), `lag_seconds`, `frames_dropped`, sự kiện `reconnecting`. Gửi `stop` giữa chừng: thoát mã 0, các track đang mở được chốt, không còn tiến trình `ffmpeg` (`Get-Process ffmpeg`).
+4. Ca âm tính (luồng không đọc được biển): kết quả rác phải là `low_confidence`, không phải `readable`.
+5. Xem crop bằng mắt các track `readable` và các cặp `duplicate_of`.
+
+Kết quả đo ngày 2026-10-23 (RTX 4060 Laptop 8 GB, Camboriú `5Xl6pSgiy3A`, 1080p 30 fps):
+
+| Lần chạy | Frame bỏ | Lag p95 | Track | Ghi chú |
+| --- | --- | --- | --- | --- |
+| Phát lại không bỏ frame, clip 3 phút | 0 | — | 19 | 19/19 track giống job upload (biển số, thời điểm, crop trùng byte) |
+| Phát lại nhịp thật, clip 3 phút | 0/5400 | 0,71 s | 19 | Biển số giống bản không bỏ frame (cần warm-up model trước khi đọc luồng) |
+| Live 60 phút | 635/107282 (0,6%) | 0,86 s (max 1,41 s) | 570 | 128 `readable`, 442 `low_confidence`, 43 `duplicate_of`; không reconnect, không lỗi; dừng sau 17 s, thoát mã 0 |
+
+- Live 60 phút: working set của tiến trình giảm từ khoảng 4,3 GB xuống ổn định 0,7–0,9 GB, VRAM toàn GPU 5,8–6,5 GB, không có xu hướng tăng. Bằng chứng chiếm khoảng 2,6 GB/giờ.
+- Luồng Itajaí `NwbOe1Mb__M` (ca âm tính, 5 phút): 5 track đều `low_confidence`.
+- Lỗi đã biết: detector nhận nhầm biển tên đường cố định ("Avenida Atlântica") là biển số. Các track này có độ tin cậy 0,33–0,40 nên rơi vào `low_confidence`, nhưng cứ mỗi `--max-track-seconds` lại sinh thêm một track. Cần vùng nhận diện theo camera (giai đoạn sau).
+- Chưa có lần rớt mạng thật trong bài 60 phút; nhánh kết nối lại mới được kiểm bằng test tự động.

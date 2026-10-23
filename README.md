@@ -84,6 +84,25 @@ Chi tiết hợp đồng model, phiên bản và crop: [MODEL_INTEGRATION.md](do
 
 Xem [API.md](docs/API.md), [TESTING.md](TESTING.md), [hướng dẫn vận hành](docs/OPERATIONS.md) và [request mẫu](examples/api.http).
 
+## Nhận diện YouTube Live (thử nghiệm, chưa nối API)
+
+`app/live` là tiến trình chạy liên tục trên một livestream: `yt-dlp` lấy luồng HLS (cần `node` trong PATH làm JS runtime), ffmpeg của `imageio-ffmpeg` giải mã, `TrackSession` tracking như video upload, mỗi track đã chốt được ghi bằng chứng và OCR joint 5 frame. Chỉ hỗ trợ profile `five_frame_joint`.
+
+```powershell
+npm run build
+node dist/src/cli.js live-payload --pipeline pbl6-resnet34c-joint5-v1 --url "https://www.youtube.com/watch?v=VIDEO_ID" --out live.json
+.\.venv\Scripts\python.exe -m app.live --payload live.json --out data/live/run1 --ignore-stdin
+```
+
+- stdout là JSON lines: `status` (`starting`, `connecting`, `running`, `reconnecting`, `ended`, `stopped`, `failed`), `stats` mỗi giây (frame đọc/bỏ, độ trễ, track đang mở, bộ nhớ giữ ảnh), `track`, `error`. Log kỹ thuật ở stderr.
+- Mỗi track nằm trong `OUT/tracks/e{epoch}-t{track}/`: keyframe, crop và `track.json` (một appearance cùng dạng kết quả job, `timestamp_source="live_pts"`, kèm `captured_from/to` xấp xỉ theo giờ nhận frame).
+- `status` của track (`readable` khi độ tin cậy ≥ `--min-confidence`, mặc định 0.85; `low_confidence`; `unreadable`) và `duplicate_of` (track nối tiếp cùng xe) chỉ để tham khảo; không track nào bị loại. Ngưỡng cần hiệu chỉnh thêm.
+- Mất kết nối thì tự kết nối lại (chờ 1, 2, 4… tối đa 30 s, tối đa `--max-reconnects` lần liên tiếp); video bị gỡ hoặc hết live thì `ended`. Track đang mở bị chốt ở `--max-track-seconds` (mặc định 30 s, cho xe đỗ/chờ đèn).
+- Dừng: gửi dòng `stop` hoặc đóng stdin (cách tiến trình cha điều khiển), hoặc Ctrl+C. Khi chạy tay, dùng `--ignore-stdin`. Track đang mở vẫn được chốt và OCR trước khi thoát.
+- `--buffer-seconds` (mặc định 1.5, khoảng 280 MB ở 1080p) giữ frame trong lúc detector bận; bỏ frame giữa track làm OCR kém đi rõ rệt.
+- Bằng chứng chưa được dọn tự động: một luồng 1080p đông xe tạo khoảng 2,6 GB/giờ. Kết quả đo xem [TESTING.md](TESTING.md#nghiệm-thu-live-cli-youtube-live).
+- Payload có thể dùng nguồn file để phát lại: `"source": {"type": "file", "path": "clip.mp4", "realtime": true}` (`realtime: false` phát không bỏ frame, kết quả giống job upload).
+
 ## Phân tích nghiệp vụ và thiết kế
 
 [Bộ tài liệu phân tích](docs/analysis/README.md) gồm PDF, HTML, Markdown và 16 sơ đồ UML có nguồn chỉnh sửa: use case, activity, sequence, state, ERD, kiến trúc và triển khai. Nội dung đối chiếu API NestJS, PostgreSQL và model OCR joint-five hiện hành, kèm yêu cầu, quy tắc nghiệp vụ, từ điển DB, nghiệm thu và thiết kế đánh giá đồ án.
