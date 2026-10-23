@@ -77,9 +77,12 @@ class DuplicateLinker:
 class LiveRunner:
     def __init__(self, snapshot, out, open_source, emit, model, recognizer, *, data_dir=None,
                  min_confidence=.85, max_track_seconds=30., max_reconnects=10, read_timeout=15.,
-                 stats_interval=1., buffer_seconds=1.5, reader_capacity=None, backoff_max=30.):
+                 stats_interval=1., buffer_seconds=1.5, reader_capacity=None, backoff_max=30., exclude_zones=()):
         if snapshot.get("recognizer", {}).get("input_mode") != "five_frame_joint":
             raise ValueError("Live recognition supports five_frame_joint pipelines only")
+        self.exclude_zones = [list(map(float, zone)) for zone in exclude_zones]
+        if any(len(z) != 4 or not 0 <= z[0] < z[2] <= 1 or not 0 <= z[1] < z[3] <= 1 for z in self.exclude_zones):
+            raise ValueError("Exclude zones must be normalized [x1, y1, x2, y2] rectangles")
         self.snapshot, self.out, self.open_source, self.emit = snapshot, out, open_source, emit
         self.model, self.recognizer = model, recognizer
         self.data_dir = data_dir or out
@@ -132,7 +135,8 @@ class LiveRunner:
 
     def _run_epoch(self, epoch, info, connection, stop):
         cfg = {**tracking_config(info["width"], info["height"], info["fps"], 0, self.snapshot,
-                                 info.get("video_id", "live")), "max_track_seconds": self.max_track_seconds}
+                                 info.get("video_id", "live")), "max_track_seconds": self.max_track_seconds,
+               "exclude_zones": self.exclude_zones}
         if not self.warmed_up:
             self._warm_up(cfg)
         capacity = self.reader_capacity or max(8, math.ceil(self.buffer_seconds * info["fps"]))
@@ -175,6 +179,7 @@ class LiveRunner:
                                        frames_dropped=reader.dropped, frames_processed=frames,
                                        sampled=session.sampled, active_tracks=len(session.active),
                                        tracks=self.tracks, rejected_tracks=sum(session.rejected.values()),
+                                       excluded_zones=len(self.exclude_zones),
                                        retained_frames=session.retained_frames,
                                        retained_mib=round(session.retained_bytes / 2**20, 1),
                                        lag_seconds=None if lag is None else round(lag, 2),

@@ -141,6 +141,25 @@ def test_runner_records_each_track_with_evidence_ocr_and_events(tmp_path):
     assert appearance["predictions"][0]["input_storage_keys"] == [d["crop_storage_key"] for d in detections]
 
 
+def test_exclude_zones_drop_detections_centred_inside_only():
+    from app.recognition.video_tracking import detect_plates
+    images = [np.zeros((180, 320, 3), np.uint8)]
+    cfg = {"device": "cpu", "imgsz": 320}
+    assert len(detect_plates(BoxFixture(), images, cfg)[0]) == 1  # box centre (0.28, 0.31)
+    assert len(detect_plates(BoxFixture(), images, {**cfg, "exclude_zones": [[.5, .5, 1, 1]]})[0]) == 1
+    assert len(detect_plates(BoxFixture(), images, {**cfg, "exclude_zones": [[.5, .5, 1, 1], [.2, .2, .4, .4]]})[0]) == 0
+
+
+def test_runner_applies_exclude_zones_and_rejects_invalid_ones(tmp_path):
+    video = tmp_path / "input.avi"
+    _plate_video(video, 30)
+    status, events = run(tmp_path, [FileFrames(video)], exclude_zones=[[.2, .2, .4, .4]])
+    assert status == "ended" and not [e for e in events if e["type"] == "track"]
+    assert {e["excluded_zones"] for e in events if e["type"] == "stats"} <= {1}
+    with pytest.raises(ValueError, match="Exclude zones"):
+        LiveRunner(SNAPSHOT, tmp_path, None, None, None, None, exclude_zones=[[.4, .2, .2, .4]])
+
+
 def test_reconnect_opens_a_new_epoch_after_finishing_the_old_tracks(tmp_path):
     video = tmp_path / "input.avi"
     _plate_video(video, 30)
@@ -290,3 +309,23 @@ def test_cli_reports_startup_failure_as_events(tmp_path, capsys):
     with pytest.raises(SystemExit):  # a second run must not mix into an earlier run's tracks
         main(["--payload", str(payload), "--out", str(tmp_path / "out"), "--ignore-stdin"])
     assert "already holds tracks" in capsys.readouterr().err
+
+
+def test_emitter_stops_the_run_when_the_parent_pipe_is_gone(monkeypatch, capsys):
+    from app.live.__main__ import Emitter
+
+    class Gone:
+        def write(self, _):
+            raise BrokenPipeError
+
+        def flush(self):
+            pass
+
+    stop = threading.Event()
+    emit = Emitter(stop)
+    emit({"type": "status", "status": "running"})
+    assert json.loads(capsys.readouterr().out)["status"] == "running" and not stop.is_set()
+    monkeypatch.setattr("sys.stdout", Gone())
+    emit({"type": "track"})  # must not raise: the track is already on disk
+    emit({"type": "stats"})
+    assert stop.is_set() and emit.closed

@@ -5,6 +5,7 @@ import { writeFile } from 'node:fs/promises';
 import { Database } from './database/database';
 import { migrate } from './database/migrate';
 import { PipelineRegistry } from './recognition/registry';
+import { isLivePipeline, isYoutubeUrl, livePayload as buildLivePayload } from './live/payload';
 import { z } from 'zod';
 
 function argument(args: string[], name: string): string | undefined {
@@ -12,25 +13,18 @@ function argument(args: string[], name: string): string | undefined {
   return index < 0 ? undefined : args[index + 1];
 }
 
-const YOUTUBE_HOSTS = ['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be'];
-
-/** Payload for `python -m app.live`: the same pinned snapshot a job gets, plus the source. */
+/** Payload for running `python -m app.live` by hand. */
 export async function livePayload(args: string[]): Promise<string> {
   const pipeline = argument(args, '--pipeline');
   const url = argument(args, '--url');
   const out = argument(args, '--out');
   if (!pipeline || !url || !out)
     throw new Error('Use: live-payload --pipeline ID --url YOUTUBE_URL --out FILE');
-  const parsed = z.url().safeParse(url);
-  if (!parsed.success || !YOUTUBE_HOSTS.includes(new URL(url).hostname))
-    throw new Error('Provide a YouTube watch or live URL.');
+  if (!isYoutubeUrl(url)) throw new Error('Provide a YouTube watch or live URL.');
   const snapshot = await new PipelineRegistry().resolve(pipeline);
-  if (snapshot.task !== 'recognize' || snapshot.recognizer?.input_mode !== 'five_frame_joint')
+  if (!isLivePipeline(snapshot))
     throw new Error('Live recognition needs a five_frame_joint recognition pipeline.');
-  await writeFile(
-    out,
-    JSON.stringify({ pipeline_snapshot: snapshot, source: { type: 'youtube', url } }, null, 2),
-  );
+  await writeFile(out, JSON.stringify(buildLivePayload(snapshot, url), null, 2));
   return out;
 }
 

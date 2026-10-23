@@ -56,9 +56,50 @@ export class AcceptedJobResponse {
   @ApiProperty() status_url!: string;
 }
 
-export class JobResponse {
+const confidenceStatus = {
+  type: String,
+  enum: ['readable', 'low_confidence', 'unreadable'],
+  nullable: true,
+  description:
+    'Live tracks only: readable when the OCR confidence reaches the session threshold. Advisory.',
+} as const;
+const zones = {
+  type: 'array',
+  maxItems: 16,
+  items: {
+    type: 'array',
+    items: { type: 'number', minimum: 0, maximum: 1 },
+    minItems: 4,
+    maxItems: 4,
+  },
+  description:
+    'Normalized [x1, y1, x2, y2] frame rectangles; detections centred inside are ignored (e.g. a fixed street sign).',
+} as const;
+
+/** Fields shared by a live track's job and its search results. */
+class LiveTrackFields {
+  @ApiProperty({ ...nullableText, description: 'Set for live tracks; media_id is then null.' })
+  live_session_id!: string | null;
+  @ApiProperty({
+    ...nullableDateTime,
+    description: 'Approximate wall time of the first observation.',
+  })
+  captured_from!: string | null;
+  @ApiProperty(nullableDateTime) captured_to!: string | null;
+  @ApiProperty(confidenceStatus) confidence_status!: string | null;
+  @ApiProperty({
+    ...nullableText,
+    description: 'Earlier live track (job) probably showing the same vehicle. Advisory.',
+  })
+  duplicate_of_job_id!: string | null;
+}
+
+export class JobResponse extends LiveTrackFields {
   @ApiProperty() id!: string;
-  @ApiProperty() media_id!: string;
+  @ApiProperty({ ...nullableText, description: 'Uploaded source; null for live tracks.' })
+  media_id!: string | null;
+  @ApiProperty({ ...nullableText, description: 'Track key inside the live session.' })
+  live_track_key!: string | null;
   @ApiProperty({ enum: ['detect_only', 'recognize'] }) job_kind!: string;
   @ApiProperty({ enum: ['scene', 'plate_crop'] }) input_mode!: string;
   @ApiProperty({ enum: ['queued', 'running', 'succeeded', 'failed'] }) status!: string;
@@ -139,9 +180,80 @@ export class AppearanceResponse {
 }
 
 export class SearchResultResponse extends AppearanceResponse {
-  @ApiProperty() media_id!: string;
-  @ApiProperty(dateTime) uploaded_at!: string;
+  @ApiProperty({ enum: ['upload', 'live'] }) origin!: string;
+  @ApiProperty(nullableText) media_id!: string | null;
+  @ApiProperty(nullableDateTime) uploaded_at!: string | null;
+  @ApiProperty(nullableText) stream_source_id!: string | null;
+  @ApiProperty(nullableText) live_session_id!: string | null;
+  @ApiProperty(nullableDateTime) captured_from!: string | null;
+  @ApiProperty(nullableDateTime) captured_to!: string | null;
+  @ApiProperty(confidenceStatus) confidence_status!: string | null;
+  @ApiProperty(nullableText) duplicate_of_job_id!: string | null;
 }
+
+const sessionStatuses = [
+  'queued',
+  'starting',
+  'running',
+  'reconnecting',
+  'stopping',
+  'stopped',
+  'ended',
+  'failed',
+  'interrupted',
+];
+
+export class LiveSessionResponse {
+  @ApiProperty() id!: string;
+  @ApiProperty() stream_source_id!: string;
+  @ApiProperty() requested_by!: string;
+  @ApiProperty({ enum: sessionStatuses }) status!: string;
+  @ApiProperty(nullableText) pipeline_id!: string | null;
+  @ApiProperty(nullableText) pipeline_version!: string | null;
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: true,
+    description: 'min_confidence, max_track_seconds and the exclude_zones in use.',
+  })
+  settings!: Record<string, unknown>;
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: true,
+    description: 'Latest live process counters (frames read/dropped, lag, active tracks).',
+  })
+  stats!: Record<string, unknown>;
+  @ApiProperty(nullableDateTime) stats_at!: string | null;
+  @ApiProperty(integer) tracks_count!: number;
+  @ApiProperty(nullableDateTime) stop_requested_at!: string | null;
+  @ApiProperty(dateTime) created_at!: string;
+  @ApiProperty(nullableDateTime) started_at!: string | null;
+  @ApiProperty(nullableDateTime) finished_at!: string | null;
+  @ApiProperty(nullableText) error_code!: string | null;
+  @ApiProperty(nullableText) error_message!: string | null;
+  @ApiProperty({ description: "Search URL listing this session's tracks." }) results_url!: string;
+}
+
+export class StreamSourceResponse {
+  @ApiProperty() id!: string;
+  @ApiProperty() owner_id!: string;
+  @ApiProperty() name!: string;
+  @ApiProperty({ enum: ['youtube'] }) source_type!: string;
+  @ApiProperty() url!: string;
+  @ApiProperty(zones) exclude_zones!: number[][];
+  @ApiProperty(dateTime) created_at!: string;
+  @ApiProperty(dateTime) updated_at!: string;
+  @ApiProperty({ type: LiveSessionResponse, nullable: true })
+  active_session!: LiveSessionResponse | null;
+}
+
+export class LiveEventResponse {
+  @ApiProperty({ description: 'Increasing event id.' }) id!: string;
+  @ApiProperty({ enum: ['status', 'error', 'track_rejected'] }) event_type!: string;
+  @ApiProperty({ type: 'object', additionalProperties: true }) payload!: Record<string, unknown>;
+  @ApiProperty(dateTime) created_at!: string;
+}
+
+export const streamZones = zones;
 
 export class DecodingResponse {
   @ApiProperty({ enum: ['greedy', 'beam_plain', 'beam_filter', 'beam_constrained'] })

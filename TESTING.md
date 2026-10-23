@@ -92,7 +92,7 @@ bằng một job mới. `succeeded` chỉ khẳng định xử lý hoàn tất.
 
 ## Nghiệm thu live CLI (YouTube Live)
 
-Cách chạy xem [README](README.md#nhận-diện-youtube-live-thử-nghiệm-chưa-nối-api). Cần GPU, `node` trong PATH và mạng.
+Cách chạy xem [README](README.md#chạy-tay-tiến-trình-live). Cần GPU, `node` trong PATH và mạng.
 
 1. Phát lại không bỏ frame: payload nguồn file với `realtime: false` và `--max-track-seconds 0`. Biển số, thời điểm và crop của từng track phải giống job upload cùng clip.
 2. Phát lại theo nhịp thật (`realtime: true`): `frames_dropped` gần 0, `lag_seconds` dưới khoảng 1 s. Nếu bỏ nhiều frame, kiểm tra `--buffer-seconds` và GPU có đang bị tiến trình khác chiếm không.
@@ -112,3 +112,24 @@ Kết quả đo ngày 2026-10-23 (RTX 4060 Laptop 8 GB, Camboriú `5Xl6pSgiy3A`,
 - Luồng Itajaí `NwbOe1Mb__M` (ca âm tính, 5 phút): 5 track đều `low_confidence`.
 - Lỗi đã biết: detector nhận nhầm biển tên đường cố định ("Avenida Atlântica") là biển số. Các track này có độ tin cậy 0,33–0,40 nên rơi vào `low_confidence`, nhưng cứ mỗi `--max-track-seconds` lại sinh thêm một track. Cần vùng nhận diện theo camera (giai đoạn sau).
 - Chưa có lần rớt mạng thật trong bài 60 phút; nhánh kết nối lại mới được kiểm bằng test tự động.
+
+## Nghiệm thu live qua API
+
+Chạy API và worker với GPU, rồi gọi API theo [README](README.md#nhận-diện-youtube-live-thử-nghiệm):
+
+1. Tạo camera với vùng loại trừ, bật phiên. Trạng thái phải đi qua `queued`, `starting`, `running`; `stats_at` cập nhật theo chu kỳ; `tracks_count` tăng.
+2. `GET /api/v2/recognition-results?live_session_id=...` có kết quả. Tra được theo `plate`, xem được chi tiết, crop/keyframe, review được, CSV của job có `captured_from` và `confidence_status`. Người dùng khác không thấy.
+3. Tạo job upload trong lúc phiên chạy: job phải nằm ở `queued` đến khi phiên dừng. Bật phiên trong lúc job upload chạy: phiên chờ đến khi job xong.
+4. `POST /live-sessions/{id}/stop`: phiên thành `stopped`, track đang mở được nhập, không còn tiến trình python/ffmpeg.
+5. Kill worker (`taskkill /f`): tiến trình live thoát theo; khởi động lại worker thì phiên thành `interrupted` và job upload đang chờ được chạy.
+
+Kết quả đo ngày 2026-10-24 (RTX 4060 Laptop 8 GB, Camboriú `5Xl6pSgiy3A`, PostgreSQL tạm, vùng loại trừ phủ hai biển tên đường "Avenida Atlântica" và "Avenida Central"):
+
+| Lần chạy | Kết quả |
+| --- | --- |
+| Phiên live riêng, khoảng 4 phút | Bỏ 98/6068 frame (1,6%), VRAM toàn GPU khoảng 5,6 GB. 28 track: 12 `readable` (43%), 16 `low_confidence`. Bài chạy 60 phút không có vùng loại trừ chỉ có 22% `readable`. Không còn detection nào trong vùng biển tên đường; xem crop bằng mắt thì mọi track đều là biển xe thật. |
+| Phiên live cùng job upload, khi chưa có cơ chế chia GPU | VRAM 7,7–7,8/8 GB. Phiên live bỏ 46% frame rồi ngừng xử lý hẳn (không có stats trong 13 phút nhưng vẫn báo `running`). Job upload clip 3 phút mất 1129 s thay vì 124 s. Đây là lý do có `PLATE_LIVE_EXCLUSIVE_GPU` và `LIVE_STALLED`. |
+| Job upload khi phiên live đang chờ (có cơ chế chia GPU) | 124 s, 19 track, giống mốc chuẩn chế độ file. Phiên chờ ở `queued` rồi tự chạy sau đó. |
+| Dừng qua API | 9 s, 3 track đang mở được nhập, thoát mã 0, không còn tiến trình con. |
+| Phiên đang treo vì GPU | Dừng qua API không kịp, tiến trình bị kill sau `PLATE_LIVE_STOP_SECONDS` (120 s); các track đã chốt vẫn còn. |
+| Kill worker | Tiến trình live và ffmpeg thoát trong khoảng 5 s (Windows kill tiến trình con theo cha). Khởi động lại: phiên `interrupted`/`WORKER_INTERRUPTED`, 28 track đã nhập vẫn còn, job upload đang chờ được chạy ngay. |

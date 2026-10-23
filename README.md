@@ -84,9 +84,44 @@ Chi tiết hợp đồng model, phiên bản và crop: [MODEL_INTEGRATION.md](do
 
 Xem [API.md](docs/API.md), [TESTING.md](TESTING.md), [hướng dẫn vận hành](docs/OPERATIONS.md) và [request mẫu](examples/api.http).
 
-## Nhận diện YouTube Live (thử nghiệm, chưa nối API)
+## Nhận diện YouTube Live (thử nghiệm)
 
-`app/live` là tiến trình chạy liên tục trên một livestream: `yt-dlp` lấy luồng HLS (cần `node` trong PATH làm JS runtime), ffmpeg của `imageio-ffmpeg` giải mã, `TrackSession` tracking như video upload, mỗi track đã chốt được ghi bằng chứng và OCR joint 5 frame. Chỉ hỗ trợ profile `five_frame_joint`.
+Mỗi camera (`stream source`) là một URL YouTube Live thuộc về người tạo, giống media. Bật một phiên (`live session`) thì worker chạy `python -m app.live` trên luồng đó:
+- `yt-dlp` lấy luồng HLS, cần `node` trong PATH làm JS runtime;
+- ffmpeg của `imageio-ffmpeg` giải mã;
+- `TrackSession` tracking như video upload;
+- mỗi track đã chốt được ghi bằng chứng và OCR joint 5 frame, rồi trở thành **một job `succeeded`**.
+
+Vì mỗi track là một job, review, xem crop, xuất CSV và tra cứu biển số dùng lại API sẵn có. Chỉ hỗ trợ profile `five_frame_joint`.
+
+1. `POST /api/v2/stream-sources` với body `{ "name": "...", "url": "https://www.youtube.com/watch?v=...", "exclude_zones": [[x1, y1, x2, y2]] }`.
+   Vùng loại trừ là hình chữ nhật chuẩn hóa 0..1. Detection có tâm nằm trong vùng bị bỏ qua, dùng cho biển tên đường hay bảng quảng cáo cố định mà detector nhầm là biển số.
+2. `POST /api/v2/stream-sources/{id}/sessions` với body `{ "pipeline_id": "pbl6-resnet34c-joint5-v1" }` trả `202` và phiên `queued`. Mỗi camera chỉ có một phiên hoạt động. Tùy chọn:
+   - `min_confidence` (mặc định 0.85): từ ngưỡng này track được đánh dấu `readable`;
+   - `max_track_seconds` (mặc định 30): chốt track của xe đỗ hoặc xe chờ đèn.
+3. Theo dõi `GET /api/v2/live-sessions/{id}`:
+   - `status` đi từ `queued`, `starting`, `running` (`reconnecting` khi rớt mạng), qua `stopping`, đến một trong `stopped`, `ended`, `failed`, `interrupted`;
+   - `stats` (frame đọc/bỏ, độ trễ, track đang mở) cập nhật mỗi `PLATE_LIVE_STATS_SECONDS`;
+   - `tracks_count`.
+   Lịch sử nằm ở `GET /api/v2/live-sessions/{id}/events`.
+4. Kết quả xem bằng `GET /api/v2/recognition-results?live_session_id=...` (hoặc `origin=live`, `stream_source_id`, `captured_from/to`, `confidence_status`, `exclude_duplicates=true`). Tra cứu theo `plate` trả cả video upload lẫn live.
+5. Dừng bằng `POST /api/v2/live-sessions/{id}/stop`. Track đang mở vẫn được chốt và OCR trước khi phiên chuyển `stopped`.
+
+Lưu ý khi vận hành:
+- `confidence_status` (`readable`, `low_confidence`, `unreadable`) và `duplicate_of_job_id` (track nối tiếp của cùng xe) chỉ để tham khảo; không track nào bị loại. Ngưỡng cần hiệu chỉnh thêm.
+- `captured_from/to` là giờ nhận frame, chỉ xấp xỉ giờ thật.
+- `GET /api/v2/recognition-jobs` mặc định chỉ liệt kê job upload; dùng `origin=live|all` để xem job live.
+- Worker chạy tối đa `PLATE_LIVE_MAX_SESSIONS` phiên (mặc định 1; 0 là tắt live).
+- **Job upload và phiên live không chạy cùng lúc** (`PLATE_LIVE_EXCLUSIVE_GPU=true`, mặc định). Lý do: trên GPU 8 GB, hai tiến trình cùng nạp YOLO11l và OCR làm tràn VRAM, và cả hai gần như đứng hẳn (đo được: job 3 phút mất 19 phút thay vì 2 phút, phiên live ngừng xử lý). Khi một phiên live đang chạy, job upload chờ ở `queued`; khi job upload đang chạy, phiên mới chờ ở `queued`. Chỉ đặt `false` khi GPU đủ VRAM cho cả hai.
+- Tiến trình live không phát sự kiện nào trong `PLATE_LIVE_STALL_SECONDS` (mặc định 180) thì bị kill, phiên chuyển `failed`/`LIVE_STALLED`.
+- Dừng worker bằng Ctrl+C: phiên chốt track đang mở rồi chuyển `interrupted`. Worker bị kill đột ngột: trên Windows, tiến trình live bị kill theo (không còn tiến trình GPU mồ côi), nên track đang mở dở bị mất; track đã chốt thì đã nằm trong DB. Lần khởi động sau, phiên chuyển `interrupted` và track còn trên đĩa được nhập. Phiên không tự chạy lại; bật phiên mới.
+- Mất kết nối thì tiến trình live tự kết nối lại (chờ 1, 2, 4… tối đa 30 s, tối đa 10 lần liên tiếp). Video bị gỡ hoặc hết live thì `ended`.
+- Bằng chứng chưa được dọn tự động: một luồng 1080p đông xe tạo khoảng 2,6 GB/giờ. Camera đã có phiên thì không xóa được.
+- Code `app/live` không nằm trong checksum của snapshot (chỉ `app/recognition` và model được ghim).
+
+Kết quả đo xem [TESTING.md](TESTING.md#nghiệm-thu-live-qua-api).
+
+### Chạy tay tiến trình live
 
 ```powershell
 npm run build
@@ -94,14 +129,11 @@ node dist/src/cli.js live-payload --pipeline pbl6-resnet34c-joint5-v1 --url "htt
 .\.venv\Scripts\python.exe -m app.live --payload live.json --out data/live/run1 --ignore-stdin
 ```
 
-- stdout là JSON lines: `status` (`starting`, `connecting`, `running`, `reconnecting`, `ended`, `stopped`, `failed`), `stats` mỗi giây (frame đọc/bỏ, độ trễ, track đang mở, bộ nhớ giữ ảnh), `track`, `error`. Log kỹ thuật ở stderr.
-- Mỗi track nằm trong `OUT/tracks/e{epoch}-t{track}/`: keyframe, crop và `track.json` (một appearance cùng dạng kết quả job, `timestamp_source="live_pts"`, kèm `captured_from/to` xấp xỉ theo giờ nhận frame).
-- `status` của track (`readable` khi độ tin cậy ≥ `--min-confidence`, mặc định 0.85; `low_confidence`; `unreadable`) và `duplicate_of` (track nối tiếp cùng xe) chỉ để tham khảo; không track nào bị loại. Ngưỡng cần hiệu chỉnh thêm.
-- Mất kết nối thì tự kết nối lại (chờ 1, 2, 4… tối đa 30 s, tối đa `--max-reconnects` lần liên tiếp); video bị gỡ hoặc hết live thì `ended`. Track đang mở bị chốt ở `--max-track-seconds` (mặc định 30 s, cho xe đỗ/chờ đèn).
-- Dừng: gửi dòng `stop` hoặc đóng stdin (cách tiến trình cha điều khiển), hoặc Ctrl+C. Khi chạy tay, dùng `--ignore-stdin`. Track đang mở vẫn được chốt và OCR trước khi thoát.
+- stdout là JSON lines: `status` (`starting`, `connecting`, `running`, `reconnecting`, `ended`, `stopped`, `failed`), `stats` mỗi giây, `track`, `error`. Log kỹ thuật ở stderr.
+- Mỗi track nằm trong `OUT/tracks/e{epoch}-t{track}/`: keyframe, crop và `track.json` (một appearance cùng dạng kết quả job, `timestamp_source="live_pts"`).
+- Dừng: gửi dòng `stop` hoặc đóng stdin (cách worker điều khiển), hoặc Ctrl+C. Khi chạy tay, dùng `--ignore-stdin`.
 - `--buffer-seconds` (mặc định 1.5, khoảng 280 MB ở 1080p) giữ frame trong lúc detector bận; bỏ frame giữa track làm OCR kém đi rõ rệt.
-- Bằng chứng chưa được dọn tự động: một luồng 1080p đông xe tạo khoảng 2,6 GB/giờ. Kết quả đo xem [TESTING.md](TESTING.md#nghiệm-thu-live-cli-youtube-live).
-- Payload có thể dùng nguồn file để phát lại: `"source": {"type": "file", "path": "clip.mp4", "realtime": true}` (`realtime: false` phát không bỏ frame, kết quả giống job upload).
+- Payload có thể có `"exclude_zones"` trong `source`, hoặc dùng nguồn file để phát lại: `"source": {"type": "file", "path": "clip.mp4", "realtime": true}` (`realtime: false` phát không bỏ frame, kết quả giống job upload).
 
 ## Phân tích nghiệp vụ và thiết kế
 
@@ -109,9 +141,10 @@ node dist/src/cli.js live-payload --pipeline pbl6-resnet34c-joint5-v1 --url "htt
 
 ## Dữ liệu và migration
 
-8 bảng nghiệp vụ: `users`, `auth_sessions`, `media_assets`, `recognition_jobs`, `plate_appearances`, `plate_detections`, `ocr_predictions`, `recognition_reviews`. Thêm bảng kỹ thuật `schema_migrations` lưu checksum migration. Schema SQL nằm ở `src/database/migrations/`.
+11 bảng nghiệp vụ: `users`, `auth_sessions`, `media_assets`, `recognition_jobs`, `plate_appearances`, `plate_detections`, `ocr_predictions`, `recognition_reviews`, cùng `stream_sources`, `live_sessions`, `live_session_events` cho live. Thêm bảng kỹ thuật `schema_migrations` lưu checksum migration. Schema SQL nằm ở `src/database/migrations/`.
 
-- PostgreSQL giữ metadata; `data/media/{id}` giữ nguồn; `data/recognition/{job_id}` giữ crop/keyframe/log.
+- PostgreSQL giữ metadata; `data/media/{id}` giữ nguồn; `data/recognition/{job_id}` giữ crop/keyframe/log, kể cả job của track live; `data/live/{session_id}` giữ payload, log và track chưa nhập.
+- Job có đúng một nguồn: `media_id` (upload) hoặc `live_session_id` (live).
 - Password dùng scrypt; session token chỉ lưu SHA-256 và có thể thu hồi.
 - Prediction máy giữ nguyên; mỗi review thêm một bản ghi và tăng revision trong transaction.
 - Job đang chờ/chạy không được xóa. Xóa job giữ nguồn; chỉ xóa nguồn khi không còn job tham chiếu.

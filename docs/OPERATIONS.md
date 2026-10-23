@@ -90,11 +90,25 @@ Job lỗi trả `error_code` và thông báo an toàn. Chi tiết phía server n
 - `WORKER_INTERRUPTED`: worker dừng trước khi hoàn tất.
 - `RESULT_INVALID`: đầu ra không đáp ứng hợp đồng; xem log và adapter.
 
+Phiên live lỗi có `error_code` trên `GET /api/v2/live-sessions/{id}`. Chi tiết nằm ở `PLATE_DATA_DIR/live/{session_id}/live.log` và `GET /api/v2/live-sessions/{id}/events`.
+
+- `STREAM_FAILED`: kết nối lại thất bại quá số lần cho phép.
+- `LIVE_PROCESS_EXITED`: tiến trình live thoát bất thường.
+- `LIVE_STALLED`: tiến trình live không báo gì trong `PLATE_LIVE_STALL_SECONDS` và đã bị kill. Nguyên nhân thường gặp: GPU hết VRAM vì có tiến trình khác dùng chung.
+- `WORKER_INTERRUPTED`: worker dừng hoặc khởi động lại giữa phiên.
+- Các mã khởi động (`CHECKPOINT_MISSING`, `ENVIRONMENT_ERROR`, `CUDA_*`, `PIPELINE_FAILED`): giống job upload.
+
+Track không nhập được (bằng chứng hỏng) được ghi thành event `track_rejected` và để nguyên trong `live/{session_id}/tracks/`. Bật phiên mới để chạy tiếp.
+
 Chạy lại bằng `POST /api/v2/recognition-jobs` với cùng `media_id`. Job cũ và review cũ còn nguyên. API không có retry/cancel riêng. Tra cứu chung chọn lượt xử lý nghiệp vụ succeeded mới nhất của mỗi nguồn; vẫn xem lịch sử qua job cụ thể.
 
 ## Dừng, khởi động lại và cập nhật
 
-Để bảo trì, ngừng nhận request mới bằng cách dừng API; chờ job hiện tại kết thúc nếu muốn giữ lần xử lý đó, rồi dừng worker bằng Ctrl+C. Dừng worker trong lúc inference sẽ ngắt subprocess và job có thể thành `WORKER_INTERRUPTED`. Nếu tiến trình bị tắt đột ngột, lần khởi động worker tiếp theo chuyển các job còn `running` sang `failed/WORKER_INTERRUPTED`. Các job `queued` tiếp tục được lấy; job `failed` không tự chạy lại.
+Để bảo trì, ngừng nhận request mới bằng cách dừng API; chờ job hiện tại kết thúc nếu muốn giữ lần xử lý đó, rồi dừng worker bằng Ctrl+C. Dừng worker trong lúc inference sẽ ngắt subprocess và job có thể thành `WORKER_INTERRUPTED`. Nếu tiến trình bị tắt đột ngột, lần khởi động worker tiếp theo chuyển các job còn `running` sang `failed/WORKER_INTERRUPTED`.
+
+Phiên live khi worker dừng bằng Ctrl+C sẽ chốt track đang mở (tối đa `PLATE_LIVE_STOP_SECONDS`, mặc định 120 s) rồi chuyển `interrupted`. Nếu worker bị tắt đột ngột, lần khởi động sau sẽ chuyển phiên sang `interrupted` và nhập các track đã ghi xuống đĩa.
+
+Một phiên live chiếm GPU liên tục. Mặc định (`PLATE_LIVE_EXCLUSIVE_GPU=true`), job upload chờ trong lúc phiên live chạy và ngược lại. Muốn xử lý video upload thì dừng phiên live, hoặc chạy worker trên máy có GPU đủ lớn rồi đặt `false`. Số đo nằm trong `TESTING.md`. Các job `queued` tiếp tục được lấy; job `failed` không tự chạy lại.
 
 Sau khi sao lưu, cập nhật code/dependency, chạy `npm ci`, `npm run build`, `npm run db:migrate`, rồi khởi động API và worker. Migration đã áp dụng có checksum; không sửa nội dung migration cũ để cập nhật schema, hãy thêm migration mới. Cập nhật source hoặc checkpoint có thể làm job đang queued không còn khớp snapshot; giữ bộ model/source cũ cho đến khi hàng đợi hoàn tất hoặc tạo job mới sau cập nhật.
 

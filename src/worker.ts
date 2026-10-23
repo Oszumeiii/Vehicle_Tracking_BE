@@ -8,6 +8,7 @@ import {
   Runner,
   workerOptions,
 } from './recognition/engine';
+import { GpuGate, LiveManager, liveSettings, spawnLiveProcess, SpawnLive } from './live/manager';
 
 /** Jobs processed in parallel by this worker; each job runs its own ML subprocess. */
 export function workerConcurrency(value = process.env.PLATE_WORKER_CONCURRENCY ?? '1') {
@@ -18,13 +19,15 @@ export function workerConcurrency(value = process.env.PLATE_WORKER_CONCURRENCY ?
 }
 
 // One worker process owns the database (advisory lock), so startup recovery may fail
-// every running job safely. Parallelism comes from slots inside that process; claims use
-// FOR UPDATE SKIP LOCKED, so two slots never take the same job.
+// every running job and live session safely. Parallelism comes from slots inside that
+// process; claims use FOR UPDATE SKIP LOCKED, so two slots never take the same job. The
+// same process runs live sessions (LiveManager), since it owns the GPU.
 export async function runWorker(
   database: Database,
   once = false,
   concurrency = workerConcurrency(),
   runner: Runner = executeRecognition,
+  spawnLive: SpawnLive = spawnLiveProcess,
 ) {
   const lock = await database.pool.connect();
   try {
@@ -54,6 +57,10 @@ export async function runWorker(
     const options = { ...workerOptions(), signal: shutdown.signal };
     const interval = Number(process.env.PLATE_POLL_SECONDS ?? 2) * 1000;
     if (!Number.isFinite(interval) || interval <= 0) throw new Error('Invalid polling interval');
+    const settings = liveSettings();
+    const gate = new GpuGate(settings.exclusiveGpu);
+    const live = new LiveManager(database, options, settings, spawnLive, gate);
+    await live.recover();
     const idle = () =>
       new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, interval);
@@ -69,7 +76,17 @@ export async function runWorker(
     const slot = async () => {
       try {
         while (!stopping) {
-          const worked = await processOne(database, options, runner);
+          // With an exclusive GPU, upload jobs wait while a live session runs.
+          if (!gate.enter('jobs')) {
+            await idle();
+            continue;
+          }
+          let worked: boolean;
+          try {
+            worked = await processOne(database, options, runner);
+          } finally {
+            gate.leave('jobs');
+          }
           if (once || stopping) break;
           if (!worked) await idle();
         }
@@ -78,10 +95,19 @@ export async function runWorker(
         throw error;
       }
     };
-    // --once keeps its meaning: process at most one job.
-    const results = await Promise.allSettled(
-      Array.from({ length: once ? 1 : concurrency }, () => slot()),
-    );
+    const liveLoop = async () => {
+      try {
+        await live.run(shutdown.signal, interval);
+      } catch (error) {
+        stop();
+        throw error;
+      }
+    };
+    // --once keeps its meaning: process at most one job, and no live sessions.
+    const results = await Promise.allSettled([
+      ...Array.from({ length: once ? 1 : concurrency }, () => slot()),
+      ...(once ? [] : [liveLoop()]),
+    ]);
     if (lostLock) throw lostLock;
     const failed = results.find((r) => r.status === 'rejected');
     if (failed) throw (failed as PromiseRejectedResult).reason;
