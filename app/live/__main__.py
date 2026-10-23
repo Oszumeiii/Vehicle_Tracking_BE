@@ -1,7 +1,8 @@
 """Live recognition process: python -m app.live --payload PAYLOAD.json --out DIR
 
 The payload holds the pipeline snapshot (as created by `node dist/src/cli.js live-payload`)
-and the source: {"type": "youtube", "url": ...} or {"type": "file", "path": ..., "realtime": bool}.
+and the source: {"type": "youtube", "url": ...} or {"type": "file", "path": ..., "realtime": bool},
+either with optional "exclude_zones": [[x1, y1, x2, y2], ...] in normalized frame coordinates.
 Events are JSON lines on stdout; diagnostics go to stderr. Send "stop" on stdin, close
 stdin, or press Ctrl+C to stop: open tracks are finished and recognized before exit.
 """
@@ -19,10 +20,28 @@ import traceback
 STARTUP_CODES = {"ENVIRONMENT_ERROR", "CUDA_UNAVAILABLE", "CUDA_ERROR", "CHECKPOINT_MISSING", "PIPELINE_FAILED"}
 
 
-def emit(event):
-    event = {"time": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"), **event}
-    sys.stdout.write(json.dumps(event, ensure_ascii=False, allow_nan=False) + "\n")
-    sys.stdout.flush()
+class Emitter:
+    """JSON lines on stdout.
+
+    If the parent died (closed pipe), later events are dropped and the run is asked
+    to stop: open tracks are still finished on disk, where a restarted worker finds them.
+    """
+
+    def __init__(self, stop):
+        self.stop, self.closed = stop, False
+
+    def __call__(self, event):
+        if self.closed:
+            return
+        event = {"time": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+                 **event}
+        try:
+            sys.stdout.write(json.dumps(event, ensure_ascii=False, allow_nan=False) + "\n")
+            sys.stdout.flush()
+        except OSError:
+            self.closed = True
+            sys.stdout = open(os.devnull, "w")  # no flush error at interpreter exit
+            self.stop.set()
 
 
 def watch_stdin(stop):
@@ -108,6 +127,7 @@ def main(argv=None):
         parser.error("--out already holds tracks from another run; use a new directory")
     out.mkdir(parents=True, exist_ok=True)
     stop = threading.Event()
+    emit = Emitter(stop)
     signal.signal(signal.SIGINT, lambda *_: stop.set())  # Ctrl+C stops gracefully
     try:
         from app.live.runner import LiveRunner
@@ -115,7 +135,8 @@ def main(argv=None):
         model, recognizer = load_models(snapshot)
         runner = LiveRunner(snapshot, out, open_source, emit, model, recognizer, data_dir=data_dir,
                             min_confidence=args.min_confidence, max_track_seconds=args.max_track_seconds,
-                            max_reconnects=args.max_reconnects, buffer_seconds=args.buffer_seconds)
+                            max_reconnects=args.max_reconnects, buffer_seconds=args.buffer_seconds,
+                            exclude_zones=payload["source"].get("exclude_zones") or ())
     except Exception as exc:  # noqa: BLE001
         traceback.print_exc()
         code = getattr(exc, "code", "PIPELINE_FAILED")

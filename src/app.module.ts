@@ -10,6 +10,7 @@ import { Storage } from './media/storage';
 import { MediaController } from './media/media.controller';
 import { JobsController, JobOperations } from './jobs/jobs.controller';
 import { ResultsController } from './results/results.controller';
+import { LiveController } from './live/live.controller';
 import { PipelineRegistry } from './recognition/registry';
 import { ApiFailures } from './common/openapi';
 
@@ -77,6 +78,7 @@ class HealthController {
     MediaController,
     JobsController,
     ResultsController,
+    LiveController,
   ],
   providers: [AuthGuard, Ownership, Storage, JobOperations, PipelineRegistry],
 })

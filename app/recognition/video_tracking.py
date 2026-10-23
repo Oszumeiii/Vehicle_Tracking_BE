@@ -274,8 +274,13 @@ def select_five(rows, cfg):
 
 
 def detect_plates(model, images, cfg):
-    """Full-frame YOLO at conf .10 plus the notebook's geometric box filter."""
+    """Full-frame YOLO at conf .10 plus the notebook's geometric box filter.
+
+    cfg["exclude_zones"] (live cameras only) holds normalized [x1, y1, x2, y2]
+    rectangles; boxes centred inside one, such as a fixed street sign, are dropped.
+    """
     cuda = cfg["device"] != "cpu"
+    zones = cfg.get("exclude_zones") or ()
     results = model.predict(images, imgsz=cfg["imgsz"], conf=.10, iou=.7, device=cfg["device"],
                             quantize="fp16" if cuda else None, verbose=False, max_det=100, rect=True)
     boxes = []
@@ -289,6 +294,9 @@ def detect_plates(model, images, cfg):
             keep = (np.isfinite(a).all(axis=1) & (a[:, 0] >= 0) & (a[:, 1] >= 0)
                     & (a[:, 2] <= w) & (a[:, 3] <= h) & (bw >= 12) & (bh >= 5)
                     & (ratio >= 1.1) & (ratio <= 7))
+            cx, cy = (a[:, 0] + a[:, 2]) / (2 * w), (a[:, 1] + a[:, 3]) / (2 * h)
+            for x1, y1, x2, y2 in zones:
+                keep &= ~((cx >= x1) & (cx <= x2) & (cy >= y1) & (cy <= y2))
             b = b[keep]
         boxes.append(b)
     return boxes

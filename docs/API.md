@@ -24,7 +24,7 @@ Mặc định `http://127.0.0.1:3000`. Ngoại trừ login và health, gửi `Au
 
 - `GET /api/v2/pipelines`: các profile server cho phép, `task=prepare|recognize`, `media_types`, phiên bản và `ready`; không nhận đường dẫn model từ client. Profile Kaggle joint-frame chỉ nhận video; prepare nhận ảnh/video không cần OCR.
 - `POST /api/v2/recognition-jobs`: `{media_id,pipeline_id,input_mode}` → `202 {job_id,status,status_url}`. `input_mode` mặc định `scene`; `plate_crop` chỉ áp dụng ảnh.
-- `GET /api/v2/recognition-jobs`: lọc `media_id`, `status`, `created_from`, `created_to`, phân trang.
+- `GET /api/v2/recognition-jobs`: lọc `origin` (`upload` mặc định, `live`, `all`), `media_id`, `live_session_id`, `status`, `created_from`, `created_to`, phân trang.
 - `GET /api/v2/recognition-jobs/{id}`: trạng thái `queued|running|succeeded|failed`, stage, `pipeline_task`, thống kê, lỗi an toàn.
 - `GET /api/v2/recognition-jobs/{id}/results`: các lần xuất hiện; `409` nếu chưa succeeded.
 - `DELETE /api/v2/recognition-jobs/{id}`: xóa job kết thúc và bằng chứng phát sinh, giữ source; job chưa kết thúc trả `409`.
@@ -37,7 +37,11 @@ Job Kaggle joint-frame lưu `recognition_method=joint_multiframe`, `agreement_co
 
 ## Kết quả
 
-- `GET /api/v2/recognition-results`: query `plate`, `media_id`, `review_status`, `uploaded_from`, `uploaded_to`, phân trang. Tra cứu khớp chính xác text đã chuẩn hóa; không tự thay `O/0`. Dùng job v2 prepare/recognize succeeded mới nhất theo thời điểm tạo và ID của mỗi nguồn; job queued/failed hoặc extraction v1 không che kết quả v2 succeeded cũ.
+- `GET /api/v2/recognition-results`: query `plate`, `origin` (`upload`/`live`), `media_id`, `stream_source_id`, `live_session_id`, `review_status`, `confidence_status`, `exclude_duplicates`, `uploaded_from`, `uploaded_to`, `captured_from`, `captured_to`, phân trang.
+  - Tra cứu khớp chính xác text đã chuẩn hóa; không tự thay `O/0`.
+  - Với video/ảnh upload: dùng job v2 prepare/recognize succeeded mới nhất theo thời điểm tạo và ID của mỗi nguồn; job queued/failed hoặc extraction v1 không che kết quả v2 succeeded cũ.
+  - Với live: mọi track đều được tính.
+  - Kết quả có `origin`, `captured_from/to`, `confidence_status`, `duplicate_of_job_id`; sắp xếp theo giờ chụp (live) hoặc giờ upload.
 - `GET /api/v2/recognition-results/{id}`: dự đoán tổng hợp, từng crop/prediction, URL bằng chứng và lịch sử review.
 - `GET /api/v2/detections/{id}/artifacts/{kind}`: `crop|frame|enhanced`. Loại bằng chứng không tồn tại trả `404`; MIME theo file. Nhánh enhanced chỉ có khi thực sự được model/worker hỗ trợ, không sinh giả.
 - `POST /api/v2/recognition-results/{id}/reviews`: `201`. Ví dụ:
@@ -49,6 +53,27 @@ Job Kaggle joint-frame lưu `recognition_method=joint_multiframe`, `agreement_co
 Action `confirm` chấp nhận text máy; `correct` bắt buộc text mới; `unreadable`/`reject` xóa text hiệu lực khỏi tra cứu theo biển số. Review không sửa machine_text hoặc OCR prediction. `expected_revision` cũ trả `409`, client tải lại trước khi sửa tiếp. Kết quả mới có `review_status=pending`; không tự duyệt theo confidence.
 
 - `GET /api/v2/recognition-jobs/{id}/export?format=csv`: CSV UTF-8 BOM, có text máy, text hiệu lực, trạng thái và frame/timestamp. Cell có tiền tố công thức được escape để mở an toàn trong spreadsheet.
+
+## Live (YouTube)
+
+- `POST /api/v2/stream-sources`: `{name,url,exclude_zones?}` → `201`.
+  - `url` phải là link YouTube.
+  - `exclude_zones` gồm tối đa 16 hình chữ nhật `[x1,y1,x2,y2]` chuẩn hóa 0..1; detection có tâm nằm trong vùng bị bỏ.
+- `GET /api/v2/stream-sources`, `GET /api/v2/stream-sources/{id}`: camera của mình (admin thấy tất cả), kèm `active_session`.
+- `PATCH /api/v2/stream-sources/{id}`: `name`, `exclude_zones`; áp dụng từ phiên kế tiếp.
+- `DELETE /api/v2/stream-sources/{id}`: `204`; camera đã có phiên trả `409`.
+- `POST /api/v2/stream-sources/{id}/sessions`: `{pipeline_id,min_confidence?,max_track_seconds?}` → `202`, phiên `queued`.
+  - Chỉ profile `five_frame_joint`, nếu không thì trả `422`.
+  - Camera đang có phiên hoạt động trả `409`; pipeline chưa sẵn sàng trả `503`.
+- `GET /api/v2/live-sessions`: lọc `stream_source_id`, `status`, phân trang.
+- `GET /api/v2/live-sessions/{id}`: `status`, `settings`, `stats`, `stats_at`, `tracks_count`, `error_code`, `results_url`.
+  - Trạng thái: `queued`, `starting`, `running`, `reconnecting`, `stopping`, `stopped`, `ended`, `failed`, `interrupted`.
+- `POST /api/v2/live-sessions/{id}/stop`: `202`.
+  - Phiên `queued` dừng ngay; phiên đang chạy chốt và OCR các track đang mở rồi chuyển `stopped`.
+  - Phiên đã kết thúc trả `409`.
+- `GET /api/v2/live-sessions/{id}/events`: lịch sử bền vững theo `id` tăng dần (`status`, `error`, `track_rejected`).
+
+Mỗi track đã chốt là một job `succeeded` có `live_session_id`, `live_track_key`, `captured_from/to` (giờ nhận frame, xấp xỉ), `confidence_status` và `duplicate_of_job_id`. Hai trường cuối chỉ để tham khảo. Review, bằng chứng, CSV và xóa job dùng API chung ở trên.
 
 ## Quy ước
 
