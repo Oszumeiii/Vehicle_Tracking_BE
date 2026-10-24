@@ -99,13 +99,19 @@ Vì mỗi track là một job, review, xem crop, xuất CSV và tra cứu biển
 2. `POST /api/v2/stream-sources/{id}/sessions` với body `{ "pipeline_id": "pbl6-resnet34c-joint5-v1" }` trả `202` và phiên `queued`. Mỗi camera chỉ có một phiên hoạt động. Tùy chọn:
    - `min_confidence` (mặc định 0.85): từ ngưỡng này track được đánh dấu `readable`;
    - `max_track_seconds` (mặc định 30): chốt track của xe đỗ hoặc xe chờ đèn.
-3. Theo dõi `GET /api/v2/live-sessions/{id}`:
+3. Theo dõi real-time qua `GET /api/v2/live-events/stream` (SSE: trạng thái, stats, từng biển số vừa đọc, cảnh báo watchlist; xem [API.md](docs/API.md#sự-kiện-real-time-sse)), hoặc poll `GET /api/v2/live-sessions/{id}`:
    - `status` đi từ `queued`, `starting`, `running` (`reconnecting` khi rớt mạng), qua `stopping`, đến một trong `stopped`, `ended`, `failed`, `interrupted`;
    - `stats` (frame đọc/bỏ, độ trễ, track đang mở) cập nhật mỗi `PLATE_LIVE_STATS_SECONDS`;
    - `tracks_count`.
    Lịch sử nằm ở `GET /api/v2/live-sessions/{id}/events`.
 4. Kết quả xem bằng `GET /api/v2/recognition-results?live_session_id=...` (hoặc `origin=live`, `stream_source_id`, `captured_from/to`, `confidence_status`, `exclude_duplicates=true`). Tra cứu theo `plate` trả cả video upload lẫn live.
 5. Dừng bằng `POST /api/v2/live-sessions/{id}/stop`. Track đang mở vẫn được chốt và OCR trước khi phiên chuyển `stopped`.
+6. Theo dõi biển số: `POST /api/v2/watchlist` với body `{ "plate": "ABC1D23" }`. Biển này xuất hiện trên camera của mình (giống hệt hoặc lệch 1 ký tự) thì có sự kiện `alert` trên stream.
+
+Hỗ trợ cho UI:
+- camera có `embed_url` để nhúng trình phát YouTube;
+- `GET /api/v2/stream-sources/{id}/snapshot` trả keyframe mới nhất để vẽ vùng loại trừ;
+- muốn stats trên UI mượt hơn thì đặt `PLATE_LIVE_STATS_SECONDS=1`–`2` (đổi lại ghi DB nhiều hơn).
 
 Lưu ý khi vận hành:
 - `confidence_status` (`readable`, `low_confidence`, `unreadable`) và `duplicate_of_job_id` (track nối tiếp của cùng xe) chỉ để tham khảo; không track nào bị loại. Ngưỡng cần hiệu chỉnh thêm.
@@ -141,7 +147,7 @@ node dist/src/cli.js live-payload --pipeline pbl6-resnet34c-joint5-v1 --url "htt
 
 ## Dữ liệu và migration
 
-11 bảng nghiệp vụ: `users`, `auth_sessions`, `media_assets`, `recognition_jobs`, `plate_appearances`, `plate_detections`, `ocr_predictions`, `recognition_reviews`, cùng `stream_sources`, `live_sessions`, `live_session_events` cho live. Thêm bảng kỹ thuật `schema_migrations` lưu checksum migration. Schema SQL nằm ở `src/database/migrations/`.
+12 bảng nghiệp vụ: `users`, `auth_sessions`, `media_assets`, `recognition_jobs`, `plate_appearances`, `plate_detections`, `ocr_predictions`, `recognition_reviews`, cùng `stream_sources`, `live_sessions`, `live_session_events`, `plate_watchlist` cho live. Trigger trên `live_session_events` và `live_sessions` gửi `NOTIFY` khi commit; API nghe để đẩy SSE. Thêm bảng kỹ thuật `schema_migrations` lưu checksum migration. Schema SQL nằm ở `src/database/migrations/`.
 
 - PostgreSQL giữ metadata; `data/media/{id}` giữ nguồn; `data/recognition/{job_id}` giữ crop/keyframe/log, kể cả job của track live; `data/live/{session_id}` giữ payload, log và track chưa nhập.
 - Job có đúng một nguồn: `media_id` (upload) hoặc `live_session_id` (live).

@@ -133,3 +133,21 @@ Kết quả đo ngày 2026-10-24 (RTX 4060 Laptop 8 GB, Camboriú `5Xl6pSgiy3A`,
 | Dừng qua API | 9 s, 3 track đang mở được nhập, thoát mã 0, không còn tiến trình con. |
 | Phiên đang treo vì GPU | Dừng qua API không kịp, tiến trình bị kill sau `PLATE_LIVE_STOP_SECONDS` (120 s); các track đã chốt vẫn còn. |
 | Kill worker | Tiến trình live và ffmpeg thoát trong khoảng 5 s (Windows kill tiến trình con theo cha). Khởi động lại: phiên `interrupted`/`WORKER_INTERRUPTED`, 28 track đã nhập vẫn còn, job upload đang chờ được chạy ngay. |
+
+## Nghiệm thu sự kiện real-time (SSE) và watchlist
+
+1. Mở `curl -N -H "Authorization: Bearer $TOKEN" .../api/v2/live-events/stream` rồi bật phiên. Phải thấy `session` (`queued`, `starting`, `running`), `session` có stats theo `PLATE_LIVE_STATS_SECONDS`, rồi các event `track` có `id`.
+2. Đối chiếu id nhận được với `live_session_events`: không thiếu, không trùng, kể cả khi kết nối `LISTEN` của API bị cắt (`pg_terminate_backend`).
+3. Nối lại với `Last-Event-ID`: chỉ nhận event sau id đó. Stream lọc `live_session_id` gửi `end` và đóng sau khi phiên dừng.
+4. Thêm biển vào `POST /api/v2/watchlist`; khi camera đọc biển giống hệt hoặc lệch 1 ký tự thì người đặt nhận event `alert`, người khác không nhận.
+5. `GET /stream-sources/{id}/snapshot` trả keyframe; camera có `embed_url`.
+
+Kết quả đo ngày 2026-10-24 (Camboriú, PostgreSQL tạm, API và worker thật):
+
+| Kiểm tra | Kết quả |
+| --- | --- |
+| Stream 10 phút không lọc | 31/31 event bền vững (id 21–51) khớp DB, 0 trùng, qua một lần cắt kết nối `LISTEN` (API kết nối lại sau khoảng 1 s). 136 event `session`, 24 `track`, 30 heartbeat. |
+| Độ trễ track (`captured_to` đến lúc client nhận) | Ổn định 3,5–4,2 s. Khoảng 5 phút đầu sau một lần kết nối lại YouTube thật ("No frames for 15 s"), độ trễ 15–25 s và bỏ 11% frame do luồng dồn frame về theo cụm; `captured_*` vốn chỉ xấp xỉ. |
+| Nối lại bằng `Last-Event-ID: 45` rồi dừng phiên | Nhận #46–#51 rồi event mới, không trùng. Dừng mất 8 s, 2 track đang mở được đẩy, sau đó `stopped` và `end`, stream đóng. |
+| Watchlist | 62 biển từ các phiên trước: 10 phút không xe nào quay lại, nên không có cảnh báo. Đặt `QUL1A7Z` và nhập lại track thật `QUL1A72` qua recovery: `alert` với `distance=1` đến client ngay sau `track`. |
+| Snapshot, `embed_url` | JPEG 1920×1080; `https://www.youtube-nocookie.com/embed/5Xl6pSgiy3A`. |

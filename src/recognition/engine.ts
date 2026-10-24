@@ -535,9 +535,10 @@ export async function validateResult(
 
 type Client = Pick<PoolClient, 'query'>;
 
-/** Insert one validated appearance with its detections and OCR predictions. */
+/** Insert one validated appearance with its detections and OCR predictions; returns their ids. */
 export async function persistAppearance(client: Client, job: Row, appearance: Row) {
   const appearanceId = id();
+  const detectionIds: string[] = [];
   await client.query(
     `INSERT INTO plate_appearances
     (id,job_id,source_track_id,first_frame,last_frame,start_seconds,end_seconds,machine_text,machine_status,agreement_count,effective_text,review_status,revision,recognition_method)
@@ -563,6 +564,7 @@ export async function persistAppearance(client: Client, job: Row, appearance: Ro
   );
   for (const detection of appearance.detections) {
     const detectionId = id();
+    detectionIds.push(detectionId);
     await client.query(
       `INSERT INTO plate_detections
       (id,appearance_id,selected_order,frame_index,timestamp_seconds,timestamp_source,bbox,crop_bbox,detection_score,crop_storage_key,frame_storage_key,crop_width,crop_height)
@@ -620,6 +622,7 @@ export async function persistAppearance(client: Client, job: Row, appearance: Ro
         prediction.latency_ms,
       ],
     );
+  return { appearanceId, detectionIds };
 }
 
 export async function persistResult(database: Database, job: Row, result: Row) {

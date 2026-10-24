@@ -71,7 +71,58 @@ Action `confirm` chấp nhận text máy; `correct` bắt buộc text mới; `un
 - `POST /api/v2/live-sessions/{id}/stop`: `202`.
   - Phiên `queued` dừng ngay; phiên đang chạy chốt và OCR các track đang mở rồi chuyển `stopped`.
   - Phiên đã kết thúc trả `409`.
-- `GET /api/v2/live-sessions/{id}/events`: lịch sử bền vững theo `id` tăng dần (`status`, `error`, `track_rejected`).
+- `GET /api/v2/live-sessions/{id}/events`: lịch sử bền vững theo `id` tăng dần (`status`, `error`, `track_rejected`, `track`, `alert`).
+- `GET /api/v2/stream-sources/{id}/snapshot`: keyframe mới nhất của camera (JPEG), để vẽ `exclude_zones` theo tọa độ chuẩn hóa trên khung hình thật. Camera chưa có track trả `404`.
+- Camera trả về có thêm `video_id` và `embed_url` (`https://www.youtube-nocookie.com/embed/{id}`) để nhúng trình phát cạnh danh sách biển số. Trình phát chạy lệch nhận diện vài giây. Link kênh (`/@x/live`) có `embed_url=null`.
+
+### Sự kiện real-time (SSE)
+
+`GET /api/v2/live-events/stream` trả `text/event-stream`. Query:
+- `live_session_id` hoặc `stream_source_id` để lọc; không lọc thì nhận mọi phiên mình xem được (admin xem tất cả);
+- `after` để phát lại sự kiện sau id đó (`after=0` là từ đầu). Header `Last-Event-ID` được ưu tiên hơn `after`.
+
+Không có con trỏ thì stream bắt đầu từ thời điểm kết nối.
+
+Các loại sự kiện:
+- **Sự kiện bền vững** (có `id:`): `status`, `error`, `track_rejected`, `track`, `alert`. `data` có dạng `{live_session_id, stream_source_id, created_at, payload}`.
+  - `track`: payload gồm `job_id`, `result_id`, `track`, `text`, `confidence_status`, `confidence`, `captured_from/to`, `duplicate_of_job_id` và `detection_ids` (5 id; crop tải ở `/detections/{id}/artifacts/crop`).
+  - `alert`: biển đọc được khớp watchlist (giống hệt, hoặc lệch 1 ký tự khi biển dài ít nhất 5 ký tự). Payload gồm `watch_plate`, `plate`, `distance`, `job_id`, `result_id`, `stream_source_id`, `confidence_status`, `captured_from`. Chỉ người đặt watchlist nhận được, kể cả khi người đó là admin.
+- **`session`** (không có id): dạng `GET /live-sessions/{id}`, gửi khi kết nối (các phiên đang hoạt động, hoặc phiên được lọc) và mỗi khi phiên đổi trạng thái hoặc stats.
+- **`end`**: stream lọc theo `live_session_id` gửi `end` rồi đóng sau trạng thái kết thúc của phiên.
+
+Dòng `: ping` là heartbeat (mỗi `PLATE_SSE_HEARTBEAT_SECONDS`, mặc định 20 s). Mỗi tiến trình API mở tối đa `PLATE_SSE_MAX_CLIENTS` stream (mặc định 100); vượt thì trả `503`.
+
+Xác thực bằng header Bearer như mọi endpoint. `EventSource` của trình duyệt không gửi được header, nên đọc stream bằng `fetch`. Mất kết nối thì nối lại với `Last-Event-ID` (id cuối cùng đã nhận) để không thiếu sự kiện:
+
+```bash
+curl -N -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:3000/api/v2/live-events/stream?live_session_id=$SESSION"
+```
+
+```js
+const res = await fetch(url, { headers: { Authorization: `Bearer ${token}`, ...(lastId && { 'Last-Event-ID': lastId }) } })
+const reader = res.body.pipeThrough(new TextDecoderStream()).getReader()
+let buffer = ''
+for (;;) {
+  const { value, done } = await reader.read()
+  if (done) break // reconnect after `retry` ms unless an `end` event arrived
+  buffer += value
+  let cut
+  while ((cut = buffer.indexOf('\n\n')) >= 0) {
+    const block = buffer.slice(0, cut); buffer = buffer.slice(cut + 2)
+    const field = (name) => block.split('\n').find((l) => l.startsWith(name + ': '))?.slice(name.length + 2)
+    if (field('id')) lastId = field('id')
+    if (field('event')) handle(field('event'), JSON.parse(field('data')))
+  }
+}
+```
+
+### Watchlist
+
+- `GET /api/v2/watchlist`: biển đang theo dõi của mình, phân trang.
+- `POST /api/v2/watchlist`: `{plate, note?}` trả `201`; biển được chuẩn hóa (chữ hoa, bỏ khoảng trắng và gạch); trùng trả `409`.
+- `DELETE /api/v2/watchlist/{id}`: `204`; mục của người khác trả `404`.
+
+Mỗi track live vừa nhập được đối chiếu với watchlist của chủ camera và của admin. Mỗi mục khớp tạo một sự kiện `alert`. Không quét lại lịch sử khi thêm mục mới; muốn tìm lịch sử thì dùng `GET /recognition-results?plate=`.
 
 Mỗi track đã chốt là một job `succeeded` có `live_session_id`, `live_track_key`, `captured_from/to` (giờ nhận frame, xấp xỉ), `confidence_status` và `duplicate_of_job_id`. Hai trường cuối chỉ để tham khảo. Review, bằng chứng, CSV và xóa job dùng API chung ở trên.
 

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename } from 'node:fs/promises';
 import * as path from 'node:path';
+import type { QueryResult } from 'pg';
 import { Database } from '../database/database';
 import {
   persistAppearance,
@@ -8,6 +9,12 @@ import {
   validateResult,
   WorkerOptions,
 } from '../recognition/engine';
+import { levenshtein } from '../recognition/fusion';
+import { recordEvent } from './sessions';
+
+interface Queryable {
+  query(text: string, values?: any[]): Promise<QueryResult>;
+}
 
 type Row = Record<string, any>;
 const TRACK_KEY = /^e\d{3}-t\d{6}$/;
@@ -20,6 +27,27 @@ function rekey(value: any, from: string, to: string): any {
   if (value && typeof value === 'object')
     return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, rekey(v, from, to)]));
   return value;
+}
+
+/**
+ * Watchlist entries matching a plate read on a camera: those of the camera owner and
+ * of admins (who see every camera), exact or one character off for plates of 5+.
+ */
+async function watchlistMatches(c: Queryable, sourceId: string, plate: string) {
+  const entries = (
+    await c.query(
+      `SELECT w.* FROM plate_watchlist w JOIN users u ON u.id=w.owner_id
+      WHERE u.is_active AND (u.role='admin' OR w.owner_id=(SELECT owner_id FROM stream_sources WHERE id=$1))`,
+      [sourceId],
+    )
+  ).rows;
+  return entries
+    .map((entry) => ({ ...entry, distance: levenshtein(entry.plate, plate) }))
+    .filter(
+      (entry) =>
+        entry.distance === 0 ||
+        (entry.distance === 1 && Math.min(entry.plate.length, plate.length) >= 5),
+    );
 }
 
 function instant(value: any) {
@@ -105,10 +133,37 @@ export async function ingestTrack(
           duplicate,
         ],
       );
-      await persistAppearance(c, job, appearance);
+      const { appearanceId, detectionIds } = await persistAppearance(c, job, appearance);
       await c.query('UPDATE live_sessions SET tracks_count=tracks_count+1 WHERE id=$1', [
         session.id,
       ]);
+      const text: string | null = appearance.machine_text;
+      await recordEvent(c, session.id, 'track', {
+        job_id: jobId,
+        result_id: appearanceId,
+        track: key,
+        text,
+        confidence_status: record.status,
+        confidence: record.confidence,
+        captured_from: capturedFrom,
+        captured_to: capturedTo,
+        duplicate_of_job_id: duplicate,
+        detection_ids: detectionIds,
+      });
+      if (text)
+        for (const match of await watchlistMatches(c, session.stream_source_id, text))
+          await recordEvent(c, session.id, 'alert', {
+            watchlist_id: match.id,
+            watch_plate: match.plate,
+            owner_id: match.owner_id,
+            plate: text,
+            distance: match.distance,
+            job_id: jobId,
+            result_id: appearanceId,
+            stream_source_id: session.stream_source_id,
+            confidence_status: record.status,
+            captured_from: capturedFrom,
+          });
     });
   } catch (error) {
     await rename(target, source).catch(() => {});

@@ -98,6 +98,8 @@ Phiên live lỗi có `error_code` trên `GET /api/v2/live-sessions/{id}`. Chi t
 - `WORKER_INTERRUPTED`: worker dừng hoặc khởi động lại giữa phiên.
 - Các mã khởi động (`CHECKPOINT_MISSING`, `ENVIRONMENT_ERROR`, `CUDA_*`, `PIPELINE_FAILED`): giống job upload.
 
+Stream SSE (`/api/v2/live-events/stream`) dùng một kết nối PostgreSQL riêng để `LISTEN`. Mất kết nối thì API tự kết nối lại (chờ lùi dần tối đa 30 s), và client nhận đủ sự kiện nhờ id. Reverse proxy phải tắt buffer cho đường dẫn này; API đã gửi `X-Accel-Buffering: no` và heartbeat mỗi `PLATE_SSE_HEARTBEAT_SECONDS`. Mỗi stream mở tính vào `PLATE_SSE_MAX_CLIENTS`.
+
 Track không nhập được (bằng chứng hỏng) được ghi thành event `track_rejected` và để nguyên trong `live/{session_id}/tracks/`. Bật phiên mới để chạy tiếp.
 
 Chạy lại bằng `POST /api/v2/recognition-jobs` với cùng `media_id`. Job cũ và review cũ còn nguyên. API không có retry/cancel riêng. Tra cứu chung chọn lượt xử lý nghiệp vụ succeeded mới nhất của mỗi nguồn; vẫn xem lịch sử qua job cụ thể.
