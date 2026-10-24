@@ -92,6 +92,12 @@ class LiveTrackFields {
     description: 'Earlier live track (job) probably showing the same vehicle. Advisory.',
   })
   duplicate_of_job_id!: string | null;
+  @ApiProperty({
+    ...nullableText,
+    description:
+      'Vehicle sighting: live tracks of the same plate on one camera within PLATE_LIVE_SIGHTING_MINUTES share it.',
+  })
+  sighting_id!: string | null;
 }
 
 export class JobResponse extends LiveTrackFields {
@@ -100,6 +106,15 @@ export class JobResponse extends LiveTrackFields {
   media_id!: string | null;
   @ApiProperty({ ...nullableText, description: 'Track key inside the live session.' })
   live_track_key!: string | null;
+  @ApiProperty({ description: 'A watchlist matched this live track; retention keeps it.' })
+  alerted!: boolean;
+  @ApiProperty({ ...nullableInteger, description: 'Stored evidence of a live track, in bytes.' })
+  evidence_bytes!: number | null;
+  @ApiProperty({
+    ...nullableDateTime,
+    description: 'When retention pruned the track to one keyframe (crops are kept).',
+  })
+  evidence_pruned_at!: string | null;
   @ApiProperty({ enum: ['detect_only', 'recognize'] }) job_kind!: string;
   @ApiProperty({ enum: ['scene', 'plate_crop'] }) input_mode!: string;
   @ApiProperty({ enum: ['queued', 'running', 'succeeded', 'failed'] }) status!: string;
@@ -189,6 +204,13 @@ export class SearchResultResponse extends AppearanceResponse {
   @ApiProperty(nullableDateTime) captured_to!: string | null;
   @ApiProperty(confidenceStatus) confidence_status!: string | null;
   @ApiProperty(nullableText) duplicate_of_job_id!: string | null;
+  @ApiProperty(nullableText) sighting_id!: string | null;
+  @ApiProperty({ ...integer, required: false, description: 'group_by=sighting only.' })
+  sighting_count?: number;
+  @ApiProperty({ ...nullableDateTime, required: false, description: 'group_by=sighting only.' })
+  first_seen?: string | null;
+  @ApiProperty({ ...nullableDateTime, required: false, description: 'group_by=sighting only.' })
+  last_seen?: string | null;
 }
 
 const sessionStatuses = [
@@ -231,6 +253,12 @@ export class LiveSessionResponse {
   @ApiProperty(nullableText) error_code!: string | null;
   @ApiProperty(nullableText) error_message!: string | null;
   @ApiProperty({ description: "Search URL listing this session's tracks." }) results_url!: string;
+  @ApiProperty({
+    ...integer,
+    required: false,
+    description: 'Stored evidence of the session in bytes (single and list reads).',
+  })
+  evidence_bytes?: number;
 }
 
 export class StreamSourceResponse {
@@ -248,6 +276,21 @@ export class StreamSourceResponse {
       'Privacy-enhanced player URL for embedding the stream next to its detections. The player runs a few seconds apart from recognition.',
   })
   embed_url!: string | null;
+  @ApiProperty({ description: 'The worker keeps a session running (auto restart).' })
+  always_on!: boolean;
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: true,
+    description: 'pipeline_id, min_confidence, max_track_seconds and max_height for auto sessions.',
+  })
+  auto_settings!: Record<string, unknown>;
+  @ApiProperty({
+    ...nullableInteger,
+    description: 'Prune tracks to one keyframe after; null keeps.',
+  })
+  keyframe_retention_hours!: number | null;
+  @ApiProperty({ ...nullableInteger, description: 'Delete unprotected tracks after; null keeps.' })
+  track_retention_days!: number | null;
   @ApiProperty(dateTime) created_at!: string;
   @ApiProperty(dateTime) updated_at!: string;
   @ApiProperty({ type: LiveSessionResponse, nullable: true })
@@ -273,6 +316,12 @@ export class TrackEventPayload {
   @ApiProperty(dateTime) captured_from!: string;
   @ApiProperty(dateTime) captured_to!: string;
   @ApiProperty(nullableText) duplicate_of_job_id!: string | null;
+  @ApiProperty() sighting_id!: string;
+  @ApiProperty({
+    enum: ['stream', 'received'],
+    description: 'stream: broadcast clock (HLS program date-time); received: when frames arrived.',
+  })
+  capture_clock!: string;
   @ApiProperty({
     type: [String],
     minItems: 5,

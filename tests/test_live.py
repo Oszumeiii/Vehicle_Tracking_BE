@@ -329,3 +329,104 @@ def test_emitter_stops_the_run_when_the_parent_pipe_is_gone(monkeypatch, capsys)
     emit({"type": "track"})  # must not raise: the track is already on disk
     emit({"type": "stats"})
     assert stop.is_set() and emit.closed
+
+
+class FakeClock:
+    def __init__(self):
+        self.now, self.slept = 100.0, []
+
+    def __call__(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.slept.append(seconds)
+        self.now += seconds
+
+
+def test_pacer_releases_native_rate_bounds_catch_up_and_skips_long_backlogs():
+    from app.live.source import Pacer
+    clock = FakeClock()
+    pacer = Pacer(catchup=1.25, max_lag=10, clock=clock, sleep=clock.sleep)
+    for i in range(10):  # a burst of buffered frames is spread out at native rate (10 fps)
+        assert pacer.admit(i / 10, waited=0)
+    assert clock.now == pytest.approx(100.9)
+    clock.now += 5  # a 5 s stall, then 5 s of backlog arrives at once
+    started = clock.now
+    for i in range(10, 160):
+        assert pacer.admit(i / 10, waited=0)
+    assert clock.now - started == pytest.approx(15 / 1.25, abs=0.2), "caught up at 1.25x, not as a burst"
+    assert pacer.lag < 3
+    clock.now += 30  # long stall with a full backlog: one buffered stretch is skipped
+    admitted = [pacer.admit(16 + i / 10, waited=0) for i in range(300)]
+    assert not all(admitted) and pacer.skipped > 0 and pacer.skipped_seconds > 15
+    assert admitted.index(False) == 0 and all(admitted[admitted.index(True):]), "skipped in one piece"
+
+
+def test_pacer_restarts_when_the_source_itself_is_slow_or_jumps_ahead():
+    from app.live.source import Pacer
+    clock = FakeClock()
+    pacer = Pacer(max_lag=10, clock=clock, sleep=clock.sleep)
+    pacer.admit(0.0, waited=0)
+    clock.now += 30  # the network delivered nothing for 30 s: nothing to catch up from
+    assert pacer.admit(0.1, waited=30) and pacer.lag == 0 and pacer.skipped == 0
+    assert pacer.admit(60.0, waited=0)
+    assert max(clock.slept, default=0) < 1, "no 60 s sleep after a forward jump"
+
+
+def test_hls_playlist_anchors_the_broadcast_clock():
+    from datetime import datetime, timezone
+    from app.live.source import FfmpegFrames, OPENING, parse_playlist, segment_start
+    text = ("#EXTM3U\n#EXT-X-TARGETDURATION:5\n#EXT-X-MEDIA-SEQUENCE:501437\n"
+            "#EXT-X-PROGRAM-DATE-TIME:2026-10-24T11:40:15.850+00:00\n#EXTINF:5.0,\nhttps://a/sq/501437/x\n"
+            "#EXTINF:4.0,\nhttps://a/sq/501438/x\n")
+    playlist = parse_playlist(text)
+    start = datetime(2026, 10, 24, 11, 40, 15, 850000, tzinfo=timezone.utc)
+    assert segment_start(playlist, 501437) == start
+    assert (segment_start(playlist, 501439) - start).total_seconds() == 9.0
+    assert (segment_start(playlist, 501441) - start).total_seconds() == 19.0  # extrapolated by target
+    assert segment_start(playlist, 501400) is None and parse_playlist("#EXTM3U") is None
+    line = b"[hls @ 0x1] Opening 'https://rr4.googlevideo.com/videoplayback/id/x.22/sq/501438/goap/y' for reading"
+    assert OPENING.search(line).group(1) == b"501438"
+    source = FfmpegFrames("https://manifest/x.m3u8", 320, 180, ffmpeg="ffmpeg", fetch=lambda url: text)
+    assert "-re" in source.command and "-copyts" in source.command
+    assert source.command[source.command.index("-live_start_index") + 1] == "-1"
+    assert "-live_start_index" not in FfmpegFrames("clip.mp4", 320, 180, ffmpeg="ffmpeg").command
+    assert source.stream_time(23527.34) is None
+    source.first_pts = 23527.34
+    source._anchor(501438)
+    assert (source.stream_time(23529.34) - start).total_seconds() == pytest.approx(7.0)
+
+
+def test_capture_times_prefer_a_plausible_broadcast_clock():
+    from datetime import datetime, timedelta, timezone
+    from app.live.runner import capture_times
+    received = datetime(2026, 10, 24, 12, 0, 0, tzinfo=timezone.utc)
+    clock = dict(started_at=received, first_pts=100.0, stream_time=None)
+    assert capture_times(clock, 102.0, 104.0) == ("received", "2026-10-24T12:00:02.000Z", "2026-10-24T12:00:04.000Z")
+    broadcast = received - timedelta(seconds=20)  # YouTube runs ~20 s behind
+    clock["stream_time"] = lambda pts: broadcast + timedelta(seconds=pts - 100.0)
+    assert capture_times(clock, 102.0, 104.0) == ("stream", "2026-10-24T11:59:42.000Z", "2026-10-24T11:59:44.000Z")
+    clock["stream_time"] = lambda pts: received + timedelta(hours=3)  # implausible anchor: ignored
+    assert capture_times(clock, 102.0, 104.0)[0] == "received"
+    clock["stream_time"] = lambda pts: None
+    assert capture_times(clock, 102.0, 104.0)[0] == "received"
+
+
+def test_resolve_youtube_caps_the_video_height():
+    class Ydl:
+        options = None
+
+        def __init__(self, options):
+            Ydl.options = options
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def extract_info(self, url, download):
+            return dict(live_status="is_live", url="https://m/x.m3u8", width=1280, height=720, fps=30, id="v")
+
+    assert resolve_youtube("https://youtu.be/x", Ydl, max_height=720)["height"] == 720
+    assert Ydl.options["format"] == "bv*[height<=720]"

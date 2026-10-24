@@ -180,3 +180,36 @@ def test_cli_rejects_invalid_input_without_writing_report(tmp_path):
         run(["--ground-truth", str(truth), "--predictions", str(predictions), "--output", str(output)])
     assert exc.value.code == 2
     assert not output.exists()
+
+
+def test_threshold_calibration_reports_precision_coverage_and_recommendation(tmp_path):
+    from app.evaluation import calibrate_threshold
+    from scripts.calibrate_threshold import run as calibrate
+    truth = {"samples": [
+        {"sample_id": "a", "source_id": "cam", "plate_text": "ABC1D23"},
+        {"sample_id": "b", "source_id": "cam", "plate_text": "DEF4567"},
+        {"sample_id": "c", "source_id": "cam", "plate_text": None},  # labeller could not read it
+        {"sample_id": "d", "source_id": "cam", "plate_text": "GHI8J90"},
+    ]}
+    predictions = {"predictions": [
+        {"sample_id": "a", "plate_text": "ABC-1D23", "confidence": 0.97},
+        {"sample_id": "b", "plate_text": "DEF4561", "confidence": 0.83},
+        {"sample_id": "c", "plate_text": "XYZ0000", "confidence": 0.70},
+        {"sample_id": "d", "plate_text": "GHI8J90", "confidence": 0.91},
+    ]}
+    report = calibrate_threshold(truth, predictions, target_precision=1.0, thresholds=[0.6, 0.8, 0.9])
+    rows = {row["threshold"]: row for row in report["thresholds"]}
+    assert rows[0.6] == dict(threshold=0.6, readable=4, correct=2, precision=0.5, coverage=1.0)
+    assert rows[0.8]["precision"] == pytest.approx(2 / 3)
+    assert rows[0.9] == dict(threshold=0.9, readable=2, correct=2, precision=1.0, coverage=0.5)
+    assert report["recommended_threshold"] == 0.9 and report["unreadable_by_labeller"] == 1
+    for bad in ({"samples": []}, {"samples": [{"sample_id": "a", "source_id": "s", "plate_text": ""}]}):
+        with pytest.raises(ValueError):
+            calibrate_threshold(bad, {"predictions": []})
+    with pytest.raises(ValueError, match="confidence"):
+        calibrate_threshold(truth, {"predictions": [{"sample_id": "a", "plate_text": "A", "confidence": 2}]})
+    (tmp_path / "gt.json").write_text(json.dumps(truth), encoding="utf-8")
+    (tmp_path / "pred.json").write_text(json.dumps(predictions), encoding="utf-8")
+    assert calibrate(["--ground-truth", str(tmp_path / "gt.json"), "--predictions", str(tmp_path / "pred.json"),
+                      "--output", str(tmp_path / "report.json")]) == 0
+    assert json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))["samples"] == 4

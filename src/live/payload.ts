@@ -45,9 +45,17 @@ export const excludeZones = z
   .max(16);
 
 /** Payload for `python -m app.live`: the same pinned snapshot a job gets, plus the source. */
-export function livePayload(snapshot: Record<string, any>, url: string, zones: Zone[] = []) {
+export function livePayload(
+  snapshot: Record<string, any>,
+  url: string,
+  zones: Zone[] = [],
+  maxHeight = 1080,
+) {
   return {
     pipeline_snapshot: snapshot,
-    source: { type: 'youtube', url, exclude_zones: zones },
+    source: { type: 'youtube', url, exclude_zones: zones, max_height: maxHeight },
   };
 }
+
+/** Video heights a live session may request; 1080p needs ~4 Mbit/s sustained. */
+export const MAX_HEIGHTS = [480, 720, 1080] as const;

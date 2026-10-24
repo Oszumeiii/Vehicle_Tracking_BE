@@ -6,7 +6,7 @@ the newest ones when the consumer falls behind.
 """
 from collections import deque
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import re
 import subprocess
 import threading
@@ -25,8 +25,10 @@ class SourceError(Exception):
     """A connection failed or stalled; reconnecting may help."""
 
 
-def resolve_youtube(url, ydl_class=None):
+def resolve_youtube(url, ydl_class=None, max_height=1080):
     """Current HLS URL and video geometry of a YouTube broadcast that is live now.
+
+    max_height trades plate detail for bitrate: 1080p needs ~4 Mbit/s sustained.
 
     Errors yt-dlp marks as expected (removed, private, region-blocked) are final and
     raise StreamEnded; anything else (network, extractor hiccup) may be retried.
@@ -34,7 +36,7 @@ def resolve_youtube(url, ydl_class=None):
     from yt_dlp.utils import DownloadError
     if ydl_class is None:
         from yt_dlp import YoutubeDL as ydl_class
-    options = dict(quiet=True, no_warnings=True, noplaylist=True, format="bv*[height<=1080]",
+    options = dict(quiet=True, no_warnings=True, noplaylist=True, format=f"bv*[height<={int(max_height)}]",
                    js_runtimes={"node": {}})
     try:
         with ydl_class(options) as ydl:
@@ -56,27 +58,115 @@ def resolve_youtube(url, ydl_class=None):
 
 
 SHOWINFO = re.compile(rb"Parsed_showinfo.*?\bn:\s*(\d+).*?\bpts_time:\s*(-?[\d.]+)")
+OPENING = re.compile(rb"Opening '[^']*/sq/(\d+)/")
+
+
+class Pacer:
+    """Release frames at native rate and bound catch-up after a stall.
+
+    Frames that were already buffered (backlog after a stall) are released at most
+    `catchup` x real time, below the pipeline's ~1.5x capacity, so the reader does not
+    drop frames all over its tracks. Beyond `max_lag` a buffered stretch is skipped in
+    one piece. When the source itself is slow (frames had to be waited for) there is
+    nothing to catch up from and the schedule restarts; a forward PTS jump (expired
+    segments skipped by ffmpeg) restarts it too.
+    """
+
+    def __init__(self, catchup=1.3, max_lag=20.0, clock=time.monotonic, sleep=time.sleep):
+        self.catchup, self.max_lag, self.clock, self.sleep = catchup, max_lag, clock, sleep
+        self.anchor = self.last = None  # (wall, pts)
+        self.lag = self.skipped_seconds = 0.0
+        self.skipped = 0
+        self._previous = None
+
+    def admit(self, pts, waited):
+        """True to deliver the frame (after pacing), False to skip it. waited: seconds spent reading it."""
+        now, previous, self._previous = self.clock(), self._previous, pts
+        if self.anchor is None or self.anchor[0] + (pts - self.anchor[1]) - now > 2.0:
+            self.anchor = self.last = (now, pts)
+            self.lag = 0.0
+            return True
+        self.lag = now - (self.anchor[0] + (pts - self.anchor[1]))
+        if self.lag > self.max_lag:
+            if waited < 0.01 and previous is not None:
+                self.skipped += 1
+                self.skipped_seconds += pts - previous
+                return False
+            self.anchor = self.last = (now, pts)  # source-limited: accept the delay
+            self.lag = 0.0
+            return True
+        release = max(self.anchor[0] + (pts - self.anchor[1]),
+                      self.last[0] + (pts - self.last[1]) / self.catchup)
+        if release > now:
+            self.sleep(release - now)
+        self.last = (max(release, now), pts)
+        return True
+
+
+def parse_playlist(text):
+    """(media sequence, program date-time of its first segment, segment durations) of an HLS media playlist."""
+    sequence = re.search(r"#EXT-X-MEDIA-SEQUENCE:(\d+)", text)
+    start = re.search(r"#EXT-X-PROGRAM-DATE-TIME:(\S+)", text)
+    if not sequence or not start:
+        return None
+    durations = [float(d) for d in re.findall(r"#EXTINF:([\d.]+)", text)]
+    target = re.search(r"#EXT-X-TARGETDURATION:(\d+)", text)
+    return dict(sequence=int(sequence.group(1)), start=datetime.fromisoformat(start.group(1).replace("Z", "+00:00")),
+                durations=durations, target=float(target.group(1)) if target else (durations or [5.0])[-1])
+
+
+def segment_start(playlist, sequence):
+    """Program date-time when a segment starts; segments past the list are extrapolated."""
+    index = sequence - playlist["sequence"]
+    if index < 0:
+        return None
+    known = playlist["durations"]
+    seconds = sum(known[:index]) + max(0, index - len(known)) * playlist["target"]
+    return playlist["start"] + timedelta(seconds=seconds)
 
 
 class FfmpegFrames:
-    """Decode a network stream with ffmpeg: raw BGR frames on stdout, their PTS from showinfo on stderr."""
+    """Decode a network stream with ffmpeg: raw BGR frames on stdout, their PTS from showinfo on stderr.
+
+    -copyts keeps the segments' own timestamps, which map to the playlist's
+    #EXT-X-PROGRAM-DATE-TIME with a constant offset: the first segment ffmpeg opens
+    (logged with its /sq/ number) anchors stream_time(), the broadcast's wall clock.
+    """
 
     finite = False
 
-    def __init__(self, url, width, height, ffmpeg=None, rw_timeout_seconds=15):
+    def __init__(self, url, width, height, ffmpeg=None, rw_timeout_seconds=15, pacer=None, fetch=None):
         if ffmpeg is None:
             import imageio_ffmpeg
             ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-        self.size, self.shape = width * height * 3, (height, width, 3)
-        # -re: HLS delivers whole segments (~5 s) at once; decoding them at native rate
-        # instead of in bursts keeps the bounded reader buffer from dropping frames.
-        self.command = [ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "info", "-re",
-                        "-rw_timeout", str(int(rw_timeout_seconds * 1e6)), "-i", url, "-an",
-                        "-vf", "showinfo", "-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "bgr24",
-                        "pipe:1"]
+        self.url, self.size, self.shape = url, width * height * 3, (height, width, 3)
+        # -re keeps reading at native rate at the live edge (HLS delivers ~5 s segments at
+        # once). After a stall -re bursts to catch up (~4x measured), faster than the
+        # pipeline; Pacer caps that catch-up so the reader does not drop frames mid-track.
+        # HLS starts at the newest segment instead of three behind the live edge.
+        hls = ["-live_start_index", "-1"] if url.startswith(("http://", "https://")) else []
+        self.command = [ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "info", "-re", "-copyts", *hls,
+                        "-rw_timeout", str(int(rw_timeout_seconds * 1e6)), "-i", url, "-an", "-vf", "showinfo", "-fps_mode", "passthrough", "-f", "rawvideo",
+                        "-pix_fmt", "bgr24", "pipe:1"]
+        self.pacer = pacer or Pacer()
+        self.fetch = fetch or _fetch_text
         self.process = self.job = None
         self.pts, self.errors = deque(), deque(maxlen=20)
         self._pts_ready, self._stderr_done = threading.Condition(), False
+        self.first_sequence = self.first_pts = self._segment_time = None
+
+    def stream_time(self, pts):
+        """Broadcast wall clock (UTC) of a frame, or None until the playlist anchored it."""
+        if self._segment_time is None or self.first_pts is None:
+            return None
+        return self._segment_time + timedelta(seconds=pts - self.first_pts)
+
+    def _anchor(self, sequence):
+        try:
+            playlist = parse_playlist(self.fetch(self.url))
+            self._segment_time = playlist and segment_start(playlist, sequence)
+        except Exception:  # noqa: BLE001 - without an anchor captures fall back to receive time
+            self._segment_time = None
 
     def __iter__(self):
         import os
@@ -89,7 +179,9 @@ class FfmpegFrames:
         threading.Thread(target=self._read_stderr, name="ffmpeg-stderr", daemon=True).start()
         expected = 0
         while True:
+            started = time.monotonic()
             frame = self._read_frame()
+            waited = time.monotonic() - started
             if frame is None:
                 code = self.process.wait()
                 raise SourceError(f"ffmpeg stopped (exit {code}): {' | '.join(self.errors) or 'no output'}")
@@ -101,7 +193,10 @@ class FfmpegFrames:
             if number != expected:
                 raise SourceError("Frame and timestamp streams are out of step")
             expected += 1
-            yield pts, frame
+            if self.first_pts is None:
+                self.first_pts = pts
+            if self.pacer.admit(pts, waited):
+                yield pts, frame
 
     def _read_frame(self):
         buffer = bytearray(self.size)
@@ -116,6 +211,11 @@ class FfmpegFrames:
     def _read_stderr(self):
         for line in self.process.stderr:
             match = SHOWINFO.search(line)
+            opening = None if match else OPENING.search(line)
+            if opening and self.first_sequence is None:
+                self.first_sequence = int(opening.group(1))
+                threading.Thread(target=self._anchor, args=(self.first_sequence,), name="hls-anchor",
+                                 daemon=True).start()
             if match:
                 with self._pts_ready:
                     self.pts.append((int(match.group(1)), float(match.group(2))))
@@ -134,6 +234,12 @@ class FfmpegFrames:
         if self.job:
             self.job.close()
             self.job = None
+
+
+def _fetch_text(url):
+    import urllib.request
+    with urllib.request.urlopen(url, timeout=10) as response:
+        return response.read().decode("utf-8", errors="replace")
 
 
 class FileFrames:

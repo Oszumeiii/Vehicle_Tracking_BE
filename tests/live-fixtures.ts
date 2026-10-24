@@ -48,7 +48,15 @@ export async function writeTrack(
   dataDir: string,
   sessionId: string,
   key: string,
-  options: { duplicateOf?: string; status?: string; text?: string; missingCrop?: boolean } = {},
+  options: {
+    duplicateOf?: string;
+    status?: string;
+    text?: string;
+    missingCrop?: boolean;
+    capturedFrom?: string;
+    capturedTo?: string;
+    confidence?: number;
+  } = {},
 ) {
   const base = `live/${sessionId}/tracks/${key}`;
   await mkdir(join(dataDir, base, 'crops'), { recursive: true });
@@ -79,11 +87,11 @@ export async function writeTrack(
     track: key,
     epoch: 0,
     status: options.status ?? 'readable',
-    confidence: 0.9,
+    confidence: options.confidence ?? 0.9,
     duplicate_of: options.duplicateOf ?? null,
     observations: 12,
-    captured_from: '2026-10-24T10:00:00.000Z',
-    captured_to: '2026-10-24T10:00:04.000Z',
+    captured_from: options.capturedFrom ?? '2026-10-24T10:00:00.000Z',
+    captured_to: options.capturedTo ?? '2026-10-24T10:00:04.000Z',
     appearance: {
       source_track_id: key,
       first_frame: 8,
