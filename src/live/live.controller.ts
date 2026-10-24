@@ -9,28 +9,62 @@ import {
   Post,
   Query,
   Req,
+  Res,
   UseGuards,
   ConflictException,
+  NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiBody, ApiQuery, ApiResponse, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiExtraModels,
+  ApiHeader,
+  ApiProduces,
+  ApiQuery,
+  ApiResponse,
+  ApiTags,
+  getSchemaPath,
+} from '@nestjs/swagger';
+import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { Database } from '../database/database';
 import { Actor, newId, pagination } from '../common/http';
 import { Ownership } from '../common/ownership';
-import { ApiFailures, ApiPage, ApiPageResponse } from '../common/openapi';
+import { ApiFailures, ApiFileResponse, ApiPage, ApiPageResponse } from '../common/openapi';
 import {
+  AlertEventPayload,
   LiveEventResponse,
+  TrackEventPayload,
   LiveSessionResponse,
   StreamSourceResponse,
   streamZones,
 } from '../common/api-models';
 import { AuthGuard } from '../auth/auth.guard';
 import { PipelineRegistry } from '../recognition/registry';
-import { excludeZones, isLivePipeline, isYoutubeUrl } from './payload';
+import { Storage } from '../media/storage';
+import { LiveEventsHub } from './events.hub';
+import { excludeZones, isLivePipeline, isYoutubeUrl, youtubeVideoId } from './payload';
 import { ACTIVE_SQL, ACTIVE_STATUSES, recordEvent, sessionView } from './sessions';
 
 const name = z.string().trim().min(1).max(200);
+const eventId = z.string().regex(/^\d{1,18}$/, 'Event ids are non-negative integers.');
+const streamFilter = z
+  .object({
+    live_session_id: z.string().optional(),
+    stream_source_id: z.string().optional(),
+    after: eventId.optional(),
+  })
+  .strict();
+
+function sourceView(row: Record<string, any>) {
+  const videoId = youtubeVideoId(row.url);
+  return {
+    ...row,
+    video_id: videoId,
+    embed_url: videoId ? `https://www.youtube-nocookie.com/embed/${videoId}` : null,
+  };
+}
 const createSource = z
   .object({
     name,
@@ -81,6 +115,8 @@ export class LiveController {
     private db: Database,
     private owner: Ownership,
     private registry: PipelineRegistry,
+    private storage: Storage,
+    private hub: LiveEventsHub,
   ) {}
 
   private async withActive(rows: Record<string, any>[]) {
@@ -94,7 +130,7 @@ export class LiveController {
       : [];
     return rows.map((row) => {
       const session = active.find((s) => s.stream_source_id === row.id);
-      return { ...row, active_session: session ? sessionView(session) : null };
+      return { ...sourceView(row), active_session: session ? sessionView(session) : null };
     });
   }
 
@@ -120,7 +156,81 @@ export class LiveController {
         [newId(), req.user.id, body.name, body.url, JSON.stringify(body.exclude_zones)],
       )
     ).rows[0];
-    return { ...row, active_session: null };
+    return { ...sourceView(row), active_session: null };
+  }
+
+  @Get('stream-sources/:id/snapshot')
+  @ApiFileResponse('image/jpeg')
+  @ApiFailures(404)
+  @ApiResponse({
+    status: 200,
+    description:
+      'Latest keyframe recorded on this camera, for drawing exclude zones in normalized coordinates.',
+  })
+  async snapshot(@Req() req: { user: Actor }, @Param('id') id: string, @Res() res: Response) {
+    await this.owner.streamSource(req.user, id);
+    const frame = (
+      await this.db.query(
+        `SELECT d.frame_storage_key FROM recognition_jobs j
+        JOIN live_sessions s ON s.id=j.live_session_id
+        JOIN plate_appearances a ON a.job_id=j.id JOIN plate_detections d ON d.appearance_id=a.id
+        WHERE s.stream_source_id=$1 ORDER BY j.captured_to DESC, d.selected_order DESC LIMIT 1`,
+        [id],
+      )
+    ).rows[0];
+    if (!frame) throw new NotFoundException('No frame from this camera yet; run a session first.');
+    res.sendFile(await this.storage.file(frame.frame_storage_key));
+  }
+
+  @Get('live-events/stream')
+  @ApiProduces('text/event-stream')
+  @ApiExtraModels(TrackEventPayload, AlertEventPayload)
+  @ApiQuery({ name: 'live_session_id', required: false, type: String })
+  @ApiQuery({ name: 'stream_source_id', required: false, type: String })
+  @ApiQuery({
+    name: 'after',
+    required: false,
+    type: String,
+    description: 'Replay events after this id (0 = all); Last-Event-ID takes precedence.',
+  })
+  @ApiHeader({
+    name: 'Last-Event-ID',
+    required: false,
+    description: 'Id of the last event received; the stream resumes after it.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: [
+      'Server-sent events. Durable events carry an id and the data',
+      '`{live_session_id, stream_source_id, created_at, payload}`: `status`, `error`,',
+      '`track_rejected`, `track` (payload ' + getSchemaPath(TrackEventPayload) + ') and',
+      '`alert` (payload ' + getSchemaPath(AlertEventPayload) + ', only to the watchlist owner).',
+      '`session` (no id) carries the current session view on connect and on every change,',
+      'including stats. A stream filtered by live_session_id sends `end` and closes after the',
+      'terminal status. Without a filter it covers every session you can see. Comment lines',
+      'are heartbeats. Authenticate with the Bearer header: browsers must read the stream',
+      'with fetch, since EventSource cannot send headers.',
+    ].join(' '),
+    content: { 'text/event-stream': { schema: { type: 'string' } } },
+  })
+  @ApiFailures(404, 503)
+  async stream(
+    @Req() req: Request & { user: Actor },
+    @Query() input: unknown,
+    @Res() res: Response,
+  ) {
+    const filter = streamFilter.parse(input);
+    if (filter.live_session_id) await this.owner.liveSession(req.user, filter.live_session_id);
+    if (filter.stream_source_id) await this.owner.streamSource(req.user, filter.stream_source_id);
+    const header = req.headers['last-event-id'];
+    const after = header === undefined ? filter.after : eventId.parse(String(header));
+    await this.hub.open(
+      req.user,
+      { live_session_id: filter.live_session_id, stream_source_id: filter.stream_source_id },
+      after,
+      req,
+      res,
+    );
   }
 
   @Get('stream-sources')

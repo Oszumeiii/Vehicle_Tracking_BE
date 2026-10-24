@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import { after, before, test } from 'node:test';
 import { promisify } from 'node:util';
 import { migrate } from '../src/database/migrate';
+import { Client } from 'pg';
 import { verifyPassword } from '../src/auth/security';
 import { newId, seedUser, startTestDatabase, TestDatabase } from './helpers';
 
@@ -149,11 +150,68 @@ test('live schema keeps jobs on one source, one active session per camera and co
     sessionId,
   ]);
   await assert.rejects(
-    db.query("INSERT INTO live_session_events (session_id,event_type) VALUES ($1,'track')", [
+    db.query("INSERT INTO live_session_events (session_id,event_type) VALUES ($1,'bogus')", [
       sessionId,
     ]),
     { code: '23514' },
   );
+});
+
+test('live events notify listeners only after commit and watchlist plates stay normalized', async () => {
+  const db = fixture.database;
+  const owner = await seedUser(db);
+  const sourceId = newId();
+  const sessionId = newId();
+  await db.query(
+    `INSERT INTO stream_sources (id,owner_id,name,url) VALUES ($1,$2,'cam','https://youtu.be/x')`,
+    [sourceId, owner.id],
+  );
+  await db.query(
+    `INSERT INTO live_sessions (id,stream_source_id,requested_by,pipeline_snapshot) VALUES ($1,$2,$3,'{}')`,
+    [sessionId, sourceId, owner.id],
+  );
+  const listener = new Client({ connectionString: fixture.url });
+  await listener.connect();
+  const notes: { channel: string; payload?: string }[] = [];
+  listener.on('notification', (note) => notes.push(note));
+  await listener.query('LISTEN live_session_events');
+  await listener.query('LISTEN live_sessions');
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 200));
+  try {
+    let eventId = '';
+    await db.transaction(async (c) => {
+      for (const type of ['track', 'alert'])
+        eventId = (
+          await c.query(
+            'INSERT INTO live_session_events (session_id,event_type) VALUES ($1,$2) RETURNING id',
+            [sessionId, type],
+          )
+        ).rows[0].id;
+      await settle();
+      assert.equal(notes.length, 0, 'nothing is announced before commit');
+    });
+    await settle();
+    assert.deepEqual(
+      notes.map((n) => n.channel),
+      ['live_session_events', 'live_session_events'],
+    );
+    assert.equal(notes[1].payload, `${sessionId}:${eventId}`);
+    await db.query('UPDATE live_sessions SET stats=\'{"fps":30}\' WHERE id=$1', [sessionId]);
+    await settle();
+    assert.deepEqual([notes[2].channel, notes[2].payload], ['live_sessions', sessionId]);
+  } finally {
+    await listener.end();
+  }
+  const watch = (plate: string) =>
+    db.query('INSERT INTO plate_watchlist (id,owner_id,plate) VALUES ($1,$2,$3)', [
+      newId(),
+      owner.id,
+      plate,
+    ]);
+  await watch('ABC1D23');
+  await assert.rejects(watch('ABC1D23'), { code: '23505' });
+  for (const plate of ['abc1234', 'ABC-1234', 'ABC 1234', ''])
+    await assert.rejects(watch(plate), { code: '23514' });
 });
 
 test('Database transaction rolls back all changes and returns the connection to its pool', async () => {
@@ -217,6 +275,6 @@ test('SQL migration is idempotent and rejects changes to an applied migration', 
   await assert.rejects(migrate(fixture.database, destination), /has changed/);
   assert.equal(
     (await fixture.database.query('SELECT version FROM schema_migrations')).rows.length,
-    4,
+    5,
   );
 });

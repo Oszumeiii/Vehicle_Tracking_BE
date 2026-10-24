@@ -240,6 +240,14 @@ export class StreamSourceResponse {
   @ApiProperty({ enum: ['youtube'] }) source_type!: string;
   @ApiProperty() url!: string;
   @ApiProperty(zones) exclude_zones!: number[][];
+  @ApiProperty({ ...nullableText, description: 'YouTube video id; null for channel links.' })
+  video_id!: string | null;
+  @ApiProperty({
+    ...nullableText,
+    description:
+      'Privacy-enhanced player URL for embedding the stream next to its detections. The player runs a few seconds apart from recognition.',
+  })
+  embed_url!: string | null;
   @ApiProperty(dateTime) created_at!: string;
   @ApiProperty(dateTime) updated_at!: string;
   @ApiProperty({ type: LiveSessionResponse, nullable: true })
@@ -248,8 +256,52 @@ export class StreamSourceResponse {
 
 export class LiveEventResponse {
   @ApiProperty({ description: 'Increasing event id.' }) id!: string;
-  @ApiProperty({ enum: ['status', 'error', 'track_rejected'] }) event_type!: string;
+  @ApiProperty({ enum: ['status', 'error', 'track_rejected', 'track', 'alert'] })
+  event_type!: string;
   @ApiProperty({ type: 'object', additionalProperties: true }) payload!: Record<string, unknown>;
+  @ApiProperty(dateTime) created_at!: string;
+}
+
+export class TrackEventPayload {
+  @ApiProperty() job_id!: string;
+  @ApiProperty({ description: 'Result (appearance) id for detail, review and evidence.' })
+  result_id!: string;
+  @ApiProperty({ description: 'Track key inside the session, e.g. e000-t000042.' }) track!: string;
+  @ApiProperty(nullableText) text!: string | null;
+  @ApiProperty(confidenceStatus) confidence_status!: string;
+  @ApiProperty(nullableNumber) confidence!: number | null;
+  @ApiProperty(dateTime) captured_from!: string;
+  @ApiProperty(dateTime) captured_to!: string;
+  @ApiProperty(nullableText) duplicate_of_job_id!: string | null;
+  @ApiProperty({
+    type: [String],
+    minItems: 5,
+    maxItems: 5,
+    description: 'Ordered detection ids; fetch crops from /detections/{id}/artifacts/crop.',
+  })
+  detection_ids!: string[];
+}
+
+export class AlertEventPayload {
+  @ApiProperty() watchlist_id!: string;
+  @ApiProperty({ description: 'Watched plate.' }) watch_plate!: string;
+  @ApiProperty({ description: 'User whose watchlist matched; only they receive the alert.' })
+  owner_id!: string;
+  @ApiProperty({ description: 'Plate read on the camera.' }) plate!: string;
+  @ApiProperty({ enum: [0, 1], description: 'Edit distance between the two plates.' })
+  distance!: number;
+  @ApiProperty() job_id!: string;
+  @ApiProperty() result_id!: string;
+  @ApiProperty() stream_source_id!: string;
+  @ApiProperty(confidenceStatus) confidence_status!: string;
+  @ApiProperty(dateTime) captured_from!: string;
+}
+
+export class WatchlistResponse {
+  @ApiProperty() id!: string;
+  @ApiProperty() owner_id!: string;
+  @ApiProperty({ description: 'Normalized plate (uppercase, no spaces/hyphens).' }) plate!: string;
+  @ApiProperty(nullableText) note!: string | null;
   @ApiProperty(dateTime) created_at!: string;
 }
 

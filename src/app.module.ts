@@ -11,6 +11,8 @@ import { MediaController } from './media/media.controller';
 import { JobsController, JobOperations } from './jobs/jobs.controller';
 import { ResultsController } from './results/results.controller';
 import { LiveController } from './live/live.controller';
+import { WatchlistController } from './live/watchlist.controller';
+import { LiveEventsHub } from './live/events.hub';
 import { PipelineRegistry } from './recognition/registry';
 import { ApiFailures } from './common/openapi';
 
@@ -79,7 +81,8 @@ class HealthController {
     JobsController,
     ResultsController,
     LiveController,
+    WatchlistController,
   ],
-  providers: [AuthGuard, Ownership, Storage, JobOperations, PipelineRegistry],
+  providers: [AuthGuard, Ownership, Storage, JobOperations, PipelineRegistry, LiveEventsHub],
 })
 export class AppModule {}

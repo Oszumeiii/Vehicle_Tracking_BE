@@ -9,6 +9,22 @@ export function isYoutubeUrl(url: string) {
   return z.url().safeParse(url).success && YOUTUBE_HOSTS.includes(new URL(url).hostname);
 }
 
+/** The video id of a watch, youtu.be, live, shorts or embed link; null for channel links. */
+export function youtubeVideoId(url: string): string | null {
+  let id: string | null | undefined;
+  try {
+    const parsed = new URL(url);
+    id =
+      parsed.hostname === 'youtu.be'
+        ? parsed.pathname.split('/')[1]
+        : (parsed.searchParams.get('v') ??
+          parsed.pathname.match(/^\/(?:live|shorts|embed)\/([^/]+)/)?.[1]);
+  } catch {
+    return null;
+  }
+  return id && /^[A-Za-z0-9_-]{11}$/.test(id) ? id : null;
+}
+
 /** Live recognition reads five real frames per track, so only joint OCR pipelines qualify. */
 export function isLivePipeline(snapshot: Record<string, any>) {
   return snapshot.task === 'recognize' && snapshot.recognizer?.input_mode === 'five_frame_joint';

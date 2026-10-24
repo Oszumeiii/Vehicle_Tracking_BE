@@ -22,7 +22,7 @@ export function sessionView(row: Record<string, any>) {
 export async function recordEvent(
   c: Queryable,
   sessionId: string,
-  type: 'status' | 'error' | 'track_rejected',
+  type: 'status' | 'error' | 'track_rejected' | 'track' | 'alert',
   payload: Record<string, unknown>,
 ) {
   await c.query('INSERT INTO live_session_events(session_id,event_type,payload) VALUES($1,$2,$3)', [
