@@ -28,7 +28,7 @@ OUT = BASE / 'output'
 OUT.mkdir(exist_ok=True)
 TITLE = 'Phân tích nghiệp vụ và thiết kế hệ thống'
 SUBTITLE = 'Nhận diện biển số độ phân giải thấp'
-DATE = '14/10/2026'
+DATE = '24/10/2026'
 
 
 def chapters():
