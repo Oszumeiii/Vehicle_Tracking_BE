@@ -16,12 +16,28 @@ Demo khoảng 10 phút, đi qua cả hai nguồn của hệ thống: video uploa
 3. **Video demo cho camera offline:**
    - chép 1–2 video giao thông vào `data/demo-videos/` (`.mp4`, `.mov`, `.mkv`, `.avi`, `.webm`), không commit vào git;
    - nên dùng đoạn ghi từ chính camera YouTube, ví dụ 3 phút luồng Camboriú, 1080p30, khoảng 110 MB;
-   - **ghi vào ban ngày theo giờ Brazil** (khoảng 11:00–22:00 UTC, tức 18:00–05:00 giờ Việt Nam). Đoạn ghi lúc 4h sáng ở Brazil chỉ có khoảng 1 xe/phút đọc được; buổi chiều đông hơn nhiều. Luồng YouTube thật cũng vậy: demo vào ban ngày Việt Nam là đêm ở Camboriú, nên camera video demo thường đông xe hơn;
+   - **ghi vào ban ngày theo giờ Brazil** (khoảng 11:00–22:00 UTC, tức 18:00–05:00 giờ Việt Nam). Đo trên một vòng 3 phút có vùng loại trừ: clip ghi lúc 4h sáng ở Brazil cho khoảng 2 track, còn clip ghi lúc 13h (`camboriu-day.mp4`) cho **35 track, trong đó 9 track `readable`**, bỏ 0,3% frame. Luồng YouTube thật cũng vậy: demo vào ban ngày Việt Nam là đêm ở Camboriú, nên camera video demo thường đông xe hơn;
    - có thể ghi bằng yt-dlp + ffmpeg (`-c:v copy`, xem `app/live/source.py:resolve_youtube` để lấy URL HLS).
 4. **Một video ngắn** (15–60 s) để demo phần upload.
 5. **Chạy thử lần cuối** trước giờ demo: nhấp đúp `start-all.cmd`.
    - Lần đầu script tự sao lưu DB vào `data/backups/` rồi migrate.
    - Bật một phiên trên camera demo để model nạp sẵn vào cache và kiểm tra GPU.
+
+## Thời gian đo được (để chia giờ demo)
+
+Đo trên máy dev ngày 25/10/2026, qua các lần chạy thật trong `TESTING.md`:
+
+| Bước | Thời gian |
+|---|---|
+| `start-all.cmd` khi Docker đã tắt (bật Docker, build, migrate) | khoảng 2–3 phút; chạy trước khi lên trình bày |
+| Bật phiên camera, lần đầu sau khi khởi động (nạp model) | 40–75 s đến *Đang chạy* |
+| Bật phiên khi model đã nằm trong cache đĩa | khoảng 35–40 s |
+| Biển số đầu tiên trên feed (camera ban ngày) | thường dưới 20 s sau *Đang chạy* |
+| Job upload video 20 s, 1080p | khoảng 40 s |
+| Cảnh báo watchlist trên camera demo | khi clip lặp lại, tối đa khoảng 3 phút |
+| Dừng phiên | vài giây đến khi *Đã dừng* |
+
+Vì việc bật phiên mất gần một phút, nên bật camera demo ngay sau khi chuyển sang tab **Camera live**, rồi nói phần kiến trúc trong lúc chờ. Thêm biển watchlist sớm (ngay khi thấy biển đầu tiên) để cảnh báo kịp xuất hiện trong buổi demo.
 
 ## Khởi động
 
