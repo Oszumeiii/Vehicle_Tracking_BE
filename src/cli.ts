@@ -7,6 +7,7 @@ import { settings } from './common/config';
 import { safeStorage } from './recognition/engine';
 import { Database } from './database/database';
 import { migrate } from './database/migrate';
+import { sampleLiveTracks } from './evaluation/sampling';
 import { PipelineRegistry } from './recognition/registry';
 import { isLivePipeline, isYoutubeUrl, livePayload as buildLivePayload } from './live/payload';
 import { z } from 'zod';
@@ -34,9 +35,6 @@ export async function livePayload(args: string[]): Promise<string> {
   return out;
 }
 
-// Confidence bins for stratified sampling; the last bin holds 0.95-1.
-const BINS = [0, 0.5, 0.7, 0.8, 0.85, 0.9, 0.95, 1.000001];
-
 /**
  * Export live tracks for independent labelling (docs/EVALUATION.md): a stratified
  * sample across confidence bins, each with its five crops and kept keyframes,
@@ -55,28 +53,11 @@ export async function exportLiveSamples(
     throw new Error(
       'Use: export-live-samples (--source CAMERA_ID | --session SESSION_ID) --out DIR [--per-bin N]',
     );
-  const rows = (
-    await database.query(
-      `SELECT j.id, a.id AS result_id, a.machine_text, s.stream_source_id,
-        (j.statistics->>'confidence')::float AS confidence
-      FROM recognition_jobs j JOIN plate_appearances a ON a.job_id=j.id
-      JOIN live_sessions s ON s.id=j.live_session_id
-      WHERE ($1::text IS NOT NULL AND s.stream_source_id=$1) OR ($2::text IS NOT NULL AND j.live_session_id=$2)
-      ORDER BY random()`,
-      [source ?? null, session ?? null],
-    )
-  ).rows;
-  const picked = BINS.slice(1).flatMap((upper, i) =>
-    rows
-      .filter(
-        (row) => row.confidence !== null && row.confidence >= BINS[i] && row.confidence < upper,
-      )
-      .slice(0, perBin),
-  );
+  const picked = await sampleLiveTracks(database, { source, session }, perBin);
   const predictions = [];
   const samples = [];
   for (const row of picked) {
-    const folder = path.join(out, 'samples', row.id);
+    const folder = path.join(out, 'samples', row.job_id);
     await mkdir(folder, { recursive: true });
     const evidence = (
       await database.query(
@@ -101,7 +82,7 @@ export async function exportLiveSamples(
         );
     }
     predictions.push({
-      sample_id: row.id,
+      sample_id: row.job_id,
       variant: 'five_image',
       detected: true,
       plate_text: row.machine_text,
@@ -109,7 +90,7 @@ export async function exportLiveSamples(
     });
     // The labeller replaces "" with the plate read from the crops, or null if unreadable.
     samples.push({
-      sample_id: row.id,
+      sample_id: row.job_id,
       source_id: row.stream_source_id,
       split: 'test',
       plate_text: '',

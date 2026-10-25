@@ -12,6 +12,7 @@ import { JobsController, JobOperations } from './jobs/jobs.controller';
 import { ResultsController } from './results/results.controller';
 import { LiveController } from './live/live.controller';
 import { WatchlistController } from './live/watchlist.controller';
+import { EvaluationController } from './evaluation/evaluation.controller';
 import { LiveEventsHub } from './live/events.hub';
 import { PipelineRegistry } from './recognition/registry';
 import { ApiFailures } from './common/openapi';
@@ -82,6 +83,7 @@ class HealthController {
     ResultsController,
     LiveController,
     WatchlistController,
+    EvaluationController,
   ],
   providers: [AuthGuard, Ownership, Storage, JobOperations, PipelineRegistry, LiveEventsHub],
 })

@@ -189,3 +189,14 @@ Chạy `start-all.cmd -NoBrowser` trên DB Docker của dự án. Trước khi c
 - **Sau cùng:** 0 lỗi console, 0 tiến trình `python`/`ffmpeg*` còn sót.
 - **Lỗi tìm ra và đã sửa:** Vite của FE chỉ nghe `[::1]`, nên `start-all` giờ mở `http://localhost:5173` thay vì `127.0.0.1`.
 - **Lưu ý:** clip ghi lúc khoảng 4h sáng ở Brazil chỉ có khoảng 1 xe/phút (một xe đỗ được đọc lặp lại). Clip demo nên ghi vào ban ngày ở Brazil (xem `docs/DEMO.md`).
+
+## Nghiệm thu gán nhãn độc lập (2026-10-25)
+
+Chạy API của nhánh trên một bản sao DB thật (`pg_dump` sang cụm PostgreSQL tạm, migration `0008`) cùng FE, điều khiển bằng Playwright. Nhãn gõ trong lần thử là giá trị giả, chỉ để kiểm công cụ, không phải ground truth.
+
+- **Tạo bộ mẫu:** admin tạo bộ mẫu từ camera demo (3 mẫu mỗi khoảng). Camera có ít track nên được 6 mẫu.
+- **Gán mù:** màn gán nhãn không chứa biển nào trong 5 biển máy đã đọc trên DB (0 bị lộ). API `next` chỉ trả crop, keyframe và nhãn của chính mình (test tự động kiểm tra các key trả về).
+- **Thao tác:** Enter để lưu, *Không đọc được*, *Bỏ qua* và *Quay lại* (hiện nhãn cũ để sửa) đều chạy đúng. Hai người gán song song; người dùng thường không thấy tab báo cáo.
+- **Báo cáo:** bảng ngưỡng, biểu đồ có tooltip, độ đồng thuận và độ chính xác theo khoảng hiện đúng. Mẫu bất đồng bị loại.
+- **Đối chiếu chéo:** dữ liệu đồng thuận của test tự động cho cùng kết quả ở báo cáo TS và `scripts.calibrate_threshold`: ngưỡng đề xuất 0,88; ngưỡng 0,5 có 5 track readable, 3 đúng.
+- **Mobile 390 px:** crop xếp 2 cột; 0 lỗi console.

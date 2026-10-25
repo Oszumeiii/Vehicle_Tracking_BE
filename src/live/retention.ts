@@ -19,8 +19,10 @@ export function retentionSettings(): RetentionSettings {
 const HOUR = 3600_000;
 // Kept for context once a live track's other keyframes are pruned (the middle one).
 const KEPT_FRAME = 3;
-// Tracks a person reviewed or a watchlist alerted on are never pruned or deleted.
-const UNPROTECTED = `NOT j.alerted AND a.review_status='pending'`;
+// Tracks a person reviewed, a watchlist alerted on, or that were sampled for
+// independent labelling are never pruned or deleted.
+const UNPROTECTED = `NOT j.alerted AND a.review_status='pending'
+  AND NOT EXISTS (SELECT 1 FROM evaluation_items e WHERE e.job_id=j.id)`;
 const LIVE_JOBS = `recognition_jobs j JOIN plate_appearances a ON a.job_id=j.id
   JOIN live_sessions s ON s.id=j.live_session_id JOIN stream_sources c ON c.id=s.stream_source_id`;
 

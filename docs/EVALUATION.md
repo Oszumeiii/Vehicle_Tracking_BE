@@ -166,6 +166,25 @@ Kiểm thử riêng bộ chấm:
 
 `min_confidence` (mặc định 0.85) quyết định track live nào được đánh dấu `readable`. Ngưỡng chỉ được hiệu chỉnh bằng **nhãn độc lập**; review trong ứng dụng không phải nhãn và không được dùng làm ground truth.
 
+### Cách 1: trang gán nhãn trong ứng dụng (khuyên dùng)
+
+1. **Admin tạo bộ mẫu:** tab **Gán nhãn**, chọn camera và số mẫu mỗi khoảng tin cậy (mặc định 30; 7 khoảng 0–0,5, 0,5–0,7, 0,7–0,8, 0,8–0,85, 0,85–0,9, 0,9–0,95, 0,95–1, tức tối đa 210 mẫu). API tương ứng: `POST /api/v2/evaluation-sets`.
+2. **Người gán nhãn** (mọi tài khoản, nên là người không làm model) mở bộ mẫu:
+   - mỗi mẫu có 5 crop và một keyframe;
+   - gõ biển đọc được rồi nhấn Enter; chọn **Không đọc được** nếu chính mình cũng không đọc ra; **Bỏ qua** để xem sau; **Quay lại** để sửa nhãn vừa gán;
+   - **gán mù:** trang không hiện biển máy đọc, confidence hay trạng thái review;
+   - mỗi người gán theo một thứ tự xáo trộn riêng, nên nhiều người có thể gán song song.
+3. **Admin mở tab Báo cáo ngưỡng:**
+   - precision/coverage theo từng ngưỡng (biểu đồ và bảng), ngưỡng đề xuất theo precision mục tiêu;
+   - độ đồng thuận giữa người gán, độ chính xác theo từng khoảng confidence;
+   - **chỉ mẫu mà mọi người gán đồng ý mới được tính**, mẫu bất đồng bị loại và có đếm riêng. Có thể yêu cầu tối thiểu 2–3 nhãn mỗi mẫu.
+4. **Nhãn được lưu riêng** (`evaluation_labels`), không đụng tới review.
+   - Track nằm trong bộ mẫu không bị retention xóa hay bỏ keyframe.
+   - Xóa bộ mẫu thì xóa nhãn, nhưng giữ track.
+5. **Đối chiếu chéo:** `GET /api/v2/evaluation-sets/{id}/report?format=files` trả `predictions` và `ground_truth` đúng định dạng bên dưới để chạy lại bằng `scripts.calibrate_threshold`. Cách tính của hai bên giống nhau; trên cùng dữ liệu, hai bên cho cùng ngưỡng đề xuất và precision.
+
+### Cách 2: file
+
 1. Xuất mẫu phân tầng theo confidence từ một camera hoặc phiên:
 
    ```powershell
