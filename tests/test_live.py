@@ -154,6 +154,22 @@ def test_runner_records_each_track_with_evidence_ocr_and_events(tmp_path):
     assert appearance["predictions"][0]["input_storage_keys"] == [d["crop_storage_key"] for d in detections]
 
 
+def test_sampling_scale_lowers_detector_rates_and_is_recorded(tmp_path):
+    video = tmp_path / "input.avi"
+    _plate_video(video, 30)
+    status, events = run(tmp_path, [FileFrames(video)], sampling_scale=.5)
+    assert status == "ended"
+    record = json.loads((tmp_path / "live" / next(e for e in events if e["type"] == "track")["path"])
+                        .read_text(encoding="utf-8"))
+    assert record["sampling_scale"] == .5
+    assert all(e["sampling_scale"] == .5 for e in events if e["type"] == "stats")
+    runner = LiveRunner(SNAPSHOT, tmp_path / "x", None, print, BoxFixture(), recognizer, sampling_scale=.5)
+    assert runner.tracking_snapshot["sampling"]["high_fps"] == SNAPSHOT["sampling"]["high_fps"] * .5
+    assert runner.snapshot is SNAPSHOT, "the pinned snapshot itself is unchanged"
+    with pytest.raises(ValueError):
+        LiveRunner(SNAPSHOT, tmp_path / "x", None, print, BoxFixture(), recognizer, sampling_scale=0)
+
+
 def test_exclude_zones_drop_detections_centred_inside_only():
     from app.recognition.video_tracking import detect_plates
     images = [np.zeros((180, 320, 3), np.uint8)]

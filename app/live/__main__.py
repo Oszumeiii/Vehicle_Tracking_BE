@@ -5,6 +5,8 @@ and the source: {"type": "youtube", "url": ...} or {"type": "file", "path": ...,
 either with optional "exclude_zones": [[x1, y1, x2, y2], ...] in normalized frame coordinates.
 Events are JSON lines on stdout; diagnostics go to stderr. Send "stop" on stdin, close
 stdin, or press Ctrl+C to stop: open tracks are finished and recognized before exit.
+
+With --host, one process runs several sessions sharing the models (see app/live/host.py).
 """
 import argparse
 from datetime import datetime, timezone
@@ -105,8 +107,12 @@ def load_models(snapshot):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--payload", type=Path, required=True)
-    parser.add_argument("--out", type=Path, required=True)
+    parser.add_argument("--payload", type=Path)
+    parser.add_argument("--out", type=Path)
+    parser.add_argument("--host", action="store_true",
+                        help="Run sessions sent as JSON commands on stdin, sharing one copy of the models")
+    parser.add_argument("--sampling-scale", type=float, default=1.,
+                        help="Host only: scale the detector sampling rates so several streams fit one GPU")
     parser.add_argument("--data-dir", type=Path, help="Root that evidence storage keys are relative to (default: --out)")
     parser.add_argument("--min-confidence", type=float, default=.85)
     parser.add_argument("--max-track-seconds", type=float, default=30.)
@@ -115,6 +121,15 @@ def main(argv=None):
                         help="Decoded frames kept while the detector is busy (1.5 s of 1080p is ~280 MB)")
     parser.add_argument("--ignore-stdin", action="store_true", help="Do not stop on stdin EOF (manual runs)")
     args = parser.parse_args(argv)
+    if args.host:
+        if not args.data_dir:
+            parser.error("--host needs --data-dir")
+        if not 0 < args.sampling_scale <= 1:
+            parser.error("--sampling-scale must be in (0, 1]")
+        from app.live.host import main_host
+        return main_host(args)
+    if not args.payload or not args.out:
+        parser.error("--payload and --out are required without --host")
     payload = json.loads(args.payload.read_text(encoding="utf-8-sig"))  # tolerate a Windows BOM
     snapshot = payload["pipeline_snapshot"]
     if snapshot.get("device") == "cpu":

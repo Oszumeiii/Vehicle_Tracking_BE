@@ -10,6 +10,7 @@ import {
 } from './recognition/engine';
 import { GpuGate, LiveManager, liveSettings, spawnLiveProcess, SpawnLive } from './live/manager';
 import { Retention } from './live/retention';
+import { SharedLiveHost } from './live/host';
 
 /** Jobs processed in parallel by this worker; each job runs its own ML subprocess. */
 export function workerConcurrency(value = process.env.PLATE_WORKER_CONCURRENCY ?? '1') {
@@ -60,7 +61,13 @@ export async function runWorker(
     if (!Number.isFinite(interval) || interval <= 0) throw new Error('Invalid polling interval');
     const settings = liveSettings();
     const gate = new GpuGate(settings.exclusiveGpu);
-    const live = new LiveManager(database, options, settings, spawnLive, gate);
+    // Several sessions share one Python process (and one copy of the models); one session
+    // keeps its own process, exactly as before.
+    const spawn =
+      settings.maxSessions > 1
+        ? new SharedLiveHost(spawnLive, options.dataDir, settings.samplingScale).spawn
+        : spawnLive;
+    const live = new LiveManager(database, options, settings, spawn, gate);
     await live.recover();
     const retention = new Retention(database, options);
     const idle = () =>

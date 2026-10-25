@@ -180,6 +180,8 @@ export async function ingestTrack(
             observations: record.observations,
             confidence: record.confidence,
             capture_clock: record.capture_clock ?? 'received',
+            // Below 1 when the session shared the GPU and sampled fewer frames.
+            sampling_scale: Number.isFinite(record.sampling_scale) ? record.sampling_scale : 1,
           }),
           capturedFrom,
           capturedTo,
