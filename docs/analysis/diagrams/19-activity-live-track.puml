@@ -1,0 +1,33 @@
+@startuml
+skinparam defaultFontName Arial
+skinparam defaultFontSize 15
+skinparam shadowing false
+skinparam backgroundColor white
+title Activity — Từ frame live đến kết quả và cảnh báo
+start
+:ffmpeg đọc segment HLS (-re, -copyts);
+:Pacer: nhịp thật, đuổi kịp tối đa 1,3×;
+:LiveReader: buffer giới hạn, bỏ frame cũ nhất khi đầy;
+:Adaptive sampling, empty-scene gate;
+:YOLO11l (bỏ box trong vùng loại trừ) + BoT-SORT;
+if (Track kết thúc hoặc quá max_track_seconds?) then (có)
+  if (Đủ 5 frame hợp lệ?) then (có)
+    :Ghi 5 crop + keyframe, OCR joint 5 frame;
+    :Gắn giờ luồng (PROGRAM-DATE-TIME) hoặc giờ nhận;
+    :Phân loại readable / low_confidence / unreadable;
+    :Ghi track.json, phát sự kiện track;
+    :Worker chuyển thư mục, kiểm bằng chứng;
+    :Transaction: job + appearance + event track;
+    :Gán sighting_id (cùng biển ±1 ký tự, ≤ 5 phút);
+    if (Khớp watchlist?) then (có)
+      :Ghi event alert cho người đặt;
+    endif
+    :NOTIFY → SSE tới client;
+  else (không)
+    :Bỏ track (thống kê rejected);
+  endif
+else (không)
+endif
+:Retention: sau N giờ giữ 1 keyframe,\nsau M ngày xóa track chưa review / không cảnh báo;
+stop
+@enduml
