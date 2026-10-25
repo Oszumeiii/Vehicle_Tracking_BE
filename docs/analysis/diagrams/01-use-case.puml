@@ -39,6 +39,9 @@ rectangle "HỆ THỐNG NHẬN DIỆN BIỂN SỐ" {
   usecase "UC15\nTheo dõi real-time" as UC15
   usecase "UC16\nWatchlist và cảnh báo" as UC16
   usecase "UC17\nXóa phiên live" as UC17
+  usecase "UC18\nCamera demo" as UC18
+  usecase "UC19\nGán nhãn độc lập" as UC19
+  usecase "UC20\nBáo cáo hiệu chỉnh ngưỡng" as UC20
 }
 actor "Worker\n(tự động)" as W
 
@@ -60,6 +63,10 @@ U -- UC14
 U -- UC15
 U -- UC16
 U -- UC17
+A -- UC18
+U -- UC19
+A -- UC20
+UC20 ..> UC19 : <<include>>\n[nhãn đồng thuận]
 W -- UC14
 UC15 ..> UC16 : <<include>>\n[alert]
 
@@ -71,6 +78,8 @@ UC12: luồng thay thế tại bước chọn profile của UC04.
 UC13–UC17: camera YouTube Live; mỗi track live là một job,
 nên UC06–UC09 dùng chung cho kết quả live.
 Worker tự bật lại phiên của camera 24/7 (UC14).
+UC18, UC20 và tạo bộ mẫu (UC19) chỉ dành cho Admin;
+mọi người dùng gán nhãn mù trên bộ mẫu.
 Nhập thủ công sau xử lý dùng UC07, do người dùng chọn.
 endlegend
 @enduml

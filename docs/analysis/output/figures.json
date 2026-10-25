@@ -5,8 +5,8 @@
     "title": "Use case tổng quan",
     "orientation": "portrait",
     "render_size": [
-      822,
-      1447
+      844,
+      1651
     ]
   },
   {
@@ -121,6 +121,16 @@
   },
   {
     "number": 13,
+    "source": "20-seq-labeling",
+    "title": "Sequence gán nhãn",
+    "orientation": "portrait",
+    "render_size": [
+      923,
+      1217
+    ]
+  },
+  {
+    "number": 14,
     "source": "11-state-job",
     "title": "Trạng thái job",
     "orientation": "portrait",
@@ -130,7 +140,7 @@
     ]
   },
   {
-    "number": 14,
+    "number": 15,
     "source": "14-state-review",
     "title": "Trạng thái kiểm duyệt",
     "orientation": "landscape",
@@ -140,7 +150,7 @@
     ]
   },
   {
-    "number": 15,
+    "number": 16,
     "source": "18-state-live-session",
     "title": "Trạng thái phiên live",
     "orientation": "landscape",
@@ -150,17 +160,17 @@
     ]
   },
   {
-    "number": 16,
+    "number": 17,
     "source": "12-erd",
     "title": "ERD tổng thể",
     "orientation": "portrait",
     "render_size": [
-      792,
-      1176
+      1213,
+      1194
     ]
   },
   {
-    "number": 17,
+    "number": 18,
     "source": "13-erd-ocr",
     "title": "Chi tiết quan hệ OCR",
     "orientation": "landscape",
@@ -170,22 +180,22 @@
     ]
   },
   {
-    "number": 18,
+    "number": 19,
     "source": "15-architecture",
     "title": "Kiến trúc thành phần",
     "orientation": "landscape",
     "render_size": [
-      1248,
-      805
+      1272,
+      832
     ]
   },
   {
-    "number": 19,
+    "number": 20,
     "source": "16-deployment",
     "title": "Triển khai bản đầu",
     "orientation": "landscape",
     "render_size": [
-      1301,
+      1341,
       646
     ]
   }

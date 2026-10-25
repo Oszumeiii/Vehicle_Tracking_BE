@@ -40,6 +40,10 @@ Pipeline và model OCR được tích hợp theo notebook Kaggle của nhóm `tr
 | Lượt xuất hiện (sighting) | Nhóm các track live cùng biển (hoặc lệch một ký tự) trên một camera trong vài phút; gợi ý, không phải danh tính xe. |
 | Watchlist | Danh sách biển số người dùng muốn được cảnh báo khi camera đọc được. |
 | Vùng loại trừ | Hình chữ nhật chuẩn hóa trên khung hình; detection có tâm nằm trong vùng bị bỏ qua (biển tên đường, bảng cố định). |
+| Camera demo | Camera phát lại một video có sẵn trong thư mục `demo-videos` theo vòng lặp, với tốc độ thật, để demo không phụ thuộc mạng. |
+| Bộ mẫu gán nhãn | Tập track live được lấy mẫu phân tầng theo khoảng confidence để người gán nhãn đọc biển độc lập, phục vụ hiệu chỉnh ngưỡng. |
+| Gán nhãn mù | Người gán chỉ thấy crop và keyframe, không thấy biển máy đọc, confidence hay trạng thái review. |
+| Host live dùng chung | Một tiến trình Python chạy nhiều phiên live, dùng chung một bản detector và OCR. |
 
 ## 2. Bên liên quan và phân quyền
 
@@ -56,6 +60,9 @@ Pipeline và model OCR được tích hợp theo notebook Kaggle của nhóm `tr
 | Tra cứu, xuất CSV, xóa nguồn | Không | Dữ liệu của mình | Toàn hệ thống |
 | Tạo, khóa, đổi vai trò/reset mật khẩu | Không | Không | Có |
 | Sửa checkpoint, interpreter qua API | Không | Không | Không |
+| Tạo camera demo từ `demo-videos` | Không | Không | Có |
+| Gán nhãn độc lập trên bộ mẫu | Không | Có | Có |
+| Tạo/xóa bộ mẫu, xem báo cáo ngưỡng | Không | Không | Có |
 
 Quyền kế thừa từ `media_assets.owner_id` sang job, appearance, detection và export. Admin được xử lý nguồn của người khác nhưng quyền sở hữu nguồn không đổi. Request truy cập ID không thuộc quyền trả `404`; truy cập chức năng quản trị bằng User trả `403`.
 
@@ -76,10 +83,13 @@ Quyền kế thừa từ `media_assets.owner_id` sang job, appearance, detection
 | Camera YouTube Live | Ngoài phạm vi ban đầu | Đã bổ sung: camera, phiên live, tiến trình `app.live` trong worker, mỗi track thành một job; 17 endpoint live (camera, phiên, SSE, watchlist, lượt xuất hiện). |
 | Theo dõi real-time | Poll trạng thái | SSE `GET /live-events/stream` qua PostgreSQL LISTEN/NOTIFY, phát lại theo id. |
 | Vận hành lâu dài | Không có | Camera 24/7 tự bật lại, dọn bằng chứng theo thời hạn, xóa phiên, chia GPU giữa job upload và live. |
+| Nhiều camera cùng lúc | Ngoài phạm vi | Đã bổ sung: các phiên chạy chung một host Python với một bản model; hai camera trên GPU 8 GB. |
+| Demo không cần mạng | Không có | Camera demo phát lại video có sẵn theo vòng lặp (chỉ Admin). |
+| Hiệu chỉnh ngưỡng | Công cụ dòng lệnh | Trang gán nhãn mù trong ứng dụng, báo cáo precision/coverage theo ngưỡng; 9 endpoint `/evaluation-sets`. |
 
 ### 3.2. Ngoài phạm vi
 
-Camera CCTV/RTSP, nhiều camera live đồng thời trên một GPU 8 GB, bãi xe, vé/thu phí, chủ phương tiện, xử phạt, nhận dạng danh tính xe, chia sẻ dữ liệu công khai, huấn luyện model và tự động sửa biển số theo luật quốc gia không thuộc bản đầu. Không có API hủy job đang chạy hoặc retry tại chỗ; chạy lại tạo job mới. Frontend hoàn chỉnh, OCR ảnh đơn và thẩm định accuracy trên tập nhãn độc lập là các hạng mục riêng cần tiếp tục khi triển khai sản phẩm/đánh giá.
+Camera CCTV/RTSP, hơn hai camera live đồng thời trên một GPU 8 GB, bãi xe, vé/thu phí, chủ phương tiện, xử phạt, nhận dạng danh tính xe, chia sẻ dữ liệu công khai, huấn luyện model và tự động sửa biển số theo luật quốc gia không thuộc bản đầu. Không có API hủy job đang chạy hoặc retry tại chỗ; chạy lại tạo job mới. Frontend hoàn chỉnh, OCR ảnh đơn và thẩm định accuracy trên tập nhãn của người gán độc lập là các hạng mục riêng cần tiếp tục khi triển khai sản phẩm/đánh giá.
 
 ## 4. Yêu cầu chức năng và phi chức năng
 
@@ -112,6 +122,10 @@ Camera CCTV/RTSP, nhiều camera live đồng thời trên một GPU 8 GB, bãi 
 | FR23 | Đẩy trạng thái, stats, track và cảnh báo real-time qua SSE; nối lại không mất sự kiện bằng `Last-Event-ID`. | UC15 |
 | FR24 | Watchlist theo người dùng; biển khớp (giống hệt hoặc lệch 1 ký tự) tạo cảnh báo chỉ gửi người đặt. | UC16 |
 | FR25 | Gộp track thành lượt xuất hiện khi tra cứu; xóa phiên đã kết thúc cùng bằng chứng; dọn bằng chứng theo thời hạn của camera. | UC08, UC17 |
+| FR26 | Admin tạo camera demo phát lại video trong `demo-videos` theo vòng lặp với tốc độ thật; liệt kê video dùng được. | UC18 |
+| FR27 | Admin tạo bộ mẫu gán nhãn từ một camera hoặc phiên (lấy mẫu phân tầng theo 7 khoảng confidence); mọi người dùng gán nhãn mù, sửa được nhãn của mình. | UC19 |
+| FR28 | Báo cáo hiệu chỉnh ngưỡng: precision/coverage của trạng thái `readable` theo từng ngưỡng 0,50–0,99 trên các mẫu người gán đồng thuận, ngưỡng đề xuất theo precision mục tiêu, độ đồng thuận và độ chính xác theo khoảng; xuất file cho script đánh giá. | UC20 |
+| FR29 | Chạy nhiều phiên live cùng lúc trong một host dùng chung model khi cấu hình cho phép; lỗi một phiên không ảnh hưởng phiên khác. | UC14 |
 
 ### 4.2. Yêu cầu phi chức năng
 
@@ -127,7 +141,8 @@ Camera CCTV/RTSP, nhiều camera live đồng thời trên một GPU 8 GB, bãi 
 | NFR08 | Đánh giá khoa học | Nhãn độc lập, chia tập theo nguồn/identity khi biết; đo exact accuracy, CER, unreadable và latency; báo riêng lỗi bỏ sót. |
 | NFR09 | Live gần thời gian thực | Bài chạy 60 phút: bỏ 0,6% frame, lag xử lý p95 0,86 s; track đến client sau khoảng 3,5–4,2 s khi luồng ổn định; đuổi kịp sau khi kẹt tối đa 1,3× mà không bỏ frame. |
 | NFR10 | Live bền và tự phục hồi | Kết nối lại khi mất luồng; watchdog `LIVE_STALLED`; worker khởi động lại thì phiên `interrupted` và track trên đĩa vẫn được nhập; camera 24/7 tự bật lại. |
-| NFR11 | Tài nguyên live có giới hạn | Một phiên khoảng 4,4 GB VRAM; job upload và live không chạy cùng lúc trên GPU 8 GB; bằng chứng khoảng 2,6 GB/giờ, giảm khoảng 80% sau khi bỏ bớt keyframe. |
+| NFR11 | Tài nguyên live có giới hạn | Mỗi tiến trình live riêng giữ khoảng 4,4 GB VRAM (phần lớn là CUDA context và bộ đệm allocator; PyTorch thực dùng khoảng 1,9 GB); job upload và live không chạy cùng lúc trên GPU 8 GB; bằng chứng khoảng 2,6 GB/giờ, giảm khoảng 80% sau khi bỏ bớt keyframe. |
+| NFR12 | Nhiều camera trên một GPU | RTX 4060 8 GB, host dùng chung: hai camera tốn VRAM như một (tối đa 6,9 GB toàn GPU), GPU bận 31–38%; 30 phút hai camera 24/7 bỏ 0,12–0,13% frame, lag p95 dưới 0,75 s; host tự thoát khi hết phiên. |
 
 Giới hạn upload có thể cấu hình; giới hạn 25 MP hiện được kiểm tra trong mã probe ảnh. Đây là các giới hạn đầu vào, không phải kết quả benchmark. Mục tiêu concurrency, p95 latency, thời gian phục hồi và accuracy cần chốt sau khi xác định phần cứng, dữ liệu và quy mô vận hành. Bản đầu vận hành một worker xử lý hàng đợi tuần tự; không diễn giải kiến trúc này là đã hỗ trợ nhiều worker đồng thời.
 
@@ -163,6 +178,10 @@ Giới hạn upload có thể cấu hình; giới hạn 25 MP hiện được ki
 | BR26 | Dọn bằng chứng không đụng track đã kiểm duyệt hoặc đã có cảnh báo; crop luôn được giữ khi bỏ bớt keyframe. |
 | BR27 | Mặc định job upload và phiên live không chạy cùng lúc trên một GPU; camera 24/7 làm job upload chờ đến khi tắt camera. |
 | BR28 | Ngưỡng `min_confidence` chỉ được hiệu chỉnh bằng nhãn độc lập; review trong ứng dụng không phải ground truth. |
+| BR29 | Chỉ Admin tạo camera demo; đường dẫn video phải nằm trong `PLATE_DATA_DIR/demo-videos` (resolve rồi so thư mục gốc), đúng đuôi video và tồn tại. |
+| BR30 | Nhãn lưu tách khỏi review; mỗi người một nhãn mỗi mẫu; `NULL` nghĩa là người gán cũng không đọc được. Báo cáo chỉ dùng mẫu mọi người gán đồng ý; mẫu bất đồng bị loại và có đếm riêng. Khi công bố kết quả phải ghi rõ nguồn nhãn (người hay AI). |
+| BR31 | Track nằm trong bộ mẫu không bị retention bỏ keyframe hay xóa; xóa bộ mẫu xóa nhãn nhưng giữ track. |
+| BR32 | Các phiên chạy đồng thời trong host dùng chung phải dùng cùng một pipeline. Phiên treo hoặc quá thời gian dừng làm cả host bị kill, vì không hủy riêng được một lời gọi model. |
 
 ## 6. Use case
 
@@ -328,6 +347,33 @@ Nguồn chỉnh sửa: [01-use-case.puml](diagrams/01-use-case.puml). Admin kế
 - **Hậu điều kiện:** Xóa hết phiên thì xóa được camera.
 - **Truy vết:** FR25; BR26; `DELETE /live-sessions/{id}`.
 
+### UC18 — Camera demo
+
+- **Actor:** Admin.
+- **Tiền điều kiện:** Đã đăng nhập; video đã được chép vào `PLATE_DATA_DIR/demo-videos`.
+- **Luồng chính:** (1) Xem danh sách video demo. (2) Tạo camera với `source_type = file` và đường dẫn video. (3) Bật phiên như UC14; video phát lại theo vòng lặp, PTS tăng liên tục nên tracking, lượt xuất hiện và watchlist hoạt động như luồng thật.
+- **Thay thế/lỗi:** User thường: 403. Đường dẫn ra ngoài thư mục, sai đuôi hoặc không tồn tại: 422.
+- **Hậu điều kiện:** Camera không có `embed_url`; client hiện khung hình mới nhất có biển số.
+- **Truy vết:** FR26; BR29; `GET /demo-videos`, `POST /stream-sources`.
+
+### UC19 — Gán nhãn độc lập
+
+- **Actor:** Admin (tạo bộ mẫu); User, Admin (gán nhãn).
+- **Tiền điều kiện:** Camera hoặc phiên đã có track live có confidence.
+- **Luồng chính:** (1) Admin tạo bộ mẫu, chọn số mẫu mỗi khoảng confidence. (2) Người gán mở bộ mẫu, nhận mẫu kế tiếp theo thứ tự xáo trộn riêng của mình, chỉ thấy 5 crop và một keyframe. (3) Gõ biển đọc được, chọn không đọc được, hoặc bỏ qua. (4) Quay lại để sửa nhãn vừa gán.
+- **Thay thế/lỗi:** User thường tạo bộ mẫu: 403. Camera chưa có track: 422. Biển không phải 2–16 chữ/số: 422.
+- **Hậu điều kiện:** Nhãn lưu trong `evaluation_labels`; track trong bộ mẫu được bảo vệ khỏi retention.
+- **Truy vết:** FR27; BR30, BR31; `/evaluation-sets`.
+
+### UC20 — Báo cáo hiệu chỉnh ngưỡng
+
+- **Actor:** Admin.
+- **Tiền điều kiện:** Bộ mẫu đã có nhãn.
+- **Luồng chính:** (1) Chọn precision mục tiêu và số nhãn tối thiểu mỗi mẫu. (2) Hệ thống tính precision/coverage theo từng ngưỡng trên mẫu đồng thuận, ngưỡng đề xuất, độ đồng thuận giữa người gán và độ chính xác theo khoảng. (3) Admin áp ngưỡng mới qua `min_confidence` khi bật phiên hoặc trong `auto_settings`.
+- **Thay thế/lỗi:** User thường: 403. Chưa có ngưỡng đạt mục tiêu: `recommended_threshold = null`.
+- **Hậu điều kiện:** Không thay đổi dữ liệu; `format=files` xuất dữ liệu cho `scripts.calibrate_threshold`.
+- **Truy vết:** FR28; BR28, BR30; `GET /evaluation-sets/{id}/report`.
+
 ## 7. Tiêu chí nghiệm thu nghiệp vụ
 
 Các tình huống dưới đây là tiêu chí để nghiệm thu hệ thống. Chúng không thay thế báo cáo chạy test và không khẳng định đã đo chất lượng OCR trên tập nhãn chuẩn.
@@ -352,6 +398,10 @@ Các tình huống dưới đây là tiêu chí để nghiệm thu hệ thống.
 | AC16 | Watchlist khớp biển đọc được | Cảnh báo đến người đặt; người khác (kể cả Admin không đặt) không nhận. | FR24; UC16 |
 | AC17 | Camera 24/7, worker bị kill rồi khởi động lại | Phiên cũ `interrupted`; worker tự bật phiên mới; dừng qua API thì 24/7 tắt và không bật lại. | FR21; UC14 |
 | AC18 | Dọn dữ liệu và xóa phiên | Keyframe giảm còn 1/track, crop còn; track đã review/có cảnh báo được giữ; xóa phiên đang chạy bị 409. | FR25; UC17 |
+| AC19 | Camera demo | Admin tạo được, User thường bị 403, đường dẫn `../` bị 422; phiên phát lại liên tục qua nhiều vòng, watchlist cảnh báo khi clip lặp lại. | FR26; UC18 |
+| AC20 | Gán nhãn mù | Mẫu trả về không chứa biển máy đọc, confidence hay review; hai người gán song song; sửa được nhãn; track trong bộ mẫu không bị retention xóa. | FR27; UC19 |
+| AC21 | Báo cáo ngưỡng | Mẫu bất đồng bị loại; số liệu khớp `scripts.calibrate_threshold` trên cùng dữ liệu; User thường bị 403. | FR28; UC20 |
+| AC22 | Hai camera cùng lúc | Một host cho cả hai phiên; dừng một phiên không ảnh hưởng phiên kia; host crash thì các phiên `failed`; kill worker thì camera 24/7 tự bật lại. | FR29; UC14 |
 
 Với nghiệm thu low-resolution, cần thêm tập ground truth độc lập, danh sách split và cấu hình thiết bị. Báo cáo riêng chất lượng OCR trên crop và chất lượng toàn pipeline; checkpoint đã chạy được không đồng nghĩa đã đạt accuracy mục tiêu. Các yêu cầu tương lai về OCR ảnh đơn, SR, client hoàn chỉnh hoặc vận hành đa worker cần được bổ sung thành phạm vi và tiêu chí riêng trước khi nghiệm thu.
 
@@ -359,5 +409,6 @@ Với nghiệm thu low-resolution, cần thêm tập ground truth độc lập, 
 
 - [Hợp đồng API](../API.md), [hướng dẫn OCR](../OCR_KAGGLE.md), [tích hợp model](../MODEL_INTEGRATION.md), [đánh giá offline](../EVALUATION.md).
 - Mã nguồn: `src/auth/auth.controller.ts`, `src/common/ownership.ts`, `src/media/media.controller.ts`, `src/jobs/jobs.controller.ts`, `src/results/results.controller.ts`, `src/worker.ts`.
-- Schema thực: `src/database/migrations/0001_business.sql` đến `0006_live_ops.sql`; thiết kế DB chi tiết nằm ở phần DB của bộ tài liệu này.
-- Live: `src/live/` (camera, phiên, manager, ingest, SSE hub, watchlist, retention), `app/live/` (tiến trình live), kết quả đo trong [TESTING.md](../../TESTING.md).
+- Schema thực: `src/database/migrations/0001_business.sql` đến `0008_evaluation.sql`; thiết kế DB chi tiết nằm ở phần DB của bộ tài liệu này.
+- Live: `src/live/` (camera, phiên, manager, host dùng chung, ingest, SSE hub, watchlist, retention), `app/live/` (tiến trình live và host), kết quả đo trong [TESTING.md](../../TESTING.md).
+- Gán nhãn: `src/evaluation/` (lấy mẫu, controller, báo cáo), quy trình trong [EVALUATION.md](../EVALUATION.md).

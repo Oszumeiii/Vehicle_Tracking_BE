@@ -10,7 +10,7 @@ skinparam classBackgroundColor #F8FAFC
 skinparam classBorderColor #475569
 skinparam ArrowColor #64748B
 hide circle
-title ERD — 12 bảng nghiệp vụ PostgreSQL
+title ERD — 15 bảng nghiệp vụ PostgreSQL
 
 entity "users" as users {
   * id <<PK>>
@@ -55,6 +55,23 @@ entity "plate_watchlist" as watchlist {
   * owner_id <<FK>>
   * plate <<UQ theo owner>>
 }
+entity "evaluation_sets" as esets {
+  * id <<PK>>
+  * created_by <<FK>>
+  stream_source_id / live_session_id <<FK>>
+  * params
+}
+entity "evaluation_items" as eitems {
+  * id <<PK>>
+  * set_id <<FK>>
+  * job_id <<FK, UQ theo set>>
+  * bin
+}
+entity "evaluation_labels" as elabels {
+  * item_id <<PK, FK>>
+  * labeler_id <<PK, FK>>
+  plate_text (NULL = không đọc được)
+}
 entity "plate_appearances" as appearances {
   * id <<PK>>
   * job_id <<FK>>
@@ -87,6 +104,11 @@ cameras ||--o{ live : phiên chạy
 live ||--o{ events : lịch sử
 live |o--o{ jobs : một job / track
 users ||--o{ watchlist : theo dõi
+users ||--o{ esets : tạo
+esets ||--o{ eitems : gồm
+jobs ||--o{ eitems : được lấy mẫu
+eitems ||--o{ elabels : được gán
+users ||--o{ elabels : gán nhãn
 jobs ||--o{ appearances : tạo kết quả
 appearances ||--o{ detections : có bằng chứng
 appearances ||--o{ reviews : được kiểm duyệt

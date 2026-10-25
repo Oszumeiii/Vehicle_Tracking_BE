@@ -76,6 +76,16 @@ Mỗi track được nhập trong một transaction gồm: job `succeeded`, appe
 
 **Khôi phục:** worker khởi động lại chuyển các phiên đang hoạt động sang `interrupted` và nhập các track còn trên đĩa; trên Windows tiến trình live bị kill theo worker nên track đang mở dở bị mất. Camera 24/7 được bật phiên mới ở lượt kế tiếp.
 
+**Host dùng chung (nhiều camera).** Với `PLATE_LIVE_MAX_SESSIONS > 1`, `SharedLiveHost` thay cho việc spawn từng tiến trình nhưng giữ đúng giao diện một "tiến trình con" cho mỗi phiên: stdout của phiên nhận các event mang `session` của nó, dòng `stop` trên stdin của phiên thành lệnh `{"cmd":"stop"}` gửi host, và phiên đóng khi host báo `exit`. Nhờ vậy luồng ở trên không đổi. Host bật khi phiên đầu tiên được nhận và thoát khi phiên cuối kết thúc. Phiên mới tạo đúng lúc host cũ đang thoát sẽ chờ host mới. Watchdog hoặc quá thời gian dừng thì kill cả host; các phiên còn lại kết thúc như tiến trình thoát bất thường.
+
+### 8.7. Gán nhãn độc lập và báo cáo ngưỡng — UC19, UC20
+
+![Sequence gán nhãn](diagrams/20-seq-labeling.png)
+
+Nguồn chỉnh sửa: [20-seq-labeling.puml](diagrams/20-seq-labeling.puml).
+
+Tạo bộ mẫu là một transaction: chèn `evaluation_sets` và các `evaluation_items` đã lấy mẫu. `next` chỉ đọc; thứ tự riêng của mỗi người gán là `md5(labeler_id || item_id)`, nên ổn định giữa các lần mở và khác nhau giữa người gán. Ảnh bằng chứng đi qua route của bộ mẫu (theo thứ tự detection), không lộ id detection hay kết quả. Gán nhãn là một `INSERT … ON CONFLICT (item_id, labeler_id) DO UPDATE`, nên sửa nhãn không cần khóa. Báo cáo gom nhãn theo mẫu bằng `json_agg` rồi tính trong API; không ghi dữ liệu.
+
 ## 11. Thiết kế API nghiệp vụ
 
 ### 11.1. Quy ước chung
@@ -164,6 +174,23 @@ Quyền đi theo chủ camera; Admin xem tất cả. Track live là job nên API
 | API37 | `DELETE /watchlist/{id}` | ID | `204` | UC16 |
 | API38 | `GET /sightings/{id}/results` | ID lượt, phân trang | `200` các track của một lượt xuất hiện | UC08 |
 
+### 11.7. Danh mục 10 endpoint demo và gán nhãn
+
+| Mã | Method và đường dẫn | Input chính | Kết quả thành công | Use case |
+|---|---|---|---|---|
+| API39 | `GET /demo-videos` | — (Admin) | `200` video trong `demo-videos`; User `403` | UC18 |
+| API40 | `POST /evaluation-sets` | `name`, `stream_source_id` hoặc `live_session_id`, `per_bin?` (Admin) | `201` bộ mẫu kèm tiến độ; chưa có track `422` | UC19 |
+| API41 | `GET /evaluation-sets` | — | `200` các bộ mẫu kèm `items`, `labelled_items`, `labelers`, `my_labels` | UC19 |
+| API42 | `GET /evaluation-sets/{id}` | ID | `200` một bộ mẫu | UC19 |
+| API43 | `DELETE /evaluation-sets/{id}` | ID (Admin) | `204`; xóa nhãn, giữ track | UC19 |
+| API44 | `GET /evaluation-sets/{id}/next` | `exclude?` | `200` `{remaining, item}`; item chỉ có crop/keyframe và nhãn của mình | UC19 |
+| API45 | `GET /evaluation-sets/{id}/items/{item}` | ID | `200` một mẫu (để sửa) | UC19 |
+| API46 | `PUT /evaluation-sets/{id}/items/{item}/label` | `plate_text` hoặc `null` | `200` nhãn của mình | UC19 |
+| API47 | `GET /evaluation-sets/{id}/items/{item}/artifacts/{order}/{kind}` | thứ tự detection, `crop`/`frame` | `200` ảnh | UC19 |
+| API48 | `GET /evaluation-sets/{id}/report` | `target?`, `min_labels?`, `format?` (Admin) | `200` bảng ngưỡng, ngưỡng đề xuất, đồng thuận, độ chính xác theo khoảng | UC20 |
+
+API22 nhận thêm dạng camera demo `{name, source_type: "file", path}` (Admin). Tổng cộng 48 endpoint v2.
+
 API17 bổ sung bộ lọc `origin`, `stream_source_id`, `live_session_id`, `captured_from/to`, `confidence_status`, `exclude_duplicates` và `group_by=sighting`. Stream SSE gửi sự kiện bền vững có `id` (`status`, `error`, `track_rejected`, `track`, `alert`), sự kiện `session` (trạng thái và stats, không có id), heartbeat và `end` khi phiên được lọc kết thúc. `EventSource` của trình duyệt không gửi được header Bearer nên client đọc stream bằng `fetch`. Mỗi tiến trình API mở tối đa `PLATE_SSE_MAX_CLIENTS` stream (`503` khi vượt).
 
 ### 11.4. Endpoint vận hành
@@ -227,6 +254,10 @@ Các tình huống dưới đây là tiêu chí có thể thực hiện lại; m
 | AT25 | Camera 24/7, kill worker, dừng qua API | Tự bật lại; dừng thì tắt 24/7; không còn tiến trình con | UC14; FR21 |
 | AT26 | Kẹt mạng 12 s; chạy job upload khi camera chạy | Đuổi kịp không bỏ frame; job upload chờ đến khi GPU rảnh | NFR09, NFR11; BR27 |
 | AT27 | Dọn dữ liệu, xóa phiên | Còn 1 keyframe/track, crop còn; track review/cảnh báo được giữ; phiên đang chạy 409 | UC17; FR25 |
+| AT28 | Camera demo: Admin, User, đường dẫn `../`, file không tồn tại; chạy qua nhiều vòng | 201/403/422/422; PTS liên tục, watchlist cảnh báo khi clip lặp | UC18; FR26; BR29 |
+| AT29 | Bộ mẫu: lấy mẫu phân tầng, `next` không lộ kết quả máy, sửa nhãn, retention | Mỗi khoảng tối đa N mẫu; key trả về chỉ gồm evidence; nhãn ghi đè; track trong bộ mẫu không bị xóa | UC19; FR27; BR30–BR31 |
+| AT30 | Báo cáo trên nhãn có đồng thuận và bất đồng | Mẫu bất đồng bị loại; số liệu khớp `scripts.calibrate_threshold`; User 403 | UC20; FR28 |
+| AT31 | Hai camera 24/7 trong 30 phút; kill worker; dừng cả hai | Một host; bỏ frame dưới 1%; tự bật lại; host thoát và nhả GPU | UC14; FR29; NFR12 |
 
 ### 13.2. Ma trận liên kết yêu cầu với thành phần thực hiện
 
@@ -245,6 +276,9 @@ Các tình huống dưới đây là tiêu chí có thể thực hiện lại; m
 | FR19–FR22: camera, phiên, track live | API22–API33 | stream_sources, live_sessions, recognition_jobs (live) | `tests/live.test.ts`, `tests/live-ops.test.ts`, `tests/test_live.py` |
 | FR23–FR24: SSE, watchlist | API34–API37 | live_session_events, plate_watchlist | `tests/live-events.test.ts`, `tests/db.test.ts` |
 | FR25, NFR09–NFR11: vận hành live | API25, API32, API38 | sighting_id, evidence_bytes, retention | `tests/live-ops.test.ts`, [TESTING.md](../../TESTING.md) (đo trên luồng thật) |
+| FR26: camera demo | API22, API39 | stream_sources (`source_type = file`) | `tests/live.test.ts`, `tests/test_live.py` |
+| FR27–FR28: gán nhãn, báo cáo ngưỡng | API40–API48 | evaluation_sets, evaluation_items, evaluation_labels | `tests/evaluation.test.ts` |
+| FR29, NFR12: nhiều camera | API28 (qua worker) | live_sessions | `tests/live-host.test.ts`, `tests/live.test.ts`, `tests/test_live_host.py`, [TESTING.md](../../TESTING.md) |
 
 ### 13.3. Mức bằng chứng kiểm thử đã có
 
@@ -252,7 +286,7 @@ Baseline đã ghi nhận trong các lượt triển khai là **48 test Node và 
 
 Test Node dùng NestJS/HTTP và PostgreSQL thật trong DB/cluster tạm; nhiều kết quả ML hoàn tất được tạo bằng fixture để kiểm quyền, transaction và hợp đồng. Test adapter/runner kiểm số frame, preprocessing, output và lỗi nhưng không đo accuracy. Đã ghi nhận smoke inference checkpoint/video thực trong quá trình tích hợp; smoke chứng minh đường chạy thực hiện được trên mẫu đó, không chứng minh chất lượng toàn tập hoặc khả năng tổng quát sang biển số Việt Nam.
 
-Sau khi bổ sung live (giai đoạn 1–5a), lượt chạy gần nhất ghi nhận **64 test Node và 112 test Python đạt** cùng format check; các phép đo trên luồng YouTube thật (60 phút, kẹt mạng, 24/7, dọn dữ liệu, giờ luồng) được ghi trong [TESTING.md](../../TESTING.md) kèm ngày và phần cứng.
+Sau khi bổ sung live (giai đoạn 1–5a), lượt chạy ghi nhận **64 test Node và 112 test Python đạt** cùng format check. Sau giai đoạn 6 (camera demo, gán nhãn, nhiều camera), lượt chạy ngày 25/10/2026 ghi nhận **69 test Node và 118 test Python đạt**; các phép đo trên luồng YouTube thật (60 phút, kẹt mạng, 24/7, dọn dữ liệu, giờ luồng) được ghi trong [TESTING.md](../../TESTING.md) kèm ngày và phần cứng.
 
 Để tái lập xác minh kỹ thuật, dùng [TESTING_NEST.md](../TESTING_NEST.md) và lệnh trong [README](../../README.md). Cần lưu commit, dependency, cấu hình, phần cứng, ngày chạy và log từng đợt nếu dùng các con số này trong báo cáo nghiệm thu. Sau một thay đổi runtime mới, chỉ báo test là hiện hành khi đã chạy lại phạm vi chịu ảnh hưởng.
 
@@ -287,8 +321,9 @@ Model đang phục vụ biển số Brazil. Dữ liệu Việt Nam cần tập �
 | [runner.py](../../app/recognition/runner.py), [icpr_adapter.py](../../app/recognition/icpr_adapter.py), [icpr_model.py](../../app/recognition/icpr_model.py) | Tích hợp ML, preprocessing và inference joint-five hiện hành. |
 | [results.controller.ts](../../src/results/results.controller.ts) | Prediction detail, thứ tự detection_ids, review/revision, latest succeeded search và CSV. |
 | [video_tracking.py](../../app/recognition/video_tracking.py), [icpr_adapter.py](../../app/recognition/icpr_adapter.py), [ctc_decoders.py](../../app/recognition/ctc_decoders.py) | Tracking, chọn 5 crop, model OCR và decoder port từ notebook. |
-| [0001_business.sql](../../src/database/migrations/0001_business.sql), [0002_joint_ocr.sql](../../src/database/migrations/0002_joint_ocr.sql), [0003_ocr_decoding.sql](../../src/database/migrations/0003_ocr_decoding.sql) đến [0006_live_ops.sql](../../src/database/migrations/0006_live_ops.sql) | Schema và ràng buộc vật lý; nguồn chính cho phần thiết kế DB. |
-| [src/live](../../src/live), [app/live](../../app/live) | Camera, phiên, live manager, nhập track, SSE hub, watchlist, dọn dữ liệu; tiến trình live (yt-dlp, ffmpeg, Pacer, giờ luồng). |
+| [0001_business.sql](../../src/database/migrations/0001_business.sql), [0002_joint_ocr.sql](../../src/database/migrations/0002_joint_ocr.sql), [0003_ocr_decoding.sql](../../src/database/migrations/0003_ocr_decoding.sql) đến [0008_evaluation.sql](../../src/database/migrations/0008_evaluation.sql) | Schema và ràng buộc vật lý; nguồn chính cho phần thiết kế DB. |
+| [src/live](../../src/live), [app/live](../../app/live) | Camera, phiên, live manager, host dùng chung, nhập track, SSE hub, watchlist, dọn dữ liệu; tiến trình live và host (yt-dlp, ffmpeg, Pacer, giờ luồng). |
+| [src/evaluation](../../src/evaluation), [EVALUATION.md](../EVALUATION.md) | Lấy mẫu phân tầng, gán nhãn mù, báo cáo hiệu chỉnh ngưỡng. |
 | [main.ts](../../src/main.ts), [app.module.ts](../../src/app.module.ts), [http.ts](../../src/common/http.ts) | Bootstrap, Swagger, response headers, health và ánh xạ lỗi. |
 | [API.md](../API.md), [MODEL_INTEGRATION.md](../MODEL_INTEGRATION.md), [OCR_KAGGLE.md](../OCR_KAGGLE.md), [OPERATIONS.md](../OPERATIONS.md) | Hướng dẫn tích hợp/vận hành hỗ trợ; đối chiếu với mã nguồn khi có khác biệt. |
 | [Notebook PBL6 PIPELINE](https://www.kaggle.com/code/trnvnhun/pbl6-pipeline) | Nguồn pipeline, model, preprocessing và decoder; đã đối chiếu checksum checkpoint với báo cáo lần chạy 13/10/2026; không dùng chỉ số trong notebook như accuracy của backend. Provenance cục bộ ở [icpr-source.json](../../models/icpr-source.json). |
@@ -302,8 +337,8 @@ Các sơ đồ PlantUML và SVG đi kèm là sản phẩm mô hình hóa mã ngu
 3. **Một worker và filesystem riêng.** Advisory lock chủ động giới hạn một worker trên DB. Chưa có hàng đợi phân tán, object storage, scale nhiều worker hoặc cơ chế tự reconcile mọi crash giữa DB/file.
 4. **Readiness có phạm vi.** Health kiểm DB/schema, pipelines.ready kiểm file/config/checksum; chỉ job thực mới kiểm được toàn runtime/model/thiết bị. Chưa có endpoint xác nhận heartbeat worker đang sống.
 5. **Đánh giá chất lượng còn tách riêng.** Test và smoke không thay ground truth độc lập; chưa xác nhận accuracy Việt Nam, SLA hoặc tải đồng thời production.
-6. **Live trên một GPU.** Mỗi phiên khoảng 4,4 GB VRAM nên GPU 8 GB chỉ chạy một camera, và job upload phải chờ khi camera chạy. Chất lượng phụ thuộc băng thông (1080p cần khoảng 4 Mbit/s). Nhãn `readable` dựa trên ngưỡng 0.85 chưa hiệu chỉnh bằng nhãn độc lập; lượt xuất hiện là gợi ý theo chuỗi đọc được.
-7. **Phạm vi nghiệp vụ giới hạn.** Chưa có camera CCTV/RTSP, bãi xe, chủ phương tiện, xử phạt, hủy job, chia sẻ dữ liệu, public signup, email reset, giao diện đầy đủ hoặc SR. Đây không phải các API bị bỏ sót trong 38 endpoint hiện có.
+6. **Live trên một GPU.** Host dùng chung cho phép hai camera trên GPU 8 GB (đo được); chưa thử ba camera trở lên. Job upload phải chờ khi có camera chạy. Hai luồng 1080p tranh CPU trong cùng tiến trình có thể bỏ khoảng 2–3% frame. Chất lượng phụ thuộc băng thông (1080p cần khoảng 4 Mbit/s). Nhãn `readable` dựa trên ngưỡng 0.85; công cụ hiệu chỉnh đã có nhưng cần nhãn của người gán độc lập; lượt xuất hiện là gợi ý theo chuỗi đọc được.
+7. **Phạm vi nghiệp vụ giới hạn.** Chưa có camera CCTV/RTSP, bãi xe, chủ phương tiện, xử phạt, hủy job, chia sẻ dữ liệu, public signup, email reset, giao diện đầy đủ hoặc SR. Đây không phải các API bị bỏ sót trong 48 endpoint hiện có.
 
 ### 14.3. Thứ tự mở rộng đề xuất
 

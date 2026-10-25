@@ -11,8 +11,8 @@ node "Host ứng dụng (1 GPU)" {
   artifact "NestJS API\nnpm start\nSSE hub" as api
   artifact "Node worker\nnpm run worker\nlive manager, dọn dữ liệu" as worker
   artifact "Python environment\nCUDA" as python
-  artifact "python -m app.live\n+ ffmpeg (imageio-ffmpeg)" as live
-  folder "Storage data" as storage
+  artifact "python -m app.live [--host]\n+ ffmpeg (imageio-ffmpeg)" as live
+  folder "Storage data\n(+ demo-videos)" as storage
   folder "app/recognition\nProfile và checkpoint" as model
 }
 node "PostgreSQL host\nCó thể cùng máy" {
@@ -32,5 +32,7 @@ python --> model : Snapshot và checksum
 note bottom of worker
   PLATE_LIVE_EXCLUSIVE_GPU: job upload và
   phiên live không chạy cùng lúc trên GPU 8 GB.
+  PLATE_LIVE_MAX_SESSIONS >= 2: các phiên chạy
+  trong một host dùng chung model (2 camera / 8 GB).
 end note
 @enduml
