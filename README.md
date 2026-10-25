@@ -118,6 +118,15 @@ Lưu ý khi vận hành:
 - `captured_from/to` là giờ nhận frame, chỉ xấp xỉ giờ thật.
 - `GET /api/v2/recognition-jobs` mặc định chỉ liệt kê job upload; dùng `origin=live|all` để xem job live.
 - Worker chạy tối đa `PLATE_LIVE_MAX_SESSIONS` phiên (mặc định 1; 0 là tắt live).
+- **Nhiều camera cùng lúc** (`PLATE_LIVE_MAX_SESSIONS=2` trở lên):
+  - Các phiên chạy chung một tiến trình `python -m app.live --host`, với một bản detector và OCR. Model được gọi lần lượt; giải mã, tracking và ghi bằng chứng chạy song song.
+  - Đo trên RTX 4060 8 GB: hai camera tốn VRAM như một (PyTorch khoảng 1,9 GB), GPU bận 35–38%. Khi chạy hai tiến trình riêng thì cũng 8 GB này bị tràn.
+  - Host bật cùng phiên đầu tiên và tắt sau phiên cuối, nên GPU được nhả cho job upload (`PLATE_LIVE_EXCLUSIVE_GPU` vẫn áp dụng).
+  - Mọi phiên chạy đồng thời phải dùng cùng một pipeline.
+  - Lỗi của một phiên không ảnh hưởng phiên kia. Nhưng phiên bị treo hoặc quá thời gian dừng thì cả host bị kill; các phiên trong đó kết thúc `failed`, và camera 24/7 tự bật lại.
+  - `PLATE_LIVE_SHARED_SAMPLING_SCALE` (mặc định 1) giảm tần suất lấy mẫu của detector nếu GPU quá tải. Hệ số này được ghi ở `stats.sampling_scale` và `statistics.sampling_scale` của từng track.
+  - Hai luồng 1080p tranh CPU trong cùng tiến trình nên có thể bỏ khoảng 2–3% frame; dùng `max_height: 720` cho camera YouTube thứ hai thì giảm còn 0,2–0,4%.
+  - Log của host nằm ở `data/live/host.log`.
 - **Job upload và phiên live không chạy cùng lúc** (`PLATE_LIVE_EXCLUSIVE_GPU=true`, mặc định). Lý do: trên GPU 8 GB, hai tiến trình cùng nạp YOLO11l và OCR làm tràn VRAM, và cả hai gần như đứng hẳn (đo được: job 3 phút mất 19 phút thay vì 2 phút, phiên live ngừng xử lý). Khi một phiên live đang chạy, job upload chờ ở `queued`; khi job upload đang chạy, phiên mới chờ ở `queued`. Chỉ đặt `false` khi GPU đủ VRAM cho cả hai.
 - Tiến trình live không phát sự kiện nào trong `PLATE_LIVE_STALL_SECONDS` (mặc định 180) thì bị kill, phiên chuyển `failed`/`LIVE_STALLED`.
 - Dừng worker bằng Ctrl+C: phiên chốt track đang mở rồi chuyển `interrupted`. Worker bị kill đột ngột: trên Windows, tiến trình live bị kill theo (không còn tiến trình GPU mồ côi), nên track đang mở dở bị mất; track đã chốt thì đã nằm trong DB. Lần khởi động sau, phiên chuyển `interrupted` và track còn trên đĩa được nhập. Phiên không tự chạy lại; bật phiên mới.

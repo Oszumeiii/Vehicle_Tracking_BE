@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createInterface } from 'node:readline';
 import { after, before, test } from 'node:test';
 import request from 'supertest';
 import type { INestApplication } from '@nestjs/common';
 import { createApp } from '../src/main';
 import { workerOptions } from '../src/recognition/engine';
 import { GpuGate, LiveManager } from '../src/live/manager';
+import { SharedLiveHost } from '../src/live/host';
 import { seedUser, startTestDatabase, TestDatabase } from './helpers';
 import {
   Fake,
@@ -413,6 +415,81 @@ test('live manager runs a session, ingests tracks as jobs and stops on request',
 
   await api.delete(`/api/v2/recognition-jobs/${jobs[1].id}`).set(as('owner')).expect(204);
   assert.ok(!(await exists(join(dataDir, 'recognition', jobs[1].id))));
+});
+
+test('with several sessions allowed, sessions share one host process and end independently', async () => {
+  const hosts: { args: string[]; child: Fake; commands: any[] }[] = [];
+  const shared = new SharedLiveHost(
+    (_python, args) => {
+      const child = fakeChild();
+      const entry = { args, child, commands: [] as any[] };
+      createInterface({ input: child.stdin as unknown as NodeJS.ReadableStream }).on(
+        'line',
+        (line) => entry.commands.push(JSON.parse(line)),
+      );
+      hosts.push(entry);
+      return child;
+    },
+    dataDir,
+    0.5,
+  );
+  const live = new LiveManager(
+    fixture.database,
+    { ...workerOptions(), python: process.execPath },
+    { maxSessions: 2, statsSeconds: 0.05, stopSeconds: 5, stallSeconds: 60, exclusiveGpu: true },
+    shared.spawn,
+  );
+  const first = await session((await camera('host-1')).id);
+  const second = await session((await camera('host-2')).id);
+  await live.tick();
+  await until(
+    async () => hosts[0]?.commands.length ?? 0,
+    (n) => n === 2,
+    'two start commands',
+  );
+  assert.equal(hosts.length, 1);
+  assert.ok(hosts[0].args.includes('--host'));
+  assert.deepEqual(hosts[0].commands.map((c) => c.session).sort(), [first.id, second.id].sort());
+  const host = hosts[0].child;
+  for (const s of [first, second]) {
+    await writeTrack(s.id, 'e000-t000001', { text: s === first ? 'HOS1111' : 'HOS2222' });
+    host.line({ type: 'status', status: 'running', epoch: 0, session: s.id });
+    host.line({ type: 'stats', frames_read: 30, sampling_scale: 0.5, session: s.id });
+    host.line({ type: 'track', track: 'e000-t000001', epoch: 0, session: s.id });
+  }
+  for (const s of [first, second])
+    await until(
+      () => sessionRow(s.id),
+      (row) =>
+        row.status === 'running' && row.tracks_count === 1 && row.stats?.sampling_scale === 0.5,
+      'both sessions running with a track',
+    );
+
+  await api.post(`/api/v2/live-sessions/${first.id}/stop`).set(as('owner')).expect(202);
+  await live.tick();
+  await until(
+    async () => hosts[0].commands.at(-1),
+    (c) => c?.cmd === 'stop' && c.session === first.id,
+    'stop command',
+  );
+  host.line({ type: 'status', status: 'stopped', session: first.id });
+  host.line({ type: 'exit', code: 0, session: first.id });
+  await until(
+    () => sessionRow(first.id),
+    (row) => row.status === 'stopped',
+    'first stopped',
+  );
+  assert.equal((await sessionRow(second.id)).status, 'running');
+  assert.equal(live.active, 1);
+
+  host.exit(1); // the host crashes: its remaining session fails like an exited process
+  const failed = await until(
+    () => sessionRow(second.id),
+    (row) => row.status === 'failed',
+    'second failed',
+  );
+  assert.equal(failed.error_code, 'LIVE_PROCESS_EXITED');
+  assert.equal(live.active, 0);
 });
 
 test('a crashed live process fails its session; worker restart and shutdown interrupt sessions but keep tracks', async () => {

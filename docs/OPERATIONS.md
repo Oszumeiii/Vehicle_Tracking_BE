@@ -90,12 +90,12 @@ Job lỗi trả `error_code` và thông báo an toàn. Chi tiết phía server n
 - `WORKER_INTERRUPTED`: worker dừng trước khi hoàn tất.
 - `RESULT_INVALID`: đầu ra không đáp ứng hợp đồng; xem log và adapter.
 
-Phiên live lỗi có `error_code` trên `GET /api/v2/live-sessions/{id}`. Chi tiết nằm ở `PLATE_DATA_DIR/live/{session_id}/live.log` và `GET /api/v2/live-sessions/{id}/events`.
+Phiên live lỗi có `error_code` trên `GET /api/v2/live-sessions/{id}`. Chi tiết nằm ở `PLATE_DATA_DIR/live/{session_id}/live.log` và `GET /api/v2/live-sessions/{id}/events`. Khi `PLATE_LIVE_MAX_SESSIONS` lớn hơn 1, các phiên chạy chung một host: traceback và log chẩn đoán của host nằm ở `PLATE_DATA_DIR/live/host.log`. Host thoát bất thường thì mọi phiên trong đó cùng chuyển `failed`/`LIVE_PROCESS_EXITED`.
 
 - `STREAM_FAILED`: kết nối lại thất bại quá số lần cho phép.
 - `LIVE_PROCESS_EXITED`: tiến trình live thoát bất thường.
 - `AUTO_RESTART_FAILED` (event trên phiên gần nhất của camera 24/7): không dựng được snapshot pipeline để bật lại; worker thử lại sau 1, 2, 4… tối đa 30 phút.
-- `LIVE_STALLED`: tiến trình live không báo gì trong `PLATE_LIVE_STALL_SECONDS` và đã bị kill. Nguyên nhân thường gặp: GPU hết VRAM vì có tiến trình khác dùng chung.
+- `LIVE_STALLED`: tiến trình live không báo gì trong `PLATE_LIVE_STALL_SECONDS` và đã bị kill. Nguyên nhân thường gặp: GPU hết VRAM vì có tiến trình khác dùng chung. Với host dùng chung, cả host bị kill, vì một lần gọi model bị treo không thể hủy riêng cho một phiên.
 - `WORKER_INTERRUPTED`: worker dừng hoặc khởi động lại giữa phiên.
 - Các mã khởi động (`CHECKPOINT_MISSING`, `ENVIRONMENT_ERROR`, `CUDA_*`, `PIPELINE_FAILED`): giống job upload.
 

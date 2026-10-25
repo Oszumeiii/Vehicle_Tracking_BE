@@ -200,3 +200,31 @@ Chạy API của nhánh trên một bản sao DB thật (`pg_dump` sang cụm Po
 - **Báo cáo:** bảng ngưỡng, biểu đồ có tooltip, độ đồng thuận và độ chính xác theo khoảng hiện đúng. Mẫu bất đồng bị loại.
 - **Đối chiếu chéo:** dữ liệu đồng thuận của test tự động cho cùng kết quả ở báo cáo TS và `scripts.calibrate_threshold`: ngưỡng đề xuất 0,88; ngưỡng 0,5 có 5 track readable, 3 đúng.
 - **Mobile 390 px:** crop xếp 2 cột; 0 lỗi console.
+
+## Nghiệm thu nhiều camera trên một GPU (2026-10-25)
+
+RTX 4060 Laptop 8 GB, Ryzen 7 7735HS. Ứng dụng khác đã chiếm khoảng 1,3–1,9 GB VRAM.
+
+**Đo trước khi refactor:** một tiến trình, hai `LiveRunner` dùng chung detector và OCR qua một lock. Mỗi cấu hình 3 phút; luồng YouTube Camboriú cùng camera file (`camboriu.mp4`, 1080p30).
+
+| Cấu hình | VRAM tổng / PyTorch | GPU | Frame bỏ YouTube / file |
+|---|---|---|---|
+| 1 luồng 1080p | 6,59 / 1,90 GB | 21% | 0,4% |
+| 2 luồng, sampling gốc | 6,58 / 1,93 GB | 35% | 0,64% / 2,75% |
+| 2 luồng, sampling ×0,5 | 6,59 / 1,93 GB | 22% | 2,44% / 3,18% |
+| 2 luồng, YouTube 720p, ×0,5 | 6,74 / 1,93 GB | 31% | 0,24% / 1,88% |
+| 2 luồng, YouTube 720p, sampling gốc (5 phút) | 6,76 / 1,93 GB | 38% | 0,4% / 1,89% |
+
+**Kết luận:**
+- **VRAM:** dùng chung model thì hai luồng tốn VRAM như một. Con số khoảng 4,4 GB mỗi phiên trước đây phần lớn là CUDA context và bộ đệm allocator của từng tiến trình.
+- **GPU không phải nút thắt**, nên giảm sampling không giảm frame bỏ. Mặc định `PLATE_LIVE_SHARED_SAMPLING_SCALE=1`, không làm giảm độ chính xác.
+- **Frame bỏ còn lại** do hai luồng tranh CPU trong cùng tiến trình; đọc 720p giúp giảm.
+
+**Chạy thật qua worker** (`PLATE_LIVE_MAX_SESSIONS=2`, DB Docker của dự án, khoảng 11h sáng giờ Brazil): camera YouTube (720p) và camera demo cùng ở chế độ 24/7.
+- **30 phút**, cả hai `running` suốt trong một host:
+  - YouTube: 365 track, bỏ 0,12% frame, lag p95 0,73 s;
+  - demo: 20 track, bỏ 0,13%, lag p95 0,59 s;
+  - VRAM tối đa 6,9 GB, GPU trung bình 31%.
+- **Kill worker đột ngột:** không còn tiến trình `python`/`ffmpeg` sót. Khởi động lại thì hai phiên cũ chuyển `interrupted` (giữ nguyên 366 và 20 track), và hai phiên mới tự bật lại sau khoảng 1 phút, chung một host.
+- **Dừng cả hai:** host tự thoát (0 tiến trình `python`, VRAM về 1,3 GB), GPU được nhả cho job upload.
+- **Lưu ý:** khi hai phiên khởi động cùng lúc, phiên thứ hai có thể bỏ frame trong khoảng 20 s đầu (lần đo: 77/610) do chờ warm-up model của phiên kia.

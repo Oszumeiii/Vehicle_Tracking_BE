@@ -94,13 +94,21 @@ class DuplicateLinker:
 class LiveRunner:
     def __init__(self, snapshot, out, open_source, emit, model, recognizer, *, data_dir=None,
                  min_confidence=.85, max_track_seconds=30., max_reconnects=10, read_timeout=15.,
-                 stats_interval=1., buffer_seconds=1.5, reader_capacity=None, backoff_max=30., exclude_zones=()):
+                 stats_interval=1., buffer_seconds=1.5, reader_capacity=None, backoff_max=30., exclude_zones=(),
+                 sampling_scale=1.):
         if snapshot.get("recognizer", {}).get("input_mode") != "five_frame_joint":
             raise ValueError("Live recognition supports five_frame_joint pipelines only")
         self.exclude_zones = [list(map(float, zone)) for zone in exclude_zones]
         if any(len(z) != 4 or not 0 <= z[0] < z[2] <= 1 or not 0 <= z[1] < z[3] <= 1 for z in self.exclude_zones):
             raise ValueError("Exclude zones must be normalized [x1, y1, x2, y2] rectangles")
         self.snapshot, self.out, self.open_source, self.emit = snapshot, out, open_source, emit
+        # Sessions sharing one GPU sample fewer frames for the detector; recorded with each track.
+        if not 0 < sampling_scale <= 1:
+            raise ValueError("sampling_scale must be in (0, 1]")
+        self.sampling_scale = sampling_scale
+        self.tracking_snapshot = snapshot if sampling_scale == 1 else {
+            **snapshot, "sampling": {key: value * sampling_scale if key.endswith("_fps") else value
+                                     for key, value in snapshot["sampling"].items()}}
         self.model, self.recognizer = model, recognizer
         self.data_dir = data_dir or out
         self.min_confidence, self.max_track_seconds = min_confidence, max_track_seconds
@@ -151,7 +159,7 @@ class LiveRunner:
         return status
 
     def _run_epoch(self, epoch, info, connection, stop):
-        cfg = {**tracking_config(info["width"], info["height"], info["fps"], 0, self.snapshot,
+        cfg = {**tracking_config(info["width"], info["height"], info["fps"], 0, self.tracking_snapshot,
                                  info.get("video_id", "live")), "max_track_seconds": self.max_track_seconds,
                "exclude_zones": self.exclude_zones}
         if not self.warmed_up:
@@ -203,6 +211,7 @@ class LiveRunner:
                                        lag_seconds=None if lag is None else round(lag, 2),
                                        source_lag_seconds=pacer and round(pacer.lag, 2),
                                        skipped_seconds=pacer and round(pacer.skipped_seconds, 1),
+                                       sampling_scale=self.sampling_scale,
                                        fps=round(processed_since / (now - last_stats), 2)))
                         last_stats, processed_since = now, 0
                 if stop.is_set():
@@ -248,7 +257,8 @@ class LiveRunner:
                                                                   candidate["last_seconds"])
         record = dict(track=key, epoch=epoch, status=status, confidence=confidence, duplicate_of=duplicate_of,
                       observations=candidate["observations"], captured_from=captured_from,
-                      captured_to=captured_to, capture_clock=capture_clock, appearance=appearance)
+                      captured_to=captured_to, capture_clock=capture_clock, sampling_scale=self.sampling_scale,
+                      appearance=appearance)
         write_json(folder / "track.json", record)
         self.tracks += 1
         self.emit(dict(type="track", track=key, epoch=epoch, text=text, status=status, confidence=confidence,

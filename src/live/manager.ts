@@ -35,6 +35,8 @@ export interface LiveSettings {
   stopSeconds: number;
   stallSeconds: number;
   exclusiveGpu: boolean;
+  /** Detector sampling scale for sessions sharing one host (PLATE_LIVE_MAX_SESSIONS > 1). */
+  samplingScale?: number;
 }
 
 /**
@@ -75,7 +77,15 @@ export function liveSettings(): LiveSettings {
     // The live process reports stats every second; silence means it hangs (e.g. GPU memory thrash).
     stallSeconds: read('PLATE_LIVE_STALL_SECONDS', 180, 10, 3600),
     exclusiveGpu: exclusive === 'true',
+    samplingScale: read('PLATE_LIVE_SHARED_SAMPLING_SCALE', 1, 0.1, 1),
   };
+}
+
+/** Sessions of a shared host are killed through it (the whole host goes); others by process tree. */
+function killLive(child: ChildProcess) {
+  const session = child as ChildProcess & { terminate?: () => void };
+  if (typeof session.terminate === 'function') session.terminate();
+  else void stopTree(child);
 }
 
 // Statuses of the live process mapped to session statuses; terminal ones are applied at exit.
@@ -263,7 +273,7 @@ export class LiveManager {
           code: 'LIVE_STALLED',
           message: `No events for ${this.settings.stallSeconds} s; live process killed.`,
         });
-        void stopTree(run.child);
+        killLive(run.child);
       }
     if (this.runs.size) {
       const stops = await this.database.query(
@@ -378,7 +388,7 @@ export class LiveManager {
     };
     this.runs.set(session.id, run);
     const log = createWriteStream(path.join(folder, 'live.log'), { flags: 'a' });
-    log.on('error', () => void stopTree(child));
+    log.on('error', () => killLive(child));
     child.stderr?.pipe(log, { end: false });
     child.stdin?.on('error', () => {});
     const lines = createInterface({ input: child.stdout! });
@@ -513,7 +523,7 @@ export class LiveManager {
       setTimeout(() => {
         // Open tracks not finished by now are lost; finished ones are already ingested.
         run.killed = true;
-        void stopTree(run.child);
+        killLive(run.child);
       }, this.settings.stopSeconds * 1000),
     );
     if (run.interrupted) return;

@@ -1,0 +1,223 @@
+"""Shared live host: python -m app.live --host --data-dir DIR [--sampling-scale S]
+
+Runs several live sessions in one process so they share a single copy of the
+detector and OCR model (two processes each loading them overcommit an 8 GB GPU).
+Each session is a LiveRunner on its own thread; model calls take turns behind one
+lock, while decoding, tracking and evidence writing overlap.
+
+Commands are JSON lines on stdin:
+  {"cmd": "start", "session": ID, "payload": PATH, "out": DIR,
+   "min_confidence": 0.85, "max_track_seconds": 30}
+  {"cmd": "stop", "session": ID}
+EOF (or {"cmd": "shutdown"}) stops every session; open tracks are finished first.
+Events are the single-session JSON lines plus "session": ID, and a final
+{"type": "exit", "session": ID, "code": 0|1} once a session's thread is done.
+Host-level events have no session: {"type": "host", "status": "ready"|"stopped"}.
+"""
+from datetime import datetime, timezone
+import json
+import os
+from pathlib import Path
+import signal
+import sys
+import threading
+import traceback
+
+STARTUP_CODES = {"ENVIRONMENT_ERROR", "CUDA_UNAVAILABLE", "CUDA_ERROR", "CHECKPOINT_MISSING", "PIPELINE_FAILED"}
+
+
+class HostEmitter:
+    """Thread-safe JSON lines; a closed pipe (parent died) stops every session."""
+
+    def __init__(self, stop_all):
+        self.lock, self.closed, self.stop_all = threading.Lock(), False, stop_all
+
+    def __call__(self, event):
+        line = json.dumps({"time": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+                           **event}, ensure_ascii=False, allow_nan=False)
+        with self.lock:
+            if self.closed:
+                return
+            try:
+                sys.stdout.write(line + "\n")
+                sys.stdout.flush()
+            except OSError:
+                self.closed = True
+                sys.stdout = open(os.devnull, "w")
+                self.stop_all()
+
+
+class SharedModels:
+    """One detector and recognizer for every session; model calls are serialized.
+
+    Ultralytics predictors keep per-call state, so two threads must not predict on
+    the same model at once. Sessions must use the pipeline that was loaded first.
+    """
+
+    def __init__(self, load):
+        self.load, self.lock, self.loaded = load, threading.Lock(), None
+        self.gpu = threading.Lock()
+
+    @staticmethod
+    def key(snapshot):
+        return json.dumps([snapshot.get("id"), snapshot.get("version"), snapshot.get("device"),
+                           snapshot.get("detector"), snapshot.get("recognizer")], sort_keys=True)
+
+    def get(self, snapshot):
+        with self.lock:
+            if self.loaded is None:
+                model, recognizer = self.load(snapshot)
+                self.loaded = (self.key(snapshot), LockedModel(model, self.gpu), self._locked(recognizer))
+            elif self.loaded[0] != self.key(snapshot):
+                raise ValueError("The shared live process already runs another pipeline; "
+                                 "all concurrent live sessions must use the same pipeline")
+            return self.loaded[1], self.loaded[2]
+
+    def _locked(self, recognizer):
+        def recognize(images):
+            with self.gpu:
+                return recognizer(images)
+        return recognize
+
+
+class LockedModel:
+    def __init__(self, inner, lock):
+        self.inner, self.lock = inner, lock
+        self.names = getattr(inner, "names", None)
+
+    def predict(self, *args, **kwargs):
+        with self.lock:
+            return self.inner.predict(*args, **kwargs)
+
+
+class Host:
+    def __init__(self, data_dir, models, emit_factory=HostEmitter, *, sampling_scale=1., buffer_seconds=1.5,
+                 source_factory=None, runner_factory=None):
+        if not 0 < sampling_scale <= 1:
+            raise ValueError("sampling_scale must be in (0, 1]")
+        self.data_dir, self.models, self.sampling_scale = Path(data_dir).resolve(), models, sampling_scale
+        self.buffer_seconds = buffer_seconds
+        self.sessions, self.lock = {}, threading.Lock()
+        self.emit = emit_factory(self.stop_all)
+        if source_factory is None:
+            from app.live.__main__ import source_factory
+        if runner_factory is None:
+            from app.live.runner import LiveRunner as runner_factory
+        self.source_factory, self.runner_factory = source_factory, runner_factory
+
+    def stop_all(self):
+        with self.lock:
+            for stop, _ in self.sessions.values():
+                stop.set()
+
+    def command(self, message):
+        cmd, session = message.get("cmd"), message.get("session")
+        if cmd == "shutdown":
+            return False
+        if not isinstance(session, str) or not session:
+            self.emit(dict(type="host", status="error", message=f"Command without session: {message}"))
+        elif cmd == "start":
+            self.start(session, message)
+        elif cmd == "stop":
+            with self.lock:
+                entry = self.sessions.get(session)
+            if entry:
+                entry[0].set()
+        else:
+            self.emit(dict(type="host", status="error", message=f"Unknown command: {cmd}"))
+        return True
+
+    def start(self, session, message):
+        emit = lambda event: self.emit({**event, "session": session})  # noqa: E731
+        with self.lock:
+            if session in self.sessions:
+                emit(dict(type="error", code="PIPELINE_FAILED", message="Session already running"))
+                return
+            stop = threading.Event()
+            thread = threading.Thread(target=self.run, args=(session, message, stop, emit), daemon=True,
+                                      name=f"live-{session[:8]}")
+            self.sessions[session] = (stop, thread)
+        thread.start()
+
+    def run(self, session, message, stop, emit):
+        code = 1
+        try:
+            try:
+                payload = json.loads(Path(message["payload"]).read_text(encoding="utf-8-sig"))
+                out = Path(message["out"]).resolve()
+                if out != self.data_dir and self.data_dir not in out.parents:
+                    raise ValueError("out must be inside the host data directory")
+                if (out / "tracks").exists() and any((out / "tracks").iterdir()):
+                    raise ValueError("out already holds tracks from another run")
+                out.mkdir(parents=True, exist_ok=True)
+                snapshot = payload["pipeline_snapshot"]
+                model, recognizer = self.models.get(snapshot)
+                runner = self.runner_factory(
+                    snapshot, out, self.source_factory(payload["source"]), emit, model, recognizer,
+                    data_dir=self.data_dir, min_confidence=float(message.get("min_confidence", .85)),
+                    max_track_seconds=float(message.get("max_track_seconds", 30.)),
+                    buffer_seconds=self.buffer_seconds, exclude_zones=payload["source"].get("exclude_zones") or (),
+                    sampling_scale=self.sampling_scale)
+            except Exception as exc:  # noqa: BLE001 - reported to this session only
+                traceback.print_exc()
+                error_code = getattr(exc, "code", "PIPELINE_FAILED")
+                emit(dict(type="error", code=error_code if error_code in STARTUP_CODES else "PIPELINE_FAILED",
+                          message=str(exc)))
+                emit(dict(type="status", status="failed", reason="startup"))
+                return
+            try:
+                status = runner.run(stop)
+                code = 0 if status in ("ended", "stopped") else 1
+            except Exception as exc:  # noqa: BLE001 - one session failing never stops the others
+                traceback.print_exc()
+                emit(dict(type="error", code="PIPELINE_FAILED", message=str(exc) or repr(exc)))
+                emit(dict(type="status", status="failed", reason=str(exc) or repr(exc)))
+        finally:
+            with self.lock:
+                self.sessions.pop(session, None)
+            emit(dict(type="exit", code=code))
+
+    def serve(self, lines):
+        """Handle commands until EOF or shutdown, then stop and wait for every session."""
+        self.emit(dict(type="host", status="ready", sampling_scale=self.sampling_scale))
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                message = json.loads(line)
+            except ValueError:
+                self.emit(dict(type="host", status="error", message=f"Not JSON: {line[:200]}"))
+                continue
+            if not self.command(message):
+                break
+        self.stop_all()
+        with self.lock:
+            threads = [thread for _, thread in self.sessions.values()]
+        for thread in threads:
+            thread.join()
+        self.emit(dict(type="host", status="stopped"))
+
+
+def stdin_lines():
+    """Read the raw descriptor (see __main__.watch_stdin) and yield decoded lines."""
+    pending, fd = b"", sys.stdin.fileno()
+    while True:
+        chunk = os.read(fd, 4096)
+        if not chunk:
+            break
+        *lines, pending = (pending + chunk).split(b"\n")
+        for line in lines:
+            yield line.decode("utf-8", "replace")
+    if pending.strip():
+        yield pending.decode("utf-8", "replace")
+
+
+def main_host(args):
+    from app.live.__main__ import load_models
+
+    host = Host(args.data_dir, SharedModels(load_models), sampling_scale=args.sampling_scale,
+                buffer_seconds=args.buffer_seconds)
+    signal.signal(signal.SIGINT, lambda *_: host.stop_all())
+    host.serve(stdin_lines())
+    return 0
