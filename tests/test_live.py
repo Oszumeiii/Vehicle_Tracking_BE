@@ -1,4 +1,5 @@
 """Live process protocol: synthetic sources and boxes, never network or model accuracy."""
+import itertools
 import json
 import threading
 
@@ -92,6 +93,18 @@ def test_unpaced_file_replay_never_drops_frames(tmp_path):
     reader.stop()
     paced = LiveReader(FileFrames(video, realtime=True), capacity=2)
     assert not paced.lossless
+
+
+def test_looped_file_replays_with_increasing_timestamps(tmp_path):
+    video = tmp_path / "input.avi"
+    _plate_video(video, 10)
+    frames = FileFrames(video, loop=True)
+    assert not frames.finite
+    pts = [p for p, _ in itertools.islice(iter(frames), 25)]
+    frames.close()
+    steps = np.diff(pts)
+    assert len(pts) == 25 and steps.min() > 0
+    assert steps == pytest.approx([steps[0]] * len(steps))  # no jump or gap at the wrap
 
 
 def test_live_reader_raises_when_timestamps_go_backwards():

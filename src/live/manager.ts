@@ -14,7 +14,7 @@ import {
 } from '../recognition/engine';
 import { PipelineRegistry } from '../recognition/registry';
 import { ingestTrack } from './ingest';
-import { isLivePipeline, livePayload } from './payload';
+import { demoVideoFile, isLivePipeline, livePayload } from './payload';
 import { ACTIVE_SQL, recordEvent } from './sessions';
 
 type Row = Record<string, any>;
@@ -310,10 +310,12 @@ export class LiveManager {
       ).rows[0];
       if (!session) return undefined;
       const source = (
-        await c.query('SELECT url FROM stream_sources WHERE id=$1', [session.stream_source_id])
+        await c.query('SELECT url,source_type FROM stream_sources WHERE id=$1', [
+          session.stream_source_id,
+        ])
       ).rows[0];
       await recordEvent(c, session.id, 'status', { status: 'starting' });
-      return { ...session, url: source.url };
+      return { ...session, url: source.url, source_type: source.source_type };
     });
   }
 
@@ -329,7 +331,9 @@ export class LiveManager {
         JSON.stringify(
           livePayload(
             session.pipeline_snapshot,
-            session.url,
+            session.source_type === 'file'
+              ? { type: 'file', path: demoVideoFile(this.options.dataDir, session.url) }
+              : { type: 'youtube', url: session.url },
             session.settings.exclude_zones ?? [],
             session.settings.max_height ?? 1080,
           ),

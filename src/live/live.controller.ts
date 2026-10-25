@@ -12,6 +12,7 @@ import {
   Res,
   UseGuards,
   ConflictException,
+  ForbiddenException,
   NotFoundException,
   UnprocessableEntityException,
 } from '@nestjs/common';
@@ -27,8 +28,11 @@ import {
   getSchemaPath,
 } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
+import { readdir, stat } from 'node:fs/promises';
+import * as path from 'node:path';
 import { z } from 'zod';
 import { Database } from '../database/database';
+import { settings } from '../common/config';
 import { Actor, newId, pagination } from '../common/http';
 import { Ownership } from '../common/ownership';
 import { ApiFailures, ApiFileResponse, ApiPage, ApiPageResponse } from '../common/openapi';
@@ -45,7 +49,16 @@ import { PipelineRegistry } from '../recognition/registry';
 import { Storage } from '../media/storage';
 import { LiveEventsHub } from './events.hub';
 import { removeFolder } from './files';
-import { excludeZones, isLivePipeline, isYoutubeUrl, MAX_HEIGHTS, youtubeVideoId } from './payload';
+import {
+  DEMO_VIDEO_DIR,
+  DEMO_VIDEO_EXTENSIONS,
+  demoVideoFile,
+  excludeZones,
+  isLivePipeline,
+  isYoutubeUrl,
+  MAX_HEIGHTS,
+  youtubeVideoId,
+} from './payload';
 import { ACTIVE_SQL, ACTIVE_STATUSES, recordEvent, sessionView } from './sessions';
 
 const name = z.string().trim().min(1).max(200);
@@ -59,23 +72,40 @@ const streamFilter = z
   .strict();
 
 function sourceView(row: Record<string, any>) {
-  const videoId = youtubeVideoId(row.url);
+  const videoId = row.source_type === 'youtube' ? youtubeVideoId(row.url) : null;
   return {
     ...row,
     video_id: videoId,
     embed_url: videoId ? `https://www.youtube-nocookie.com/embed/${videoId}` : null,
   };
 }
-const createSource = z
-  .object({
-    name,
-    url: z
-      .string()
-      .max(2000)
-      .refine(isYoutubeUrl, { message: 'Provide a YouTube watch or live URL.' }),
-    exclude_zones: excludeZones.default([]),
-  })
-  .strict();
+const demoPath = z
+  .string()
+  .max(500)
+  .transform((value) => value.replace(/\\/g, '/'))
+  .refine((value) => DEMO_VIDEO_EXTENSIONS.includes(path.extname(value).toLowerCase()), {
+    message: `Demo videos are ${DEMO_VIDEO_EXTENSIONS.join(', ')} files.`,
+  });
+const createSource = z.union([
+  z
+    .object({
+      name,
+      url: z
+        .string()
+        .max(2000)
+        .refine(isYoutubeUrl, { message: 'Provide a YouTube watch or live URL.' }),
+      exclude_zones: excludeZones.default([]),
+    })
+    .strict(),
+  z
+    .object({
+      name,
+      source_type: z.literal('file'),
+      path: demoPath,
+      exclude_zones: excludeZones.default([]),
+    })
+    .strict(),
+]);
 const runSettings = {
   min_confidence: z.number().min(0).max(1).default(0.85),
   max_track_seconds: z.number().min(5).max(300).default(30),
@@ -167,24 +197,80 @@ export class LiveController {
   @ApiBody({
     schema: {
       type: 'object',
-      required: ['name', 'url'],
+      required: ['name'],
       additionalProperties: false,
       properties: {
         name: { type: 'string', minLength: 1, maxLength: 200 },
         url: { type: 'string', description: 'YouTube watch or live URL' },
+        source_type: {
+          type: 'string',
+          enum: ['file'],
+          description: 'Demo camera (administrators): replay `path` instead of a YouTube URL.',
+        },
+        path: { type: 'string', description: 'Video under PLATE_DATA_DIR/demo-videos' },
         exclude_zones: streamZones,
       },
     },
   })
   async createSource(@Req() req: { user: Actor }, @Body() input: unknown) {
     const body = createSource.parse(input);
+    let type = 'youtube',
+      url: string;
+    if ('source_type' in body) {
+      if (req.user.role !== 'admin')
+        throw new ForbiddenException('Only administrators can add demo cameras.');
+      let file: string;
+      try {
+        file = demoVideoFile(settings().dataDir, body.path);
+      } catch {
+        throw new UnprocessableEntityException('The path must stay inside demo-videos.');
+      }
+      if (!(await stat(file).catch(() => null))?.isFile())
+        throw new UnprocessableEntityException(`No such video in ${DEMO_VIDEO_DIR}.`);
+      type = 'file';
+      url = body.path;
+    } else url = body.url;
     const row = (
       await this.db.query(
-        'INSERT INTO stream_sources(id,owner_id,name,url,exclude_zones) VALUES($1,$2,$3,$4,$5) RETURNING *',
-        [newId(), req.user.id, body.name, body.url, JSON.stringify(body.exclude_zones)],
+        `INSERT INTO stream_sources(id,owner_id,name,source_type,url,exclude_zones)
+         VALUES($1,$2,$3,$4,$5,$6) RETURNING *`,
+        [newId(), req.user.id, body.name, type, url, JSON.stringify(body.exclude_zones)],
       )
     ).rows[0];
     return { ...sourceView(row), active_session: null };
+  }
+
+  @Get('demo-videos')
+  @ApiFailures(403)
+  @ApiResponse({
+    status: 200,
+    description: 'Videos under PLATE_DATA_DIR/demo-videos that a demo camera can replay.',
+    schema: {
+      type: 'object',
+      properties: {
+        items: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { path: { type: 'string' }, size_bytes: { type: 'integer' } },
+          },
+        },
+      },
+    },
+  })
+  async demoVideos(@Req() req: { user: Actor }) {
+    if (req.user.role !== 'admin')
+      throw new ForbiddenException('Only administrators can add demo cameras.');
+    const root = path.join(settings().dataDir, DEMO_VIDEO_DIR);
+    const entries = await readdir(root, { withFileTypes: true }).catch(() => []);
+    const items = [];
+    for (const entry of entries)
+      if (entry.isFile() && DEMO_VIDEO_EXTENSIONS.includes(path.extname(entry.name).toLowerCase()))
+        items.push({
+          path: entry.name,
+          size_bytes: (await stat(path.join(root, entry.name))).size,
+        });
+    return { items: items.sort((a, b) => a.path.localeCompare(b.path)) };
   }
 
   @Get('stream-sources/:id/snapshot')

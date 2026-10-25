@@ -265,8 +265,11 @@ export class StreamSourceResponse {
   @ApiProperty() id!: string;
   @ApiProperty() owner_id!: string;
   @ApiProperty() name!: string;
-  @ApiProperty({ enum: ['youtube'] }) source_type!: string;
-  @ApiProperty() url!: string;
+  @ApiProperty({ enum: ['youtube', 'file'] }) source_type!: string;
+  @ApiProperty({
+    description: 'YouTube link, or for a demo camera the video path under demo-videos.',
+  })
+  url!: string;
   @ApiProperty(zones) exclude_zones!: number[][];
   @ApiProperty({ ...nullableText, description: 'YouTube video id; null for channel links.' })
   video_id!: string | null;

@@ -174,3 +174,18 @@ Kết quả đo ngày 2026-10-24 (Camboriú, PostgreSQL tạm, API và worker th
 | Xuất mẫu nhãn | 35 mẫu, confidence trải từ 0,27 đến 0,99, mỗi mẫu có 5 crop. |
 
 Mạng tới YouTube dao động mạnh khi đo (có lúc 2 Mbit/s, dưới mức 1080p cần khoảng 4 Mbit/s): khi đó ffmpeg tự giao chậm hơn thời gian thực và độ trễ tăng; `max_height: 720` giảm bitrate cho trường hợp này.
+
+## Nghiệm thu sẵn sàng demo (DB thật, 2026-10-25)
+
+Chạy `start-all.cmd -NoBrowser` trên DB Docker của dự án. Trước khi chạy, DB đã áp dụng 3/7 migration.
+
+- **Khởi động:** script bật Docker, sao lưu `data/backups/plate-*.dump` (`pg_restore --list` đọc được 9 bảng có dữ liệu), áp dụng `0004`–`0007`, rồi mở API, worker và FE `Vehicle_Tracking_FE`. Dữ liệu cũ (2 job, 1 review, 7 media) vẫn hiện trong tab *Video đã xử lý*.
+- **Camera demo** (`data/demo-videos/camboriu.mp4`, 3 phút 1080p30):
+  - tạo từ form FE, phiên chạy sau 75 s (lần đầu nạp model);
+  - phát lại liên tục qua nhiều vòng lặp, 20 629 frame đọc, 74 frame bỏ (0,4%);
+  - watchlist một biển vừa đọc thì có toast cảnh báo khi clip lặp lại (sau khoảng 3 phút).
+- **Camera YouTube** Camboriú: chạy sau 37 s, có biển số sau khoảng 20 s, dừng bình thường.
+- **Job upload** (20 s, 1080p) sau khi dừng live: `succeeded` sau 40 s.
+- **Sau cùng:** 0 lỗi console, 0 tiến trình `python`/`ffmpeg*` còn sót.
+- **Lỗi tìm ra và đã sửa:** Vite của FE chỉ nghe `[::1]`, nên `start-all` giờ mở `http://localhost:5173` thay vì `127.0.0.1`.
+- **Lưu ý:** clip ghi lúc khoảng 4h sáng ở Brazil chỉ có khoảng 1 xe/phút (một xe đỗ được đọc lặp lại). Clip demo nên ghi vào ban ngày ở Brazil (xem `docs/DEMO.md`).

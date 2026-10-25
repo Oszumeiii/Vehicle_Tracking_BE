@@ -49,7 +49,7 @@ npm run worker -- --once
 
 ### Chạy cả hệ thống một lần
 
-Sau khi đã có `.env`, tài khoản admin và môi trường inference, nhấp đúp `start-all.cmd` (hoặc chạy `.\start-all.cmd`). Script bật Docker Desktop/PostgreSQL, build, migrate, rồi mở API, worker và FE (`../Vehicle_Tracking_FE_test`) mỗi cái một cửa sổ và mở trình duyệt. Dịch vụ đang chạy sẽ được giữ nguyên nên chạy lại không làm gián đoạn job. Tùy chọn: `-SkipBuild`, `-NoBrowser`, `-FrontendDir <đường dẫn>`. Đóng cửa sổ nào thì dừng dịch vụ đó; đóng cửa sổ worker khi job đang chạy sẽ đánh dấu job `WORKER_INTERRUPTED`.
+Sau khi đã có `.env`, tài khoản admin và môi trường inference, nhấp đúp `start-all.cmd` (hoặc chạy `.\start-all.cmd`). Script bật Docker Desktop/PostgreSQL, build, sao lưu DB vào `data/backups/` nếu có migration mới (`pg_dump -Fc`, khôi phục bằng `pg_restore`), migrate, cảnh báo nếu thiếu checkpoint trong `models/`, rồi mở API, worker và FE (`../Vehicle_Tracking_FE`) mỗi cái một cửa sổ và mở trình duyệt. Dịch vụ đang chạy sẽ được giữ nguyên nên chạy lại không làm gián đoạn job. Tùy chọn: `-SkipBuild`, `-NoBrowser`, `-FrontendDir <đường dẫn>`. Đóng cửa sổ nào thì dừng dịch vụ đó; đóng cửa sổ worker khi job đang chạy sẽ đánh dấu job `WORKER_INTERRUPTED`.
 
 Mở Swagger tại `http://127.0.0.1:3000/docs`. `POST /api/v2/auth/login`, lấy `access_token`, bấm **Authorize** và nhập token. Mọi endpoint nghiệp vụ đều cần Bearer token. `/health` chỉ là liveness; `/health/ready` kiểm tra database/schema, không xác nhận model hoặc worker đang chạy.
 
@@ -82,7 +82,7 @@ Chi tiết hợp đồng model, phiên bản và crop: [MODEL_INTEGRATION.md](do
 8. Tra cứu `GET /api/v2/recognition-results?plate=ABC1234`; dùng text kiểm duyệt của job thành công mới nhất theo từng nguồn.
 9. Xuất `GET /api/v2/recognition-jobs/{id}/export?format=csv`.
 
-Xem [API.md](docs/API.md), [TESTING.md](TESTING.md), [hướng dẫn vận hành](docs/OPERATIONS.md) và [request mẫu](examples/api.http).
+Xem [API.md](docs/API.md), [TESTING.md](TESTING.md), [hướng dẫn vận hành](docs/OPERATIONS.md), [kịch bản demo](docs/DEMO.md) và [request mẫu](examples/api.http).
 
 ## Nhận diện YouTube Live (thử nghiệm)
 
@@ -133,6 +133,7 @@ Lưu ý khi vận hành:
   - thư mục mồ côi và thùng rác cũng được dọn.
 - **Xóa phiên:** `DELETE /api/v2/live-sessions/{id}` cho phiên đã kết thúc (xóa track, bằng chứng và lịch sử). Xóa hết phiên thì xóa được camera. `GET /live-sessions/{id}` có `evidence_bytes`.
 - **Lượt xuất hiện:** các track cùng biển (hoặc lệch 1 ký tự) trên một camera trong vòng `PLATE_LIVE_SIGHTING_MINUTES` (mặc định 5) có chung `sighting_id`. `GET /recognition-results?group_by=sighting` trả mỗi lượt một dòng, kèm `sighting_count`, `first_seen`, `last_seen`; `GET /api/v2/sightings/{id}/results` liệt kê các track của lượt đó.
+- **Camera demo:** admin chép video vào `data/demo-videos/` rồi tạo camera với `{ "source_type": "file", "path": "camboriu.mp4" }`. Phiên phát lại video theo vòng lặp với tốc độ thật, nên demo không phụ thuộc mạng. Kịch bản demo: [DEMO.md](docs/DEMO.md).
 - **Hiệu chỉnh ngưỡng `min_confidence`:** xem [EVALUATION.md](docs/EVALUATION.md#hiệu-chỉnh-ngưỡng-tin-cậy-live).
 - Code `app/live` không nằm trong checksum của snapshot (chỉ `app/recognition` và model được ghim).
 

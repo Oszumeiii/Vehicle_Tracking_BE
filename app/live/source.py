@@ -247,27 +247,37 @@ class FileFrames:
 
     Without pacing the file is replayed losslessly: the reader waits for the
     consumer instead of dropping frames, so results match the file pipeline.
+    loop=True replays the file forever (demo cameras); PTS keep increasing across
+    passes, so tracking and capture times see one continuous stream.
     """
 
-    finite = True
-
-    def __init__(self, path, realtime=False, clock=time.monotonic):
-        self.path, self.realtime, self.clock = path, realtime, clock
+    def __init__(self, path, realtime=False, clock=time.monotonic, loop=False):
+        self.path, self.realtime, self.clock, self.loop = path, realtime, clock, loop
         self.lossless = not realtime
+        self.finite = not loop
         self._closed = threading.Event()
 
     def __iter__(self):
-        with closing(read_frames(self.path)) as frames:
-            start = None
-            for _, pts, image, _ in frames:
-                if self._closed.is_set():
-                    return
-                if self.realtime:
-                    start = self.clock() - pts if start is None else start
-                    delay = start + pts - self.clock()
-                    if delay > 0 and self._closed.wait(delay):
+        start, offset = None, 0.
+        while True:
+            last, step = None, 0.
+            with closing(read_frames(self.path)) as frames:
+                for _, pts, image, _ in frames:
+                    if self._closed.is_set():
                         return
-                yield pts, image
+                    if last is not None:
+                        step = pts - last
+                    last = pts
+                    pts += offset
+                    if self.realtime:
+                        start = self.clock() - pts if start is None else start
+                        delay = start + pts - self.clock()
+                        if delay > 0 and self._closed.wait(delay):
+                            return
+                    yield pts, image
+            if not self.loop or last is None:
+                return
+            offset += last + (step or 1 / 30)
 
     def close(self):
         self._closed.set()

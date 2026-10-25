@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { cp, readFile, writeFile } from 'node:fs/promises';
+import { cp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { after, before, test } from 'node:test';
 import { promisify } from 'node:util';
@@ -275,6 +275,6 @@ test('SQL migration is idempotent and rejects changes to an applied migration', 
   await assert.rejects(migrate(fixture.database, destination), /has changed/);
   assert.equal(
     (await fixture.database.query('SELECT version FROM schema_migrations')).rows.length,
-    6,
+    (await readdir(resolve('src/database/migrations'))).filter((f) => f.endsWith('.sql')).length,
   );
 });

@@ -27,7 +27,10 @@ export async function livePayload(args: string[]): Promise<string> {
   const snapshot = await new PipelineRegistry().resolve(pipeline);
   if (!isLivePipeline(snapshot))
     throw new Error('Live recognition needs a five_frame_joint recognition pipeline.');
-  await writeFile(out, JSON.stringify(buildLivePayload(snapshot, url), null, 2));
+  await writeFile(
+    out,
+    JSON.stringify(buildLivePayload(snapshot, { type: 'youtube', url }), null, 2),
+  );
   return out;
 }
 
