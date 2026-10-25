@@ -134,7 +134,7 @@ Lưu ý khi vận hành:
 - **Xóa phiên:** `DELETE /api/v2/live-sessions/{id}` cho phiên đã kết thúc (xóa track, bằng chứng và lịch sử). Xóa hết phiên thì xóa được camera. `GET /live-sessions/{id}` có `evidence_bytes`.
 - **Lượt xuất hiện:** các track cùng biển (hoặc lệch 1 ký tự) trên một camera trong vòng `PLATE_LIVE_SIGHTING_MINUTES` (mặc định 5) có chung `sighting_id`. `GET /recognition-results?group_by=sighting` trả mỗi lượt một dòng, kèm `sighting_count`, `first_seen`, `last_seen`; `GET /api/v2/sightings/{id}/results` liệt kê các track của lượt đó.
 - **Camera demo:** admin chép video vào `data/demo-videos/` rồi tạo camera với `{ "source_type": "file", "path": "camboriu.mp4" }`. Phiên phát lại video theo vòng lặp với tốc độ thật, nên demo không phụ thuộc mạng. Kịch bản demo: [DEMO.md](docs/DEMO.md).
-- **Hiệu chỉnh ngưỡng `min_confidence`:** xem [EVALUATION.md](docs/EVALUATION.md#hiệu-chỉnh-ngưỡng-tin-cậy-live).
+- **Hiệu chỉnh ngưỡng `min_confidence`:** admin tạo bộ mẫu trong tab **Gán nhãn** của FE. Người gán nhãn đọc biển từ crop mà không thấy kết quả máy, và báo cáo cho ra precision/coverage theo ngưỡng cùng ngưỡng đề xuất. Xem [EVALUATION.md](docs/EVALUATION.md#hiệu-chỉnh-ngưỡng-tin-cậy-live).
 - Code `app/live` không nằm trong checksum của snapshot (chỉ `app/recognition` và model được ghim).
 
 Kết quả đo xem [TESTING.md](TESTING.md#nghiệm-thu-live-qua-api).
@@ -159,7 +159,7 @@ node dist/src/cli.js live-payload --pipeline pbl6-resnet34c-joint5-v1 --url "htt
 
 ## Dữ liệu và migration
 
-12 bảng nghiệp vụ: `users`, `auth_sessions`, `media_assets`, `recognition_jobs`, `plate_appearances`, `plate_detections`, `ocr_predictions`, `recognition_reviews`, cùng `stream_sources`, `live_sessions`, `live_session_events`, `plate_watchlist` cho live. Trigger trên `live_session_events` và `live_sessions` gửi `NOTIFY` khi commit; API nghe để đẩy SSE. Thêm bảng kỹ thuật `schema_migrations` lưu checksum migration. Schema SQL nằm ở `src/database/migrations/`.
+15 bảng nghiệp vụ: `users`, `auth_sessions`, `media_assets`, `recognition_jobs`, `plate_appearances`, `plate_detections`, `ocr_predictions`, `recognition_reviews`, cùng `stream_sources`, `live_sessions`, `live_session_events`, `plate_watchlist` cho live, và `evaluation_sets`, `evaluation_items`, `evaluation_labels` cho gán nhãn độc lập. Trigger trên `live_session_events` và `live_sessions` gửi `NOTIFY` khi commit; API nghe để đẩy SSE. Thêm bảng kỹ thuật `schema_migrations` lưu checksum migration. Schema SQL nằm ở `src/database/migrations/`.
 
 - PostgreSQL giữ metadata; `data/media/{id}` giữ nguồn; `data/recognition/{job_id}` giữ crop/keyframe/log, kể cả job của track live; `data/live/{session_id}` giữ payload, log và track chưa nhập.
 - Job có đúng một nguồn: `media_id` (upload) hoặc `live_session_id` (live).

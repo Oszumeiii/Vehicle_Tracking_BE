@@ -131,6 +131,21 @@ Mỗi track live vừa nhập được đối chiếu với watchlist của ch�
 
 Mỗi track đã chốt là một job `succeeded` có `live_session_id`, `live_track_key`, `captured_from/to` (giờ nhận frame, xấp xỉ), `confidence_status` và `duplicate_of_job_id`. Hai trường cuối chỉ để tham khảo. Review, bằng chứng, CSV và xóa job dùng API chung ở trên.
 
+## Gán nhãn độc lập (hiệu chỉnh ngưỡng)
+
+Nhãn tách khỏi review; người gán không thấy kết quả máy. Xem [EVALUATION.md](EVALUATION.md#hiệu-chỉnh-ngưỡng-tin-cậy-live).
+
+- `POST /api/v2/evaluation-sets` (admin): `{name, stream_source_id | live_session_id, per_bin?}` → `201`. Lấy ngẫu nhiên tối đa `per_bin` (1–200, mặc định 30) track live có confidence ở mỗi khoảng 0, 0.5, 0.7, 0.8, 0.85, 0.9, 0.95. Camera chưa có track trả `422`.
+- `GET /api/v2/evaluation-sets`, `GET /api/v2/evaluation-sets/{id}` (mọi người dùng): `items`, `labelled_items`, `labelers`, `my_labels`.
+- `DELETE /api/v2/evaluation-sets/{id}` (admin): `204`; xóa nhãn, giữ track.
+- `GET /api/v2/evaluation-sets/{id}/next?exclude=ID,ID`: `{remaining, item}`. `item` là mẫu kế tiếp mình chưa gán (thứ tự ổn định, riêng cho từng người), hoặc `null` khi hết. `exclude` là các mẫu đã bỏ qua.
+  - Mỗi item gồm `{id, set_id, crop_urls[5], frame_url, my_label}`, **không** có biển máy đọc, confidence hay trạng thái review.
+- `GET /api/v2/evaluation-sets/{id}/items/{item}`: một mẫu cùng nhãn của mình (để sửa).
+- `PUT /api/v2/evaluation-sets/{id}/items/{item}/label`: `{plate_text}`, chuẩn hóa thành 2–16 chữ/số; `null` nghĩa là người cũng không đọc được. Gọi lại thì ghi đè nhãn của chính mình.
+- `GET /api/v2/evaluation-sets/{id}/items/{item}/artifacts/{order}/{crop|frame}`: ảnh bằng chứng của mẫu.
+- `GET /api/v2/evaluation-sets/{id}/report?target=0.95&min_labels=1` (admin): `samples`, `disagreements`, `agreement`, `exact_match`, `recommended_threshold`, `thresholds[{threshold, readable, correct, precision, coverage}]`, `bins[{from, to, samples, exact_match}]`.
+  - `format=files` trả `predictions` và `ground_truth` cho `scripts.calibrate_threshold`.
+
 ## Quy ước
 
 List trả `{total,limit,offset,items}`. `limit=1..200`, mặc định 50; `offset>=0`. Timestamp filter dùng ISO 8601 có timezone, ví dụ `2026-10-08T00:00:00%2B07:00`. Upload time không phải capture time.
