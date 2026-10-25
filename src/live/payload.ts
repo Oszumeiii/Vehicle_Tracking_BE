@@ -1,4 +1,6 @@
+import * as path from 'node:path';
 import { z } from 'zod';
+import { safeStorage } from '../recognition/engine';
 
 const YOUTUBE_HOSTS = ['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be'];
 
@@ -44,17 +46,33 @@ export const excludeZones = z
   )
   .max(16);
 
+/** Where a live process reads from: a YouTube link, or a demo video replayed in a loop. */
+export type LiveSource = { type: 'youtube'; url: string } | { type: 'file'; path: string };
+
 /** Payload for `python -m app.live`: the same pinned snapshot a job gets, plus the source. */
 export function livePayload(
   snapshot: Record<string, any>,
-  url: string,
+  source: LiveSource,
   zones: Zone[] = [],
   maxHeight = 1080,
 ) {
   return {
     pipeline_snapshot: snapshot,
-    source: { type: 'youtube', url, exclude_zones: zones, max_height: maxHeight },
+    source:
+      source.type === 'file'
+        ? // Paced at its frame rate and looped, so it behaves like a camera that never ends.
+          { type: 'file', path: source.path, realtime: true, loop: true, exclude_zones: zones }
+        : { type: 'youtube', url: source.url, exclude_zones: zones, max_height: maxHeight },
   };
+}
+
+/** Demo cameras replay videos placed under PLATE_DATA_DIR/demo-videos (admins only). */
+export const DEMO_VIDEO_DIR = 'demo-videos';
+export const DEMO_VIDEO_EXTENSIONS = ['.mp4', '.mov', '.mkv', '.avi', '.webm'];
+
+/** Absolute path of a demo video; throws for keys that leave the demo folder. */
+export function demoVideoFile(dataDir: string, key: string) {
+  return safeStorage(path.join(dataDir, DEMO_VIDEO_DIR), key);
 }
 
 /** Video heights a live session may request; 1080p needs ~4 Mbit/s sustained. */

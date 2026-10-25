@@ -1,7 +1,7 @@
 """Live recognition process: python -m app.live --payload PAYLOAD.json --out DIR
 
 The payload holds the pipeline snapshot (as created by `node dist/src/cli.js live-payload`)
-and the source: {"type": "youtube", "url": ...} or {"type": "file", "path": ..., "realtime": bool},
+and the source: {"type": "youtube", "url": ...} or {"type": "file", "path": ..., "realtime": bool, "loop": bool},
 either with optional "exclude_zones": [[x1, y1, x2, y2], ...] in normalized frame coordinates.
 Events are JSON lines on stdout; diagnostics go to stderr. Send "stop" on stdin, close
 stdin, or press Ctrl+C to stop: open tracks are finished and recognized before exit.
@@ -80,7 +80,7 @@ def source_factory(source):
                             fps=float(cap.get(cv2.CAP_PROP_FPS)), video_id=path.stem)
             finally:
                 cap.release()
-            return info, FileFrames(path, realtime=bool(source.get("realtime")))
+            return info, FileFrames(path, realtime=bool(source.get("realtime")), loop=bool(source.get("loop")))
         return open_file
     raise ValueError("Source type must be youtube or file")
 

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, readFile } from 'node:fs/promises';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import request from 'supertest';
@@ -189,6 +189,60 @@ test('cameras and sessions are owner scoped, validated and limited to one active
   const unused = await camera('unused');
   await api.delete(`/api/v2/stream-sources/${unused.id}`).set(as('stranger')).expect(404);
   await api.delete(`/api/v2/stream-sources/${unused.id}`).set(as('owner')).expect(204);
+});
+
+test('administrators add demo cameras that replay a video from demo-videos in a loop', async () => {
+  const videos = join(dataDir, 'demo-videos');
+  await mkdir(videos, { recursive: true });
+  await writeFile(join(videos, 'camboriu.mp4'), 'not decoded by this test');
+  await writeFile(join(videos, 'notes.txt'), 'ignored');
+  const listed = await api.get('/api/v2/demo-videos').set(as('admin')).expect(200);
+  assert.deepEqual(listed.body.items, [{ path: 'camboriu.mp4', size_bytes: 24 }]);
+  await api.get('/api/v2/demo-videos').set(as('owner')).expect(403);
+
+  const demo = { name: 'Demo', source_type: 'file', path: 'camboriu.mp4' };
+  await api.post('/api/v2/stream-sources').set(as('owner')).send(demo).expect(403);
+  for (const path of ['../users.mp4', 'missing.mp4', 'notes.txt', 'C:/videos/x.mp4'])
+    await api
+      .post('/api/v2/stream-sources')
+      .set(as('admin'))
+      .send({ ...demo, path })
+      .expect(422);
+  const source = (
+    await api
+      .post('/api/v2/stream-sources')
+      .set(as('admin'))
+      .send({ ...demo, exclude_zones: [[0, 0, 0.2, 0.2]] })
+      .expect(201)
+  ).body;
+  assert.equal(source.source_type, 'file');
+  assert.equal(source.embed_url, null);
+  const queued = (
+    await api
+      .post(`/api/v2/stream-sources/${source.id}/sessions`)
+      .set(as('admin'))
+      .send({ pipeline_id: 'joint' })
+      .expect(202)
+  ).body;
+  const spawned: { args: string[]; child: Fake }[] = [];
+  const live = manager(spawned);
+  await live.tick();
+  const payload = JSON.parse(
+    await readFile(join(dataDir, 'live', queued.id, 'payload.json'), 'utf8'),
+  );
+  assert.deepEqual(payload.source, {
+    type: 'file',
+    path: join(videos, 'camboriu.mp4'),
+    realtime: true,
+    loop: true,
+    exclude_zones: [[0, 0, 0.2, 0.2]],
+  });
+  spawned[0].child.exit(1);
+  await until(
+    () => sessionRow(queued.id),
+    (row) => row.status === 'failed',
+    'demo session ended',
+  );
 });
 
 test('live manager runs a session, ingests tracks as jobs and stops on request', async () => {

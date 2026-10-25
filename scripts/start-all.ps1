@@ -12,7 +12,7 @@
   .\scripts\start-all.ps1 -SkipBuild -NoBrowser
 #>
 param(
-  [string]$FrontendDir = (Join-Path $PSScriptRoot '..\..\Vehicle_Tracking_FE_test'),
+  [string]$FrontendDir = (Join-Path $PSScriptRoot '..\..\Vehicle_Tracking_FE'),
   [switch]$SkipBuild,
   [switch]$NoBrowser
 )
@@ -72,8 +72,25 @@ try {
     Step 'Build backend'
     Run @('npm.cmd', 'run', 'build')
   }
+  # Back up before a migration changes the schema (a restore needs pg_restore).
+  $files = @(Get-ChildItem (Join-Path $Backend 'src\database\migrations') -Filter '*.sql').Count
+  $applied = docker compose exec -T postgres psql -U plate -d plate -Atc `
+    "SELECT count(*) FROM schema_migrations" 2> $null
+  if ($LASTEXITCODE -eq 0 -and [int]$applied -gt 0 -and [int]$applied -lt $files) {
+    Step "Back up database ($applied of $files migrations applied)"
+    $backups = Join-Path $Backend 'data\backups'
+    New-Item -ItemType Directory -Force $backups | Out-Null
+    $file = "plate-$(Get-Date -Format 'yyyyMMdd-HHmmss').dump"
+    Run @('docker', 'compose', 'exec', '-T', 'postgres', 'pg_dump', '-U', 'plate', '-d', 'plate', '-Fc', '-f', "/tmp/$file")
+    Run @('docker', 'compose', 'cp', "postgres:/tmp/$file", (Join-Path $backups $file))
+    docker compose exec -T postgres rm -f "/tmp/$file" | Out-Null
+    Write-Host "Backup: $(Join-Path $backups $file)"
+  }
   Step 'Migrate database'
   Run @('npm.cmd', 'run', 'db:migrate')
+  if (-not (Get-ChildItem (Join-Path $Backend 'models') -Filter '*.pt' -ErrorAction SilentlyContinue)) {
+    Write-Warning 'No model checkpoints in models\; recognition jobs and live sessions will fail.'
+  }
 
   if (-not (Test-Path (Join-Path $Frontend 'node_modules'))) {
     Step 'Install frontend dependencies'
@@ -98,8 +115,8 @@ try {
   Wait-Until 'FE' 90 { Listening $fePort }
 
   Write-Host ''
-  Write-Host "Ready: web http://127.0.0.1:$fePort  |  API docs http://127.0.0.1:$apiPort/docs" -ForegroundColor Green
-  if (-not $NoBrowser) { Start-Process "http://127.0.0.1:$fePort" }
+  Write-Host "Ready: web http://localhost:$fePort  |  API docs http://127.0.0.1:$apiPort/docs" -ForegroundColor Green
+  if (-not $NoBrowser) { Start-Process "http://localhost:$fePort" }
 }
 finally {
   Pop-Location
