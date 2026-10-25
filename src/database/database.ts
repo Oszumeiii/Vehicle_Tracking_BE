@@ -14,7 +14,7 @@ export class Database implements OnModuleDestroy {
     if (!/^postgres(?:ql)?:\/\//i.test(url)) {
       throw new Error('DATABASE_URL must use the postgres:// or postgresql:// scheme.');
     }
-    this.pool = new Pool({ connectionString: url, max: 10, connectionTimeoutMillis: 10_000 });
+    this.pool = new Pool({ connectionString: url, max: 25, connectionTimeoutMillis: 10_000 });
     // A lost idle connection should not crash the API process. Queries still reject
     // normally, so callers can report a failed operation rather than a false success.
     this.pool.on('error', (error) => {

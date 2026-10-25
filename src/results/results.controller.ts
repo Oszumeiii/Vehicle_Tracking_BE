@@ -92,10 +92,13 @@ export class ResultsController {
     checkDates(f.uploaded_from, f.uploaded_to);
     const values: unknown[] = [req.user.role === 'admin', req.user.id],
       clauses = ['($1::boolean OR m.owner_id=$2)'];
-    if (f.plate !== undefined && !normalizePlate(f.plate))
-      throw new UnprocessableEntityException('Plate query cannot be empty.');
+    if (f.plate !== undefined) {
+      const cleanPlate = normalizePlate(f.plate);
+      if (!cleanPlate) throw new UnprocessableEntityException('Plate query cannot be empty.');
+      values.push(`%${cleanPlate}%`);
+      clauses.push(`(COALESCE(a.effective_text, a.machine_text, '') ILIKE $${values.length})`);
+    }
     for (const [value, sql] of [
-      [f.plate === undefined ? undefined : normalizePlate(f.plate), 'a.effective_text='],
       [f.media_id, 'm.id='],
       [f.review_status, 'a.review_status='],
       [f.uploaded_from, 'm.uploaded_at>='],
@@ -113,7 +116,11 @@ export class ResultsController {
       WHERE ${clauses.join(' AND ')}`;
     const count = await this.db.query(`SELECT count(*) ${from}`, values);
     const items = await this.db.query(
-      `SELECT a.*,j.media_id,m.uploaded_at ${from} ORDER BY m.uploaded_at DESC,a.id LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+      `SELECT a.*,j.media_id,m.uploaded_at,m.media_type,m.duration_seconds AS media_duration_seconds,m.original_name AS media_original_name,
+        (SELECT d.id FROM plate_detections d WHERE d.appearance_id=a.id ORDER BY d.selected_order,d.id LIMIT 1) AS primary_detection_id,
+        (SELECT d.bbox FROM plate_detections d WHERE d.appearance_id=a.id ORDER BY d.selected_order,d.id LIMIT 1) AS primary_bbox,
+        (SELECT d.crop_bbox FROM plate_detections d WHERE d.appearance_id=a.id ORDER BY d.selected_order,d.id LIMIT 1) AS primary_crop_bbox
+       ${from} ORDER BY m.uploaded_at DESC,a.id LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
       [...values, f.limit, f.offset],
     );
     return {

@@ -180,7 +180,7 @@ export class JobsController {
     const from = `FROM recognition_jobs j JOIN media_assets m ON m.id=j.media_id WHERE ${clauses.join(' AND ')}`;
     const count = await this.db.query(`SELECT count(*) ${from}`, values);
     const items = await this.db.query(
-      `SELECT j.* ${from} ORDER BY j.created_at DESC,j.id DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+      `SELECT j.*, m.media_type, m.duration_seconds AS media_duration_seconds, m.original_name AS media_original_name ${from} ORDER BY j.created_at DESC,j.id DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
       [...values, f.limit, f.offset],
     );
     return {
@@ -194,7 +194,14 @@ export class JobsController {
   @ApiResponse({ status: 200, type: JobResponse })
   @ApiFailures(404)
   async get(@Req() req: { user: Actor }, @Param('id') id: string) {
-    return jobView(await this.owner.job(req.user, id));
+    const job = await this.owner.job(req.user, id);
+    const media = await this.owner.media(req.user, job.media_id);
+    return {
+      ...jobView(job),
+      media_type: media.media_type,
+      media_duration_seconds: media.duration_seconds,
+      media_original_name: media.original_name,
+    };
   }
 
   @Get('recognition-jobs/:id/results')
@@ -208,7 +215,14 @@ export class JobsController {
       id,
     ]);
     const items = await this.db.query(
-      'SELECT * FROM plate_appearances WHERE job_id=$1 ORDER BY first_frame,id LIMIT $2 OFFSET $3',
+      `SELECT a.*, j.media_id, m.media_type, m.duration_seconds AS media_duration_seconds, m.original_name AS media_original_name,
+        (SELECT d.id FROM plate_detections d WHERE d.appearance_id=a.id ORDER BY d.selected_order,d.id LIMIT 1) AS primary_detection_id,
+        (SELECT d.bbox FROM plate_detections d WHERE d.appearance_id=a.id ORDER BY d.selected_order,d.id LIMIT 1) AS primary_bbox,
+        (SELECT d.crop_bbox FROM plate_detections d WHERE d.appearance_id=a.id ORDER BY d.selected_order,d.id LIMIT 1) AS primary_crop_bbox
+       FROM plate_appearances a
+       JOIN recognition_jobs j ON j.id=a.job_id
+       JOIN media_assets m ON m.id=j.media_id
+       WHERE a.job_id=$1 ORDER BY a.first_frame, a.id LIMIT $2 OFFSET $3`,
       [id, limit, offset],
     );
     return { total: Number(count.rows[0].count), limit, offset, items: items.rows };

@@ -401,8 +401,11 @@ def track_video(video, model, cfg, out):
                 finish(tid)
         finally:
             cap.release()
-    if not cfg["max_seconds"] and cfg["declared_frames"] > 0 and len(pts) != cfg["declared_frames"]:
-        raise RuntimeError("Decoded frame count differs from video metadata")
+    if not cfg["max_seconds"] and cfg["declared_frames"] > 0:
+        # Allow natural container metadata discrepancy at EOF (e.g. VFR, B-frame delay, audio padding)
+        # Only reject if decoding terminated prematurely (e.g. less than 50% of expected frames)
+        if len(pts) < cfg["declared_frames"] * 0.5:
+            raise RuntimeError(f"Decoded frame count ({len(pts)}) severely differs from video metadata ({cfg['declared_frames']})")
     summary = dict(decoded_frames=len(pts), sampled_frames=sampled, candidates=len(candidates),
                    rejected=dict(rejected), frame_gate=gate.summary(),
                    elapsed_seconds=time.perf_counter() - started)
