@@ -122,7 +122,18 @@ Lưu ý khi vận hành:
 - Tiến trình live không phát sự kiện nào trong `PLATE_LIVE_STALL_SECONDS` (mặc định 180) thì bị kill, phiên chuyển `failed`/`LIVE_STALLED`.
 - Dừng worker bằng Ctrl+C: phiên chốt track đang mở rồi chuyển `interrupted`. Worker bị kill đột ngột: trên Windows, tiến trình live bị kill theo (không còn tiến trình GPU mồ côi), nên track đang mở dở bị mất; track đã chốt thì đã nằm trong DB. Lần khởi động sau, phiên chuyển `interrupted` và track còn trên đĩa được nhập. Phiên không tự chạy lại; bật phiên mới.
 - Mất kết nối thì tiến trình live tự kết nối lại (chờ 1, 2, 4… tối đa 30 s, tối đa 10 lần liên tiếp). Video bị gỡ hoặc hết live thì `ended`.
-- Bằng chứng chưa được dọn tự động: một luồng 1080p đông xe tạo khoảng 2,6 GB/giờ. Camera đã có phiên thì không xóa được.
+- Sau khi kẹt mạng, tiến trình live đuổi kịp tối đa 1,3× tốc độ thật (dưới năng lực xử lý), thay vì đổ dồn rồi bỏ frame rải rác. Trễ quá 20 s thì bỏ một đoạn liền mạch. 1080p cần mạng ổn định khoảng 4 Mbit/s; mạng yếu thì đặt `max_height: 720` khi bật phiên hoặc trong `auto_settings`.
+- `captured_from/to` lấy theo giờ của chính luồng (`#EXT-X-PROGRAM-DATE-TIME` của HLS) khi xác định được, nếu không thì theo giờ nhận frame. Job ghi rõ nguồn giờ ở `statistics.capture_clock` (`stream` hoặc `received`).
+- **Camera 24/7:** `PATCH /api/v2/stream-sources/{id}` với `{ "always_on": true, "auto_settings": { "pipeline_id": "..." } }`. Worker tự bật phiên mới khi không có phiên nào (kể cả sau khi worker khởi động lại); luồng liên tục hỏng thì chờ lùi dần 1, 2, 4… tối đa 30 phút. Người dùng dừng phiên thì `always_on` tự tắt. Với `PLATE_LIVE_EXCLUSIVE_GPU=true`, camera 24/7 làm job upload chờ đến khi tắt camera.
+- **Dọn dữ liệu** (mỗi `PLATE_RETENTION_INTERVAL_MINUTES`, mặc định 10 phút):
+  - sau `keyframe_retention_hours` (mặc định 24) mỗi track chỉ giữ một keyframe, crop luôn còn; dung lượng giảm khoảng 80%;
+  - sau `track_retention_days` (mặc định 7) track bị xóa;
+  - track đã review hoặc đã có cảnh báo watchlist được giữ;
+  - đặt `null` để giữ mãi;
+  - thư mục mồ côi và thùng rác cũng được dọn.
+- **Xóa phiên:** `DELETE /api/v2/live-sessions/{id}` cho phiên đã kết thúc (xóa track, bằng chứng và lịch sử). Xóa hết phiên thì xóa được camera. `GET /live-sessions/{id}` có `evidence_bytes`.
+- **Lượt xuất hiện:** các track cùng biển (hoặc lệch 1 ký tự) trên một camera trong vòng `PLATE_LIVE_SIGHTING_MINUTES` (mặc định 5) có chung `sighting_id`. `GET /recognition-results?group_by=sighting` trả mỗi lượt một dòng, kèm `sighting_count`, `first_seen`, `last_seen`; `GET /api/v2/sightings/{id}/results` liệt kê các track của lượt đó.
+- **Hiệu chỉnh ngưỡng `min_confidence`:** xem [EVALUATION.md](docs/EVALUATION.md#hiệu-chỉnh-ngưỡng-tin-cậy-live).
 - Code `app/live` không nằm trong checksum của snapshot (chỉ `app/recognition` và model được ghim).
 
 Kết quả đo xem [TESTING.md](TESTING.md#nghiệm-thu-live-qua-api).

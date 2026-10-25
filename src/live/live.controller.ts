@@ -44,7 +44,8 @@ import { AuthGuard } from '../auth/auth.guard';
 import { PipelineRegistry } from '../recognition/registry';
 import { Storage } from '../media/storage';
 import { LiveEventsHub } from './events.hub';
-import { excludeZones, isLivePipeline, isYoutubeUrl, youtubeVideoId } from './payload';
+import { removeFolder } from './files';
+import { excludeZones, isLivePipeline, isYoutubeUrl, MAX_HEIGHTS, youtubeVideoId } from './payload';
 import { ACTIVE_SQL, ACTIVE_STATUSES, recordEvent, sessionView } from './sessions';
 
 const name = z.string().trim().min(1).max(200);
@@ -75,17 +76,44 @@ const createSource = z
     exclude_zones: excludeZones.default([]),
   })
   .strict();
+const runSettings = {
+  min_confidence: z.number().min(0).max(1).default(0.85),
+  max_track_seconds: z.number().min(5).max(300).default(30),
+  max_height: z
+    .number()
+    .refine((value) => (MAX_HEIGHTS as readonly number[]).includes(value), {
+      message: 'max_height must be 480, 720 or 1080.',
+    })
+    .default(1080),
+};
+const retention = z.number().int().min(0).max(100_000).nullable();
 const updateSource = z
-  .object({ name: name.optional(), exclude_zones: excludeZones.optional() })
+  .object({
+    name: name.optional(),
+    exclude_zones: excludeZones.optional(),
+    always_on: z.boolean().optional(),
+    auto_settings: z
+      .object({ pipeline_id: z.string().min(1).max(100), ...runSettings })
+      .strict()
+      .optional(),
+    keyframe_retention_hours: retention.optional(),
+    track_retention_days: retention.optional(),
+  })
   .strict()
   .refine((value) => Object.keys(value).length > 0, { message: 'Nothing to update.' });
-const startSession = z
-  .object({
-    pipeline_id: z.string().min(1).max(100),
-    min_confidence: z.number().min(0).max(1).default(0.85),
-    max_track_seconds: z.number().min(5).max(300).default(30),
-  })
-  .strict();
+const startSession = z.object({ pipeline_id: z.string().min(1).max(100), ...runSettings }).strict();
+const runSettingsSchema = {
+  min_confidence: { type: 'number', minimum: 0, maximum: 1, default: 0.85 },
+  max_track_seconds: { type: 'number', minimum: 5, maximum: 300, default: 30 },
+  max_height: {
+    type: 'integer',
+    enum: [...MAX_HEIGHTS],
+    default: 1080,
+    description: 'Highest video height to read; 1080p needs ~4 Mbit/s sustained.',
+  },
+};
+const EVIDENCE_BYTES = `(SELECT coalesce(sum(j.evidence_bytes),0)::bigint FROM recognition_jobs j
+  WHERE j.live_session_id=s.id) AS evidence_bytes`;
 const sessionFilter = pagination
   .extend({
     stream_source_id: z.string().optional(),
@@ -272,20 +300,63 @@ export class LiveController {
       properties: {
         name: { type: 'string', minLength: 1, maxLength: 200 },
         exclude_zones: streamZones,
+        always_on: {
+          type: 'boolean',
+          description:
+            'Keep a session running: the worker starts a new one whenever none is active (backing off when the broadcast is down). Requires auto_settings.',
+        },
+        auto_settings: {
+          type: 'object',
+          required: ['pipeline_id'],
+          additionalProperties: false,
+          properties: { pipeline_id: { type: 'string' }, ...runSettingsSchema },
+        },
+        keyframe_retention_hours: {
+          type: 'integer',
+          minimum: 0,
+          nullable: true,
+          description: 'Prune each track to one keyframe after this many hours; null keeps all.',
+        },
+        track_retention_days: {
+          type: 'integer',
+          minimum: 0,
+          nullable: true,
+          description:
+            'Delete tracks after this many days; null keeps them. Reviewed or alerted tracks are kept.',
+        },
       },
     },
   })
   async updateSource(@Req() req: { user: Actor }, @Param('id') id: string, @Body() input: unknown) {
     const body = updateSource.parse(input);
+    await this.owner.streamSource(req.user, id);
+    if (
+      body.auto_settings &&
+      !isLivePipeline(await this.registry.resolve(body.auto_settings.pipeline_id))
+    )
+      throw new UnprocessableEntityException(
+        'Live recognition needs a five-frame joint OCR pipeline.',
+      );
     const row = await this.db.transaction(async (c) => {
       const source = await this.owner.streamSource(req.user, id, c, true);
+      const auto = body.auto_settings ?? source.auto_settings;
+      const alwaysOn = body.always_on ?? source.always_on;
+      if (alwaysOn && !auto.pipeline_id)
+        throw new UnprocessableEntityException('always_on needs auto_settings with a pipeline_id.');
+      const pick = <K extends keyof typeof body>(key: K) =>
+        body[key] === undefined ? source[key] : body[key];
       return (
         await c.query(
-          `UPDATE stream_sources SET name=$2,exclude_zones=$3,updated_at=now() WHERE id=$1 RETURNING *`,
+          `UPDATE stream_sources SET name=$2,exclude_zones=$3,always_on=$4,auto_settings=$5,
+          keyframe_retention_hours=$6,track_retention_days=$7,updated_at=now() WHERE id=$1 RETURNING *`,
           [
             id,
-            body.name ?? source.name,
-            JSON.stringify(body.exclude_zones ?? source.exclude_zones),
+            pick('name'),
+            JSON.stringify(pick('exclude_zones')),
+            alwaysOn,
+            JSON.stringify(auto),
+            pick('keyframe_retention_hours'),
+            pick('track_retention_days'),
           ],
         )
       ).rows[0];
@@ -336,6 +407,7 @@ export class LiveController {
           default: 30,
           description: 'Open tracks (parked or queued cars) are finished after this long.',
         },
+        max_height: runSettingsSchema.max_height,
       },
     },
   })
@@ -354,6 +426,7 @@ export class LiveController {
         const settings = {
           min_confidence: body.min_confidence,
           max_track_seconds: body.max_track_seconds,
+          max_height: body.max_height,
           exclude_zones: source.exclude_zones,
         };
         const row = (
@@ -397,7 +470,7 @@ export class LiveController {
     const from = `FROM live_sessions s JOIN stream_sources c ON c.id=s.stream_source_id WHERE ${clauses.join(' AND ')}`;
     const count = await this.db.query(`SELECT count(*) ${from}`, values);
     const items = await this.db.query(
-      `SELECT s.* ${from} ORDER BY s.created_at DESC,s.id DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+      `SELECT s.*, ${EVIDENCE_BYTES} ${from} ORDER BY s.created_at DESC,s.id DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
       [...values, f.limit, f.offset],
     );
     return {
@@ -412,7 +485,38 @@ export class LiveController {
   @ApiResponse({ status: 200, type: LiveSessionResponse })
   @ApiFailures(404)
   async getSession(@Req() req: { user: Actor }, @Param('id') id: string) {
-    return sessionView(await this.owner.liveSession(req.user, id));
+    await this.owner.liveSession(req.user, id);
+    return sessionView(
+      (
+        await this.db.query(`SELECT s.*, ${EVIDENCE_BYTES} FROM live_sessions s WHERE s.id=$1`, [
+          id,
+        ])
+      ).rows[0],
+    );
+  }
+
+  @Delete('live-sessions/:id')
+  @HttpCode(204)
+  @ApiResponse({
+    status: 204,
+    description: 'Finished session deleted with its tracks, their evidence and its events.',
+  })
+  @ApiFailures(404, 409)
+  async removeSession(@Req() req: { user: Actor }, @Param('id') id: string) {
+    const jobs = await this.db.transaction(async (c) => {
+      const session = await this.owner.liveSession(req.user, id, c, true);
+      if (ACTIVE_STATUSES.includes(session.status))
+        throw new ConflictException('Stop the session before deleting it.');
+      const deleted = await c.query(
+        'DELETE FROM recognition_jobs WHERE live_session_id=$1 RETURNING id',
+        [id],
+      );
+      await c.query('DELETE FROM live_sessions WHERE id=$1', [id]);
+      return deleted.rows.map((row) => row.id as string);
+    });
+    // Rows are gone; folders that fail to delete are swept by retention as orphans.
+    for (const job of jobs) await removeFolder(this.storage.path(`recognition/${job}`));
+    await removeFolder(this.storage.path(`live/${id}`));
   }
 
   @Post('live-sessions/:id/stop')
@@ -438,6 +542,10 @@ export class LiveController {
         )
       ).rows[0];
       if (queued) await recordEvent(c, id, 'status', { status: 'stopped' });
+      // A user stop ends an always-on camera's run too; otherwise it would restart at once.
+      await c.query('UPDATE stream_sources SET always_on=false WHERE id=$1', [
+        session.stream_source_id,
+      ]);
       return sessionView(row);
     });
   }

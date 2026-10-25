@@ -151,3 +151,26 @@ Kết quả đo ngày 2026-10-24 (Camboriú, PostgreSQL tạm, API và worker th
 | Nối lại bằng `Last-Event-ID: 45` rồi dừng phiên | Nhận #46–#51 rồi event mới, không trùng. Dừng mất 8 s, 2 track đang mở được đẩy, sau đó `stopped` và `end`, stream đóng. |
 | Watchlist | 62 biển từ các phiên trước: 10 phút không xe nào quay lại, nên không có cảnh báo. Đặt `QUL1A7Z` và nhập lại track thật `QUL1A72` qua recovery: `alert` với `distance=1` đến client ngay sau `track`. |
 | Snapshot, `embed_url` | JPEG 1920×1080; `https://www.youtube-nocookie.com/embed/5Xl6pSgiy3A`. |
+
+## Nghiệm thu vận hành live (24/7, dọn dữ liệu, luồng, lượt xuất hiện)
+
+Tiến trình ffmpeg của `imageio-ffmpeg` có tên `ffmpeg-win-x86_64-v7.1`; kiểm tra tiến trình sót bằng `Get-Process | Where-Object { $_.ProcessName -like 'ffmpeg*' }`, không lọc theo đúng chữ `ffmpeg`.
+
+1. Bật `always_on` cho camera: worker tự mở phiên. Kill worker rồi khởi động lại: phiên cũ `interrupted`, phiên mới tự tạo với `reason: auto_restart`. Dừng phiên qua API: `always_on` tắt, không mở lại.
+2. Đặt `keyframe_retention_hours: 0`: lượt dọn kế tiếp giữ một keyframe mỗi track, chi tiết kết quả vẫn mở được (`frame_url = null` cho keyframe đã bỏ), track đã review không bị đụng tới.
+3. Tạm dừng tiến trình ffmpeg vài giây (`NtSuspendProcess`) để mô phỏng mạng kẹt: tiến trình live đuổi kịp không quá 1,3× và không bỏ frame.
+4. So `captured_from` (giờ luồng) với đồng hồ in trên khung hình: độ lệch phải không đổi giữa các track.
+5. `export-live-samples` xuất mẫu phân tầng; `scripts.calibrate_threshold` chạy với file nhãn của người gán nhãn độc lập.
+
+Kết quả đo ngày 2026-10-24 (Camboriú, PostgreSQL tạm, API và worker thật):
+
+| Kiểm tra | Kết quả |
+| --- | --- |
+| Bật 24/7 | Phiên tự mở sau khoảng 3 s. Kill worker: không còn ffmpeg hay python; khởi động lại thì phiên cũ `interrupted`, phiên mới `auto_restart` mở ngay. Dừng qua API mất 9 s, `always_on=false`, 30 s sau không mở lại. |
+| Giờ luồng | 100% track có `capture_clock=stream`. Độ lệch so với đồng hồ trên khung hình là 3:31:25,6–3:31:26,3 qua 5 track (dưới 1 s, bằng độ phân giải của đồng hồ in trên hình; đồng hồ của camera đặt sai giờ). |
+| Kẹt 12 s | Độ trễ nguồn 13,7 s giảm khoảng 0,25 s/s về 0 trong khoảng 60 s, xử lý 38–40 frame/s, **0 frame bị bỏ** trong lúc đuổi kịp. Giai đoạn 4 (trước `Pacer`) bỏ 11% frame sau một lần kết nối lại. Spike riêng: `-re` sau 15 s kẹt đổ dồn khoảng 120 frame/s (4×). |
+| Dọn keyframe | 122/123 track được bỏ bớt keyframe (1 track đã review được giữ). Phiên 33 track: 172 MB xuống 35 MB (−80%); thư mục `recognition` 794 MB xuống 300 MB. |
+| Lượt xuất hiện | `QIZ8714`/`AIZ8714` và `AIZ8718`/`AIE8718` gộp thành hai lượt; lượt sau nối với track `AIZ8712` của phiên trước lần kill worker. |
+| Xuất mẫu nhãn | 35 mẫu, confidence trải từ 0,27 đến 0,99, mỗi mẫu có 5 crop. |
+
+Mạng tới YouTube dao động mạnh khi đo (có lúc 2 Mbit/s, dưới mức 1080p cần khoảng 4 Mbit/s): khi đó ffmpeg tự giao chậm hơn thời gian thực và độ trễ tăng; `max_height: 720` giảm bitrate cho trường hợp này.

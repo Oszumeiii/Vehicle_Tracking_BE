@@ -9,6 +9,7 @@ import {
   workerOptions,
 } from './recognition/engine';
 import { GpuGate, LiveManager, liveSettings, spawnLiveProcess, SpawnLive } from './live/manager';
+import { Retention } from './live/retention';
 
 /** Jobs processed in parallel by this worker; each job runs its own ML subprocess. */
 export function workerConcurrency(value = process.env.PLATE_WORKER_CONCURRENCY ?? '1') {
@@ -61,6 +62,7 @@ export async function runWorker(
     const gate = new GpuGate(settings.exclusiveGpu);
     const live = new LiveManager(database, options, settings, spawnLive, gate);
     await live.recover();
+    const retention = new Retention(database, options);
     const idle = () =>
       new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, interval);
@@ -106,7 +108,7 @@ export async function runWorker(
     // --once keeps its meaning: process at most one job, and no live sessions.
     const results = await Promise.allSettled([
       ...Array.from({ length: once ? 1 : concurrency }, () => slot()),
-      ...(once ? [] : [liveLoop()]),
+      ...(once ? [] : [liveLoop(), retention.run(shutdown.signal)]),
     ]);
     if (lostLock) throw lostLock;
     const failed = results.find((r) => r.status === 'rejected');

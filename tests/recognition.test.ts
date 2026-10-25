@@ -209,7 +209,7 @@ test('Live payload pins the same joint-OCR snapshot as a job and accepts only Yo
       out,
     );
     const payload = JSON.parse(await readFile(out, 'utf8'));
-    assert.deepEqual(payload.source, { type: 'youtube', url, exclude_zones: [] });
+    assert.deepEqual(payload.source, { type: 'youtube', url, exclude_zones: [], max_height: 1080 });
     assert.deepEqual(payload.pipeline_snapshot, await new PipelineRegistry().resolve('joint'));
     for (const [pipeline, link, reason] of [
       ['joint', 'https://example.com/watch?v=x', /YouTube/],

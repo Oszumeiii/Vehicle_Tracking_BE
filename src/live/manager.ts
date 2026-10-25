@@ -1,4 +1,5 @@
 import { spawn, ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { mkdir, readdir, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
@@ -11,9 +12,10 @@ import {
   verifySnapshot,
   WorkerOptions,
 } from '../recognition/engine';
+import { PipelineRegistry } from '../recognition/registry';
 import { ingestTrack } from './ingest';
-import { livePayload } from './payload';
-import { recordEvent } from './sessions';
+import { isLivePipeline, livePayload } from './payload';
+import { ACTIVE_SQL, recordEvent } from './sessions';
 
 type Row = Record<string, any>;
 export type SpawnLive = (python: string, args: string[]) => ChildProcess;
@@ -119,6 +121,8 @@ interface Run {
  */
 export class LiveManager {
   private runs = new Map<string, Run>();
+  // Cameras whose pipeline could not be resolved: retry time and consecutive failures.
+  private restartBlocked = new Map<string, { until: number; failures: number }>();
 
   constructor(
     private database: Database,
@@ -126,7 +130,78 @@ export class LiveManager {
     private settings: LiveSettings = liveSettings(),
     private spawnLive: SpawnLive = spawnLiveProcess,
     private gate = new GpuGate(settings.exclusiveGpu),
+    private registry = new PipelineRegistry(),
   ) {}
+
+  /**
+   * Queue a new session for each always-on camera that has none. Consecutive short
+   * sessions (under two minutes, e.g. a broadcast that is down) back off 1, 2, 4...
+   * up to 30 minutes; a session that ran longer resets the backoff.
+   */
+  async autoRestart() {
+    const cameras = (
+      await this.database.query(
+        `SELECT c.* FROM stream_sources c WHERE c.always_on AND NOT EXISTS (
+          SELECT 1 FROM live_sessions s WHERE s.stream_source_id=c.id AND s.status IN ${ACTIVE_SQL})`,
+      )
+    ).rows;
+    for (const camera of cameras) {
+      const recent = (
+        await this.database.query(
+          `SELECT id, finished_at, extract(epoch FROM finished_at - coalesce(started_at, created_at)) AS ran
+          FROM live_sessions WHERE stream_source_id=$1 ORDER BY created_at DESC LIMIT 12`,
+          [camera.id],
+        )
+      ).rows;
+      const failures = recent.findIndex((row) => Number(row.ran) >= 120);
+      const short = failures < 0 ? recent.length : failures;
+      const delay = short ? Math.min(30, 2 ** (short - 1)) * 60_000 : 0;
+      const last = recent[0];
+      if (last?.finished_at && Date.now() - new Date(last.finished_at).getTime() < delay) continue;
+      const blocked = this.restartBlocked.get(camera.id);
+      if (blocked && Date.now() < blocked.until) continue;
+      const auto = camera.auto_settings;
+      let snapshot: Row;
+      try {
+        snapshot = await this.registry.resolve(auto.pipeline_id);
+        if (!isLivePipeline(snapshot))
+          throw new Error('Pipeline is not a five-frame joint pipeline');
+      } catch (error) {
+        const failures = (blocked?.failures ?? 0) + 1;
+        this.restartBlocked.set(camera.id, {
+          failures,
+          until: Date.now() + Math.min(30, 2 ** (failures - 1)) * 60_000,
+        });
+        if (last)
+          await recordEvent(this.database, last.id, 'error', {
+            code: 'AUTO_RESTART_FAILED',
+            message: error instanceof Error ? error.message : String(error),
+          });
+        continue;
+      }
+      this.restartBlocked.delete(camera.id);
+      const settings = {
+        min_confidence: auto.min_confidence ?? 0.85,
+        max_track_seconds: auto.max_track_seconds ?? 30,
+        max_height: auto.max_height ?? 1080,
+        exclude_zones: camera.exclude_zones,
+      };
+      await this.database
+        .transaction(async (c) => {
+          const id = randomUUID().replace(/-/g, '');
+          await c.query(
+            `INSERT INTO live_sessions(id,stream_source_id,requested_by,pipeline_snapshot,settings)
+            VALUES($1,$2,$3,$4,$5)`,
+            [id, camera.id, camera.owner_id, JSON.stringify(snapshot), JSON.stringify(settings)],
+          );
+          await recordEvent(c, id, 'status', { status: 'queued', reason: 'auto_restart' });
+        })
+        .catch((error) => {
+          // Another session became active meanwhile (one per camera); try again next tick.
+          if ((error as any)?.code !== '23505') throw error;
+        });
+    }
+  }
 
   get active() {
     return this.runs.size;
@@ -200,6 +275,7 @@ export class LiveManager {
         if (run) await this.requestStop(run);
       }
     }
+    await this.autoRestart();
     while (this.runs.size < this.settings.maxSessions && !this.options.signal?.aborted) {
       if (!this.gate.enter('live')) break;
       let session: Row | undefined;
@@ -251,7 +327,12 @@ export class LiveManager {
       await writeFile(
         payload,
         JSON.stringify(
-          livePayload(session.pipeline_snapshot, session.url, session.settings.exclude_zones ?? []),
+          livePayload(
+            session.pipeline_snapshot,
+            session.url,
+            session.settings.exclude_zones ?? [],
+            session.settings.max_height ?? 1080,
+          ),
         ),
       );
       child = this.spawnLive(this.options.python, [

@@ -41,6 +41,23 @@ def box_iou(a, b):
     return inter / union if union > 0 else 0.
 
 
+def capture_times(clock, first, last):
+    """Wall-clock interval of a track: the broadcast's own clock when the source provides one
+    (HLS program date-time), else receive time of the epoch's first frame plus PTS offsets."""
+    stream_time = clock["stream_time"]
+    if stream_time is not None:
+        start, end = stream_time(first), stream_time(last)
+        received = clock["started_at"] + timedelta(seconds=first - clock["first_pts"])
+        # A broadcast clock is trusted only if it lags receive time plausibly (YouTube: ~5-60 s).
+        if start is not None and end is not None and -5 <= (received - start).total_seconds() <= 180:
+            return "stream", utc(start), utc(end)
+
+    def received_at(pts):
+        return utc(clock["started_at"] + timedelta(seconds=pts - clock["first_pts"]))
+
+    return "received", received_at(first), received_at(last)
+
+
 class DuplicateLinker:
     """Link a track to an earlier one in the same epoch that is probably the same vehicle.
 
@@ -142,7 +159,7 @@ class LiveRunner:
         capacity = self.reader_capacity or max(8, math.ceil(self.buffer_seconds * info["fps"]))
         reader = LiveReader(connection, capacity).start()
         self.linker.reset()
-        clock = dict(started_at=None, first_pts=None)
+        clock = dict(started_at=None, first_pts=None, stream_time=getattr(connection, "stream_time", None))
         outcome, reason, frames = "error", None, 0
         last_frame = last_stats = time.monotonic()
         processed_since = 0
@@ -175,6 +192,7 @@ class LiveRunner:
                             self._record(epoch, candidate, cfg, clock)
                     if now - last_stats >= self.stats_interval:
                         lag = (datetime.now(timezone.utc) - item[4]).total_seconds() if isinstance(item, tuple) else None
+                        pacer = getattr(connection, "pacer", None)
                         self.emit(dict(type="stats", epoch=epoch, frames_read=reader.read,
                                        frames_dropped=reader.dropped, frames_processed=frames,
                                        sampled=session.sampled, active_tracks=len(session.active),
@@ -183,6 +201,8 @@ class LiveRunner:
                                        retained_frames=session.retained_frames,
                                        retained_mib=round(session.retained_bytes / 2**20, 1),
                                        lag_seconds=None if lag is None else round(lag, 2),
+                                       source_lag_seconds=pacer and round(pacer.lag, 2),
+                                       skipped_seconds=pacer and round(pacer.skipped_seconds, 1),
                                        fps=round(processed_since / (now - last_stats), 2)))
                         last_stats, processed_since = now, 0
                 if stop.is_set():
@@ -224,13 +244,11 @@ class LiveRunner:
         duplicate_of = self.linker.link(key, text, candidate["first_seconds"], candidate["last_seconds"],
                                         candidate["first_box"], candidate["last_box"])
 
-        def captured(pts):
-            return utc(clock["started_at"] + timedelta(seconds=pts - clock["first_pts"]))
-
+        capture_clock, captured_from, captured_to = capture_times(clock, candidate["first_seconds"],
+                                                                  candidate["last_seconds"])
         record = dict(track=key, epoch=epoch, status=status, confidence=confidence, duplicate_of=duplicate_of,
-                      observations=candidate["observations"],
-                      captured_from=captured(candidate["first_seconds"]), captured_to=captured(candidate["last_seconds"]),
-                      appearance=appearance)
+                      observations=candidate["observations"], captured_from=captured_from,
+                      captured_to=captured_to, capture_clock=capture_clock, appearance=appearance)
         write_json(folder / "track.json", record)
         self.tracks += 1
         self.emit(dict(type="track", track=key, epoch=epoch, text=text, status=status, confidence=confidence,

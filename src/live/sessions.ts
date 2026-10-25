@@ -12,6 +12,8 @@ export function sessionView(row: Record<string, any>) {
   const { pipeline_snapshot, owner_id: _owner, ...value } = row;
   return {
     ...value,
+    // bigint sums arrive from pg as strings.
+    ...(value.evidence_bytes == null ? {} : { evidence_bytes: Number(value.evidence_bytes) }),
     pipeline_id: pipeline_snapshot?.id ?? null,
     pipeline_version: pipeline_snapshot?.version ?? null,
     results_url: `/api/v2/recognition-results?live_session_id=${row.id}`,

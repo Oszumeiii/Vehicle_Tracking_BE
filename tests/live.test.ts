@@ -158,6 +158,7 @@ test('cameras and sessions are owner scoped, validated and limited to one active
   assert.deepEqual(queued.settings, {
     min_confidence: 0.85,
     max_track_seconds: 30,
+    max_height: 1080,
     exclude_zones: [[0.6, 0.1, 0.9, 0.2]],
   });
   await start('owner', 'joint').expect(409);
@@ -210,6 +211,7 @@ test('live manager runs a session, ingests tracks as jobs and stops on request',
     type: 'youtube',
     url: URL,
     exclude_zones: [[0.1, 0.1, 0.3, 0.2]],
+    max_height: 1080,
   });
   assert.equal(payload.pipeline_snapshot.id, 'joint');
 

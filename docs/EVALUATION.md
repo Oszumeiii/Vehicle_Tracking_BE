@@ -161,3 +161,28 @@ Kiểm thử riêng bộ chấm:
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/test_evaluation.py -q
 ```
+
+## Hiệu chỉnh ngưỡng tin cậy live
+
+`min_confidence` (mặc định 0.85) quyết định track live nào được đánh dấu `readable`. Ngưỡng chỉ được hiệu chỉnh bằng **nhãn độc lập**; review trong ứng dụng không phải nhãn và không được dùng làm ground truth.
+
+1. Xuất mẫu phân tầng theo confidence từ một camera hoặc phiên:
+
+   ```powershell
+   node dist/src/cli.js export-live-samples --source CAMERA_ID --out data/evaluation/live --per-bin 20
+   ```
+
+   Thư mục chứa `samples/{id}/crop_1..5` và các keyframe còn giữ, `predictions.json` (biển máy đọc và `confidence`) và `ground_truth.template.json`.
+2. Người gán nhãn mở crop/keyframe của từng mẫu, điền `plate_text` bằng biển đọc được; không đọc được thì đặt `null`. Không xem `predictions.json` trong lúc gán nhãn. Lưu thành `ground_truth.json`.
+3. Tính precision/coverage theo từng ngưỡng:
+
+   ```powershell
+   .\.venv\Scripts\python.exe -m scripts.calibrate_threshold `
+     --ground-truth data/evaluation/live/ground_truth.json `
+     --predictions data/evaluation/live/predictions.json `
+     --target-precision 0.95 --output data/evaluation/live/threshold.json
+   ```
+
+   Với mỗi ngưỡng từ 0.50 đến 0.99, báo cáo có số track `readable`, số đúng (khớp chính xác sau chuẩn hóa), precision và coverage (tỉ lệ mẫu được đánh dấu `readable`). `recommended_threshold` là ngưỡng nhỏ nhất đạt precision mục tiêu. Mẫu người gán nhãn ghi `null` mà máy vẫn đọc ra chữ được tính là sai.
+
+Báo cáo chỉ có ý nghĩa với tập nhãn đủ lớn và đại diện cho camera đang dùng. Ngưỡng mới áp dụng qua `min_confidence` khi bật phiên hoặc trong `auto_settings` của camera.

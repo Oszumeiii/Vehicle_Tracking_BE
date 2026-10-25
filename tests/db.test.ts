@@ -275,6 +275,6 @@ test('SQL migration is idempotent and rejects changes to an applied migration', 
   await assert.rejects(migrate(fixture.database, destination), /has changed/);
   assert.equal(
     (await fixture.database.query('SELECT version FROM schema_migrations')).rows.length,
-    5,
+    6,
   );
 });

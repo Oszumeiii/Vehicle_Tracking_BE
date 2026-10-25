@@ -41,7 +41,9 @@ Job Kaggle joint-frame lưu `recognition_method=joint_multiframe`, `agreement_co
   - Tra cứu khớp chính xác text đã chuẩn hóa; không tự thay `O/0`.
   - Với video/ảnh upload: dùng job v2 prepare/recognize succeeded mới nhất theo thời điểm tạo và ID của mỗi nguồn; job queued/failed hoặc extraction v1 không che kết quả v2 succeeded cũ.
   - Với live: mọi track đều được tính.
-  - Kết quả có `origin`, `captured_from/to`, `confidence_status`, `duplicate_of_job_id`; sắp xếp theo giờ chụp (live) hoặc giờ upload.
+  - Kết quả có `origin`, `captured_from/to`, `confidence_status`, `duplicate_of_job_id`, `sighting_id`; sắp xếp theo giờ chụp (live) hoặc giờ upload.
+  - `group_by=sighting`: mỗi lượt xuất hiện một dòng (ưu tiên track đã review, rồi track có confidence cao nhất), kèm `sighting_count`, `first_seen`, `last_seen`. Kết quả upload không gộp.
+- `GET /api/v2/sightings/{id}/results`: các track của một lượt xuất hiện, theo thời gian.
 - `GET /api/v2/recognition-results/{id}`: dự đoán tổng hợp, từng crop/prediction, URL bằng chứng và lịch sử review.
 - `GET /api/v2/detections/{id}/artifacts/{kind}`: `crop|frame|enhanced`. Loại bằng chứng không tồn tại trả `404`; MIME theo file. Nhánh enhanced chỉ có khi thực sự được model/worker hỗ trợ, không sinh giả.
 - `POST /api/v2/recognition-results/{id}/reviews`: `201`. Ví dụ:
@@ -60,15 +62,16 @@ Action `confirm` chấp nhận text máy; `correct` bắt buộc text mới; `un
   - `url` phải là link YouTube.
   - `exclude_zones` gồm tối đa 16 hình chữ nhật `[x1,y1,x2,y2]` chuẩn hóa 0..1; detection có tâm nằm trong vùng bị bỏ.
 - `GET /api/v2/stream-sources`, `GET /api/v2/stream-sources/{id}`: camera của mình (admin thấy tất cả), kèm `active_session`.
-- `PATCH /api/v2/stream-sources/{id}`: `name`, `exclude_zones`; áp dụng từ phiên kế tiếp.
+- `PATCH /api/v2/stream-sources/{id}`: `name`, `exclude_zones`, `always_on`, `auto_settings` (`{pipeline_id, min_confidence?, max_track_seconds?, max_height?}`; `always_on` cần `pipeline_id` của profile joint), `keyframe_retention_hours`, `track_retention_days` (`null` là giữ mãi). Áp dụng từ phiên kế tiếp.
 - `DELETE /api/v2/stream-sources/{id}`: `204`; camera đã có phiên trả `409`.
-- `POST /api/v2/stream-sources/{id}/sessions`: `{pipeline_id,min_confidence?,max_track_seconds?}` → `202`, phiên `queued`.
+- `POST /api/v2/stream-sources/{id}/sessions`: `{pipeline_id,min_confidence?,max_track_seconds?,max_height?}` → `202`, phiên `queued`. `max_height` là 480, 720 hoặc 1080 (mặc định).
   - Chỉ profile `five_frame_joint`, nếu không thì trả `422`.
   - Camera đang có phiên hoạt động trả `409`; pipeline chưa sẵn sàng trả `503`.
 - `GET /api/v2/live-sessions`: lọc `stream_source_id`, `status`, phân trang.
 - `GET /api/v2/live-sessions/{id}`: `status`, `settings`, `stats`, `stats_at`, `tracks_count`, `error_code`, `results_url`.
   - Trạng thái: `queued`, `starting`, `running`, `reconnecting`, `stopping`, `stopped`, `ended`, `failed`, `interrupted`.
-- `POST /api/v2/live-sessions/{id}/stop`: `202`.
+- `DELETE /api/v2/live-sessions/{id}`: `204`, xóa phiên đã kết thúc cùng track, bằng chứng và lịch sử; phiên đang hoạt động trả `409`.
+- `POST /api/v2/live-sessions/{id}/stop`: `202`. Dừng phiên cũng tắt `always_on` của camera.
   - Phiên `queued` dừng ngay; phiên đang chạy chốt và OCR các track đang mở rồi chuyển `stopped`.
   - Phiên đã kết thúc trả `409`.
 - `GET /api/v2/live-sessions/{id}/events`: lịch sử bền vững theo `id` tăng dần (`status`, `error`, `track_rejected`, `track`, `alert`).

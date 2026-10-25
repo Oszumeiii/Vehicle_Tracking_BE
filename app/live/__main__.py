@@ -66,7 +66,7 @@ def source_factory(source):
 
     if source.get("type") == "youtube":
         def open_youtube():
-            info = resolve_youtube(source["url"])
+            info = resolve_youtube(source["url"], max_height=int(source.get("max_height") or 1080))
             return info, FfmpegFrames(info["url"], info["width"], info["height"])
         return open_youtube
     if source.get("type") == "file":

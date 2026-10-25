@@ -94,6 +94,7 @@ Phiên live lỗi có `error_code` trên `GET /api/v2/live-sessions/{id}`. Chi t
 
 - `STREAM_FAILED`: kết nối lại thất bại quá số lần cho phép.
 - `LIVE_PROCESS_EXITED`: tiến trình live thoát bất thường.
+- `AUTO_RESTART_FAILED` (event trên phiên gần nhất của camera 24/7): không dựng được snapshot pipeline để bật lại; worker thử lại sau 1, 2, 4… tối đa 30 phút.
 - `LIVE_STALLED`: tiến trình live không báo gì trong `PLATE_LIVE_STALL_SECONDS` và đã bị kill. Nguyên nhân thường gặp: GPU hết VRAM vì có tiến trình khác dùng chung.
 - `WORKER_INTERRUPTED`: worker dừng hoặc khởi động lại giữa phiên.
 - Các mã khởi động (`CHECKPOINT_MISSING`, `ENVIRONMENT_ERROR`, `CUDA_*`, `PIPELINE_FAILED`): giống job upload.
@@ -107,6 +108,8 @@ Chạy lại bằng `POST /api/v2/recognition-jobs` với cùng `media_id`. Job 
 ## Dừng, khởi động lại và cập nhật
 
 Để bảo trì, ngừng nhận request mới bằng cách dừng API; chờ job hiện tại kết thúc nếu muốn giữ lần xử lý đó, rồi dừng worker bằng Ctrl+C. Dừng worker trong lúc inference sẽ ngắt subprocess và job có thể thành `WORKER_INTERRUPTED`. Nếu tiến trình bị tắt đột ngột, lần khởi động worker tiếp theo chuyển các job còn `running` sang `failed/WORKER_INTERRUPTED`.
+
+Worker dọn bằng chứng live mỗi `PLATE_RETENTION_INTERVAL_MINUTES` theo thời hạn của từng camera (xem README). Cột `recognition_jobs.evidence_bytes` cho biết dung lượng từng track; tổng theo phiên có ở `GET /live-sessions/{id}`. Bản sao lưu nên chạy sau một lượt dọn để không mang theo keyframe sắp bị xóa.
 
 Phiên live khi worker dừng bằng Ctrl+C sẽ chốt track đang mở (tối đa `PLATE_LIVE_STOP_SECONDS`, mặc định 120 s) rồi chuyển `interrupted`. Nếu worker bị tắt đột ngột, lần khởi động sau sẽ chuyển phiên sang `interrupted` và nhập các track đã ghi xuống đĩa.
 

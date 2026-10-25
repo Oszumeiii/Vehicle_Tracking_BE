@@ -56,6 +56,7 @@ export function jobView(row: any) {
   const { pipeline_snapshot, ...value } = row;
   return {
     ...value,
+    evidence_bytes: value.evidence_bytes == null ? null : Number(value.evidence_bytes),
     pipeline_id: pipeline_snapshot?.id ?? null,
     pipeline_version: pipeline_snapshot?.version ?? null,
     pipeline_task: pipeline_snapshot?.id ? (pipeline_snapshot.task ?? 'recognize') : null,

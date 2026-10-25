@@ -191,3 +191,53 @@ def evaluate_recognition(ground_truth: dict, predictions: dict, *, split: str | 
         "normalization": "uppercase; remove whitespace and hyphen; preserve O/0 and I/1",
         "variants": variants,
     }
+
+
+def calibrate_threshold(ground_truth: Any, predictions: Any, *, target_precision: float = 0.95,
+                        thresholds: list[float] | None = None) -> dict:
+    """Precision and coverage of the live "readable" status at each confidence threshold.
+
+    Ground truth comes from an independent labeller (never from app reviews); a null
+    plate_text means the labeller could not read the plate either, so any machine
+    text for it counts as wrong. Each prediction needs a confidence in [0, 1].
+    """
+    if not 0 < target_precision <= 1:
+        raise ValueError("target_precision must be in (0, 1]")
+    truth = {}
+    for sample in _records(ground_truth, "samples"):
+        sample_id = _identifier(sample.get("sample_id"), "sample_id")
+        if sample_id in truth:
+            raise ValueError(f"Duplicate ground-truth sample_id: {sample_id}")
+        plate = sample.get("plate_text")
+        if plate is not None and (not isinstance(plate, str) or not normalize_plate(plate)):
+            raise ValueError(f"plate_text of {sample_id} must be a nonempty string or null")
+        truth[sample_id] = None if plate is None else normalize_plate(plate)
+    if not truth:
+        raise ValueError("Ground truth has no samples")
+    machine = {}
+    for prediction in _records(predictions, "predictions"):
+        sample_id = _identifier(prediction.get("sample_id"), "sample_id")
+        if sample_id not in truth:
+            raise ValueError(f"Prediction for unknown sample_id: {sample_id}")
+        if sample_id in machine:
+            raise ValueError(f"Duplicate prediction for sample_id: {sample_id}")
+        confidence = prediction.get("confidence")
+        if confidence is not None and not (isinstance(confidence, (int, float)) and 0 <= confidence <= 1
+                                           and math.isfinite(confidence)):
+            raise ValueError(f"confidence of {sample_id} must be in [0, 1] or null")
+        text = prediction.get("plate_text")
+        machine[sample_id] = (normalize_plate(text) if isinstance(text, str) and text.strip() else None,
+                              confidence)
+    rows = []
+    for threshold in thresholds or [round(0.5 + 0.01 * i, 2) for i in range(50)]:
+        readable = [sid for sid, (text, conf) in machine.items()
+                    if text and conf is not None and conf >= threshold]
+        correct = sum(1 for sid in readable if truth[sid] is not None and machine[sid][0] == truth[sid])
+        rows.append(dict(threshold=threshold, readable=len(readable), correct=correct,
+                         precision=correct / len(readable) if readable else None,
+                         coverage=len(readable) / len(truth)))
+    reaching = [row for row in rows if row["precision"] is not None and row["precision"] >= target_precision]
+    return dict(samples=len(truth), unreadable_by_labeller=sum(v is None for v in truth.values()),
+                predicted=len(machine), target_precision=target_precision,
+                recommended_threshold=min(row["threshold"] for row in reaching) if reaching else None,
+                thresholds=rows)
