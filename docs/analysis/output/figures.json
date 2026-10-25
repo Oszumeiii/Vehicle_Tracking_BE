@@ -5,8 +5,8 @@
     "title": "Use case tổng quan",
     "orientation": "portrait",
     "render_size": [
-      746,
-      1040
+      822,
+      1447
     ]
   },
   {
@@ -51,6 +51,16 @@
   },
   {
     "number": 6,
+    "source": "19-activity-live-track",
+    "title": "Từ frame live đến kết quả và cảnh báo",
+    "orientation": "portrait",
+    "render_size": [
+      680,
+      1267
+    ]
+  },
+  {
+    "number": 7,
     "source": "06-seq-login",
     "title": "Sequence đăng nhập",
     "orientation": "portrait",
@@ -60,7 +70,7 @@
     ]
   },
   {
-    "number": 7,
+    "number": 8,
     "source": "07-seq-submit",
     "title": "Sequence upload và tạo job",
     "orientation": "portrait",
@@ -70,7 +80,7 @@
     ]
   },
   {
-    "number": 8,
+    "number": 9,
     "source": "08-seq-worker",
     "title": "Sequence worker joint-five",
     "orientation": "portrait",
@@ -80,7 +90,7 @@
     ]
   },
   {
-    "number": 9,
+    "number": 10,
     "source": "09-seq-review",
     "title": "Sequence kiểm duyệt",
     "orientation": "portrait",
@@ -90,7 +100,7 @@
     ]
   },
   {
-    "number": 10,
+    "number": 11,
     "source": "10-seq-delete",
     "title": "Sequence xóa job và nguồn",
     "orientation": "portrait",
@@ -100,7 +110,17 @@
     ]
   },
   {
-    "number": 11,
+    "number": 12,
+    "source": "17-seq-live-session",
+    "title": "Sequence phiên live",
+    "orientation": "landscape",
+    "render_size": [
+      1659,
+      1244
+    ]
+  },
+  {
+    "number": 13,
     "source": "11-state-job",
     "title": "Trạng thái job",
     "orientation": "portrait",
@@ -110,7 +130,7 @@
     ]
   },
   {
-    "number": 12,
+    "number": 14,
     "source": "14-state-review",
     "title": "Trạng thái kiểm duyệt",
     "orientation": "landscape",
@@ -120,17 +140,27 @@
     ]
   },
   {
-    "number": 13,
+    "number": 15,
+    "source": "18-state-live-session",
+    "title": "Trạng thái phiên live",
+    "orientation": "landscape",
+    "render_size": [
+      1617,
+      888
+    ]
+  },
+  {
+    "number": 16,
     "source": "12-erd",
     "title": "ERD tổng thể",
     "orientation": "portrait",
     "render_size": [
-      512,
-      994
+      792,
+      1176
     ]
   },
   {
-    "number": 14,
+    "number": 17,
     "source": "13-erd-ocr",
     "title": "Chi tiết quan hệ OCR",
     "orientation": "landscape",
@@ -140,23 +170,23 @@
     ]
   },
   {
-    "number": 15,
+    "number": 18,
     "source": "15-architecture",
     "title": "Kiến trúc thành phần",
-    "orientation": "portrait",
+    "orientation": "landscape",
     "render_size": [
-      712,
-      767
+      1248,
+      805
     ]
   },
   {
-    "number": 16,
+    "number": 19,
     "source": "16-deployment",
     "title": "Triển khai bản đầu",
     "orientation": "landscape",
     "render_size": [
-      1229,
-      553
+      1301,
+      646
     ]
   }
 ]

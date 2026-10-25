@@ -38,6 +38,22 @@ Tra cứu áp dụng quyền sở hữu trước khi trả kết quả. Với m�
 
 CSV xuất theo một job cụ thể và kiểm tra quyền độc lập. Mỗi dòng là một appearance, có cả text máy và text hiệu lực, trạng thái duyệt, phương pháp nhận diện, vị trí frame/timestamp. CSV không phải bộ nhãn chuẩn đánh giá model. Không sử dụng text đã sửa để báo accuracy máy một cách tự động.
 
+Tra cứu cũng bao gồm kết quả live: mỗi track live là một job, nên mọi track đều được tính (không áp quy tắc "lượt mới nhất" của media). Bộ lọc `origin`, camera, phiên, giờ chụp, mức tin cậy; `group_by=sighting` gộp các track cùng biển trên một camera trong vài phút thành một dòng.
+
+### 7.5 Nhận diện trên camera YouTube Live
+
+Người dùng tạo camera (URL YouTube Live, vùng loại trừ) rồi bật phiên, hoặc bật chế độ 24/7 để worker tự mở phiên. Worker chỉ nhận phiên khi GPU rảnh (job upload và live không chạy cùng lúc trên GPU 8 GB), rồi chạy tiến trình `python -m app.live`:
+- `yt-dlp` lấy URL HLS; ffmpeg giải mã với `-re` (nhịp thật) và `-copyts` (giữ timestamp gốc của segment);
+- `Pacer` giới hạn tốc độ đuổi kịp sau khi kẹt mạng ở 1,3×, để buffer không phải bỏ frame giữa track;
+- `TrackSession` dùng chung lõi với video upload: adaptive sampling, empty-scene gate, YOLO11l (bỏ detection trong vùng loại trừ), BoT-SORT; track quá `max_track_seconds` được chốt (xe đỗ/chờ đèn);
+- mỗi track đủ 5 frame được ghi crop/keyframe, OCR joint 5 frame, gắn giờ của luồng theo `#EXT-X-PROGRAM-DATE-TIME` (hoặc giờ nhận frame) và phân loại `readable`/`low_confidence`/`unreadable` theo ngưỡng.
+
+![Từ frame live đến kết quả và cảnh báo](diagrams/19-activity-live-track.png)
+
+Worker nhận từng track qua stdout, chuyển thư mục bằng chứng sang `recognition/{job}`, kiểm tra bằng chứng như kết quả upload rồi ghi trong một transaction: job `succeeded`, appearance, sự kiện `track` và sự kiện `alert` nếu biển khớp watchlist. Track được gán `sighting_id` khi cùng biển (hoặc lệch một ký tự) với một track gần đây trên cùng camera. Trigger PostgreSQL gửi NOTIFY khi commit; API đẩy sự kiện tới client qua SSE.
+
+Định kỳ, worker dọn bằng chứng theo cấu hình camera: sau một số giờ mỗi track chỉ giữ một keyframe (crop luôn còn), sau một số ngày track bị xóa; track đã kiểm duyệt hoặc có cảnh báo được giữ.
+
 ## 9 Mô hình trạng thái
 
 ### 9.1 Trạng thái job
@@ -56,11 +72,19 @@ Hai trạng thái độc lập. Máy có thể `readable`, `unreadable`, `ambigu
 
 Mọi trạng thái review đều có thể nhận thao tác tiếp theo hợp lệ. Sơ đồ rút gọn các chuyển tiếp lặp bằng trạng thái lựa chọn hành động; đây không phải một trạng thái được lưu trong DB. Mỗi lần commit tăng revision một đơn vị và thêm lịch sử, không thay đổi trạng thái máy.
 
+### 9.3 Trạng thái phiên live
+
+Phiên bắt đầu `queued`, chuyển `starting` khi worker nhận, `running` khi có frame đầu tiên và `reconnecting` khi mất luồng. Yêu cầu dừng chuyển `stopping`; tiến trình chốt và OCR các track đang mở rồi phiên thành `stopped`. Các trạng thái kết thúc khác: `ended` (hết live, video bị gỡ), `failed` (lỗi khởi động, quá số lần kết nối lại, tiến trình im lặng quá `PLATE_LIVE_STALL_SECONDS`) và `interrupted` (worker dừng hoặc khởi động lại). Mỗi lần đổi trạng thái được ghi vào `live_session_events`.
+
+![Trạng thái phiên live](diagrams/18-state-live-session.png)
+
+Mỗi camera chỉ có một phiên ở các trạng thái hoạt động (ràng buộc bằng unique index một phần). Camera 24/7 không có phiên hoạt động thì worker tạo phiên `queued` mới; nếu các phiên liên tiếp sống dưới hai phút, lần tạo kế tiếp chờ 1, 2, 4… tối đa 30 phút. Người dùng dừng phiên thì chế độ 24/7 tắt.
+
 ## 12 Kiến trúc hệ thống và triển khai
 
 ### 12.1 Ranh giới hệ thống
 
-Client gọi API NestJS bằng Bearer token. API chịu trách nhiệm xác thực, phân quyền, validation, upload, query và review. Worker Node là tiến trình riêng, lấy việc từ PostgreSQL và điều khiển subprocess Python. Python chạy detector, tracking và OCR; không trực tiếp quản lý tài khoản hoặc ghi bảng nghiệp vụ.
+Client gọi API NestJS bằng Bearer token. API chịu trách nhiệm xác thực, phân quyền, validation, upload, query, review, camera/phiên live và watchlist; một SSE hub trong API giữ một kết nối PostgreSQL riêng để `LISTEN` và đẩy sự kiện live. Worker Node là tiến trình riêng, lấy việc từ PostgreSQL và điều khiển subprocess Python: job upload qua supervisor, phiên live qua tiến trình `app.live` (stdin để dừng, stdout là JSON lines). Worker cũng dọn bằng chứng live. Python chạy detector, tracking và OCR; không trực tiếp quản lý tài khoản hoặc ghi bảng nghiệp vụ.
 
 ![Kiến trúc thành phần](diagrams/15-architecture.png)
 
@@ -94,3 +118,8 @@ Khi đóng gói hoặc chuyển host, phải đưa theo migration SQL, mã `app/
 | Prediction bất biến ở tầng ứng dụng | Giữ bằng chứng đánh giá; `effective_text` là bản chiếu cập nhật theo review trong cùng transaction. |
 | Joint OCR lưu ở appearance | Biểu diễn đúng model nhận năm frame đồng thời, không tạo năm kết quả giả. |
 | File ngoài DB | Tránh ảnh/video Base64 trong bảng; phải quản lý sao lưu và xóa file cùng metadata. |
+| Mỗi track live là một job | Dùng lại xem, kiểm duyệt, tra cứu, CSV, xóa; quyền đi theo chủ camera; không cần bảng kết quả live riêng. |
+| Tiến trình live thường trú, không cắt clip | Tracking liên tục qua ranh giới clip, độ trễ vài giây; worker giám sát, kết nối lại và tự bật lại. |
+| LISTEN/NOTIFY + SSE | Không thêm message broker; NOTIFY chỉ gửi id, client đọc lại dòng đã commit nên nối lại theo `Last-Event-ID` không mất sự kiện. |
+| Chia GPU giữa upload và live | Đo được hai tiến trình cùng nạp model làm tràn VRAM 8 GB và cả hai gần như đứng; đánh đổi: upload chờ khi camera chạy. |
+| Giờ chụp theo PROGRAM-DATE-TIME | PTS gốc của segment (`-copyts`) ứng với PDT theo độ lệch không đổi; giờ nhận frame chỉ là phương án dự phòng. |

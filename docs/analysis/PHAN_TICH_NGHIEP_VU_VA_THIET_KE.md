@@ -2,7 +2,7 @@
 
 Nhận diện biển số độ phân giải thấp
 
-Phiên bản 1.1 · 14/10/2026
+Phiên bản 1.1 · 24/10/2026
 
 ## 1. Mục tiêu, bối cảnh và thuật ngữ
 
@@ -36,6 +36,12 @@ Pipeline và model OCR được tích hợp theo notebook Kaggle của nhóm `tr
 | Effective text | Chuỗi có hiệu lực để hiển thị/tra cứu sau quy tắc kiểm duyệt. |
 | Review / revision | Một thao tác kiểm duyệt / số phiên bản để phát hiện sửa đồng thời. |
 | Pipeline snapshot | Phiên bản, checksum và cấu hình thực tế của lượt chạy. |
+| Camera (stream source) | Một URL YouTube Live thuộc về người tạo, kèm vùng loại trừ, chế độ 24/7 và thời hạn lưu bằng chứng. |
+| Phiên live (live session) | Một lần chạy tiến trình nhận diện trên camera, từ lúc bật đến khi dừng/kết thúc/lỗi. |
+| Track live | Một track đã chốt của phiên live; mỗi track được lưu thành một job `succeeded` có một appearance. |
+| Lượt xuất hiện (sighting) | Nhóm các track live cùng biển (hoặc lệch một ký tự) trên một camera trong vài phút; gợi ý, không phải danh tính xe. |
+| Watchlist | Danh sách biển số người dùng muốn được cảnh báo khi camera đọc được. |
+| Vùng loại trừ | Hình chữ nhật chuẩn hóa trên khung hình; detection có tâm nằm trong vùng bị bỏ qua (biển tên đường, bảng cố định). |
 
 ## 2. Bên liên quan và phân quyền
 
@@ -69,10 +75,13 @@ Quyền kế thừa từ `media_assets.owner_id` sang job, appearance, detection
 | Thực hiện thủ công | Xác nhận/sửa kết quả | Có; prepare cho phép nhập bằng `correct`, không `confirm` khi chưa có text máy. |
 | Dự đoán từng ảnh | Lưu prediction theo detection | Hợp đồng mở rộng vẫn hỗ trợ; profile OCR hiện hành dùng prediction cấp appearance. |
 | Tăng độ phân giải | Tùy model | Chưa có nhánh SR thực trong profile Kaggle; không tạo ảnh enhanced giả. |
+| Camera YouTube Live | Ngoài phạm vi ban đầu | Đã bổ sung: camera, phiên live, tiến trình `app.live` trong worker, mỗi track thành một job; 17 endpoint live (camera, phiên, SSE, watchlist, lượt xuất hiện). |
+| Theo dõi real-time | Poll trạng thái | SSE `GET /live-events/stream` qua PostgreSQL LISTEN/NOTIFY, phát lại theo id. |
+| Vận hành lâu dài | Không có | Camera 24/7 tự bật lại, dọn bằng chứng theo thời hạn, xóa phiên, chia GPU giữa job upload và live. |
 
 ### 3.2. Ngoài phạm vi
 
-Camera trực tiếp, bãi xe, vé/thu phí, chủ phương tiện, xử phạt, nhận dạng danh tính xe, chia sẻ dữ liệu công khai, huấn luyện model và tự động sửa biển số theo luật quốc gia không thuộc bản đầu. Không có API hủy job đang chạy hoặc retry tại chỗ; chạy lại tạo job mới. Frontend hoàn chỉnh, OCR ảnh đơn và thẩm định accuracy trên tập nhãn độc lập là các hạng mục riêng cần tiếp tục khi triển khai sản phẩm/đánh giá.
+Camera CCTV/RTSP, nhiều camera live đồng thời trên một GPU 8 GB, bãi xe, vé/thu phí, chủ phương tiện, xử phạt, nhận dạng danh tính xe, chia sẻ dữ liệu công khai, huấn luyện model và tự động sửa biển số theo luật quốc gia không thuộc bản đầu. Không có API hủy job đang chạy hoặc retry tại chỗ; chạy lại tạo job mới. Frontend hoàn chỉnh, OCR ảnh đơn và thẩm định accuracy trên tập nhãn độc lập là các hạng mục riêng cần tiếp tục khi triển khai sản phẩm/đánh giá.
 
 ## 4. Yêu cầu chức năng và phi chức năng
 
@@ -98,6 +107,13 @@ Camera trực tiếp, bãi xe, vé/thu phí, chủ phương tiện, xử phạt,
 | FR16 | Xuất CSV job thành công, có kết quả máy, hiệu lực, trạng thái và vị trí xuất hiện. | UC09 |
 | FR17 | Xóa job kết thúc, giữ nguồn; xóa nguồn chỉ khi hết tham chiếu job. | UC10, UC11 |
 | FR18 | Quản lý phiên bản schema bằng migration có checksum; dữ liệu lịch sử (job `detect_only` cũ) vẫn đọc được qua API hiện hành, không suy diễn OCR. | UC05, UC06; vận hành |
+| FR19 | Tạo/sửa/xóa camera YouTube Live theo chủ sở hữu; vùng loại trừ tối đa 16 hình chữ nhật; cung cấp `embed_url` và ảnh khung hình mới nhất để vẽ vùng. | UC13 |
+| FR20 | Bật phiên live với profile joint; mỗi camera chỉ một phiên hoạt động; dừng phiên chốt và OCR các track đang mở. | UC14 |
+| FR21 | Camera 24/7: worker tự bật phiên mới khi không có phiên, kể cả sau khi khởi động lại; lùi dần khi phiên liên tục lỗi. | UC14 |
+| FR22 | Mỗi track live đủ 5 frame thành một job succeeded có bằng chứng, giờ chụp, mức tin cậy và gợi ý trùng; dùng chung xem, kiểm duyệt, tra cứu, CSV. | UC06-UC09, UC14 |
+| FR23 | Đẩy trạng thái, stats, track và cảnh báo real-time qua SSE; nối lại không mất sự kiện bằng `Last-Event-ID`. | UC15 |
+| FR24 | Watchlist theo người dùng; biển khớp (giống hệt hoặc lệch 1 ký tự) tạo cảnh báo chỉ gửi người đặt. | UC16 |
+| FR25 | Gộp track thành lượt xuất hiện khi tra cứu; xóa phiên đã kết thúc cùng bằng chứng; dọn bằng chứng theo thời hạn của camera. | UC08, UC17 |
 
 ### 4.2. Yêu cầu phi chức năng
 
@@ -111,6 +127,9 @@ Camera trực tiếp, bãi xe, vé/thu phí, chủ phương tiện, xử phạt,
 | NFR06 | Giới hạn tài nguyên và đầu vào | Upload mặc định 500 MiB, ảnh tối đa 25 MP; limit tối đa 200; cấu hình timeout phía server. |
 | NFR07 | Khả năng vận hành/bảo trì | Migration có checksum, health DB/schema, tách API/worker, hướng dẫn backup và log; health không thay kiểm tra inference. |
 | NFR08 | Đánh giá khoa học | Nhãn độc lập, chia tập theo nguồn/identity khi biết; đo exact accuracy, CER, unreadable và latency; báo riêng lỗi bỏ sót. |
+| NFR09 | Live gần thời gian thực | Bài chạy 60 phút: bỏ 0,6% frame, lag xử lý p95 0,86 s; track đến client sau khoảng 3,5-4,2 s khi luồng ổn định; đuổi kịp sau khi kẹt tối đa 1,3× mà không bỏ frame. |
+| NFR10 | Live bền và tự phục hồi | Kết nối lại khi mất luồng; watchdog `LIVE_STALLED`; worker khởi động lại thì phiên `interrupted` và track trên đĩa vẫn được nhập; camera 24/7 tự bật lại. |
+| NFR11 | Tài nguyên live có giới hạn | Một phiên khoảng 4,4 GB VRAM; job upload và live không chạy cùng lúc trên GPU 8 GB; bằng chứng khoảng 2,6 GB/giờ, giảm khoảng 80% sau khi bỏ bớt keyframe. |
 
 Giới hạn upload có thể cấu hình; giới hạn 25 MP hiện được kiểm tra trong mã probe ảnh. Đây là các giới hạn đầu vào, không phải kết quả benchmark. Mục tiêu concurrency, p95 latency, thời gian phục hồi và accuracy cần chốt sau khi xác định phần cứng, dữ liệu và quy mô vận hành. Bản đầu vận hành một worker xử lý hàng đợi tuần tự; không diễn giải kiến trúc này là đã hỗ trợ nhiều worker đồng thời.
 
@@ -138,6 +157,14 @@ Giới hạn upload có thể cấu hình; giới hạn 25 MP hiện được ki
 | BR18 | Tra cứu dùng effective_text của job succeeded mới nhất theo created_at rồi ID mỗi nguồn. Job queued/failed không che job thành công cũ. |
 | BR19 | Chỉ xóa job succeeded/failed; xóa job v2 giữ nguồn. Nguồn còn job tham chiếu trả 409; bằng chứng chia sẻ trong job được xử lý theo thư mục job. |
 | BR20 | CSV và truy vấn không phải bộ nhãn đánh giá. Accuracy dùng nhãn độc lập; dữ liệu lịch sử `detect_only` không được tạo OCR/track giả. |
+| BR21 | Camera và phiên live thuộc chủ camera; Admin xem tất cả. Mỗi job có đúng một nguồn: media upload hoặc phiên live. |
+| BR22 | Mỗi camera tối đa một phiên hoạt động (queued/starting/running/reconnecting/stopping). Người dùng dừng phiên thì chế độ 24/7 của camera tắt. |
+| BR23 | `confidence_status` (readable/low_confidence/unreadable), `duplicate_of_job_id` và `sighting_id` chỉ để tham khảo; không track nào bị loại vì chúng. |
+| BR24 | Cảnh báo watchlist chỉ gửi người đặt mục watchlist, kể cả Admin; watchlist không quét lại lịch sử khi thêm mục mới. |
+| BR25 | Giờ chụp live lấy theo giờ của luồng (`#EXT-X-PROGRAM-DATE-TIME`) khi xác định được, nếu không theo giờ nhận frame; job ghi rõ nguồn giờ. |
+| BR26 | Dọn bằng chứng không đụng track đã kiểm duyệt hoặc đã có cảnh báo; crop luôn được giữ khi bỏ bớt keyframe. |
+| BR27 | Mặc định job upload và phiên live không chạy cùng lúc trên một GPU; camera 24/7 làm job upload chờ đến khi tắt camera. |
+| BR28 | Ngưỡng `min_confidence` chỉ được hiệu chỉnh bằng nhãn độc lập; review trong ứng dụng không phải ground truth. |
 
 ## 6. Use case
 
@@ -258,6 +285,51 @@ Nguồn chỉnh sửa: [01-use-case.puml](diagrams/01-use-case.puml). Admin kế
 - **Hậu điều kiện:** Job lưu bằng chứng của các appearance hợp lệ; nếu người dùng kiểm duyệt thì kết luận thủ công có lịch sử. Không tạo prediction OCR giả.
 - **Truy vết:** FR09-10, FR12-13; BR07, BR09, BR12, BR16; sử dụng API media/job/results/reviews hiện có, không thêm endpoint riêng.
 
+### UC13 - Quản lý camera live
+
+- **Actor:** User, Admin.
+- **Tiền điều kiện:** Đã đăng nhập; có URL YouTube Live.
+- **Luồng chính:** (1) Tạo camera với tên, URL và vùng loại trừ. (2) Hệ thống kiểm URL YouTube và vùng hợp lệ, trả camera kèm `embed_url`. (3) Người dùng xem ảnh khung hình mới nhất (`snapshot`) để vẽ vùng loại trừ, bật chế độ 24/7 và chỉnh thời hạn lưu qua `PATCH`.
+- **Thay thế/lỗi:** URL không phải YouTube hoặc vùng sai: 422. Bật 24/7 không kèm profile joint: 422. Camera ngoài quyền: 404. Xóa camera còn phiên: 409.
+- **Hậu điều kiện:** Cấu hình áp dụng từ phiên kế tiếp; phiên đang chạy giữ cấu hình lúc bật.
+- **Truy vết:** FR19, FR21; BR21; `/stream-sources`.
+
+### UC14 - Bật và dừng phiên live
+
+- **Actor:** User, Admin; Worker (tự bật lại camera 24/7).
+- **Tiền điều kiện:** Camera thuộc quyền, profile joint sẵn sàng, camera chưa có phiên hoạt động.
+- **Luồng chính:** (1) Gửi yêu cầu bật phiên; hệ thống chụp snapshot pipeline và trả 202 `queued`. (2) Worker nhận phiên khi GPU rảnh, chạy tiến trình live. (3) Mỗi track đủ 5 frame được nhập thành job. (4) Người dùng gửi yêu cầu dừng; tiến trình chốt và OCR track đang mở rồi phiên chuyển `stopped`.
+- **Thay thế/lỗi:** Hết live/video bị gỡ: `ended`. Mất luồng: tự kết nối lại; quá số lần: `failed`. Tiến trình im lặng quá giới hạn: `failed`/`LIVE_STALLED`. Worker dừng: `interrupted`; camera 24/7 được worker bật phiên mới.
+- **Hậu điều kiện:** Các track đã nhập là job succeeded; lịch sử phiên nằm trong `live_session_events`.
+- **Truy vết:** FR20-FR22; BR22, BR25, BR27; `/stream-sources/{id}/sessions`, `/live-sessions`.
+
+### UC15 - Theo dõi real-time
+
+- **Actor:** User, Admin.
+- **Tiền điều kiện:** Đã đăng nhập.
+- **Luồng chính:** (1) Mở stream SSE (lọc theo phiên/camera hoặc toàn bộ camera của mình). (2) Nhận trạng thái và stats của phiên mỗi khi thay đổi. (3) Nhận từng track vừa nhập (biển, mức tin cậy, id crop) và cảnh báo watchlist. (4) Mất kết nối thì nối lại với id sự kiện cuối cùng.
+- **Thay thế/lỗi:** Phiên/camera ngoài quyền: 404. Quá số stream cho phép: 503. Stream lọc theo phiên gửi `end` khi phiên kết thúc.
+- **Hậu điều kiện:** Không thay đổi dữ liệu.
+- **Truy vết:** FR23; BR24; `/live-events/stream`.
+
+### UC16 - Watchlist và cảnh báo
+
+- **Actor:** User, Admin.
+- **Tiền điều kiện:** Đã đăng nhập.
+- **Luồng chính:** (1) Thêm biển số vào watchlist (được chuẩn hóa). (2) Khi camera mình xem được đọc ra biển giống hệt hoặc lệch một ký tự, hệ thống ghi sự kiện `alert` trong cùng transaction nhập track. (3) Người đặt nhận cảnh báo qua SSE.
+- **Thay thế/lỗi:** Trùng biển trong watchlist của mình: 409. Xóa mục của người khác: 404.
+- **Hậu điều kiện:** Track có cảnh báo được đánh dấu `alerted` và được giữ khi dọn dữ liệu.
+- **Truy vết:** FR24; BR24, BR26; `/watchlist`.
+
+### UC17 - Xóa phiên live và dọn dữ liệu
+
+- **Actor:** User, Admin; Worker (dọn theo thời hạn).
+- **Tiền điều kiện:** Phiên đã kết thúc và thuộc quyền.
+- **Luồng chính:** (1) Gửi yêu cầu xóa phiên. (2) Hệ thống xóa job, kết quả và lịch sử của phiên trong một transaction, sau đó xóa thư mục bằng chứng. (3) Định kỳ, worker bỏ bớt keyframe và xóa track quá hạn theo cấu hình camera.
+- **Thay thế/lỗi:** Phiên đang hoạt động: 409. Thư mục xóa lỗi được dọn sau như thư mục mồ côi.
+- **Hậu điều kiện:** Xóa hết phiên thì xóa được camera.
+- **Truy vết:** FR25; BR26; `DELETE /live-sessions/{id}`.
+
 ## 7 Quy trình nghiệp vụ và sơ đồ hoạt động
 
 Các activity diagram mô tả hành động, quyết định và nhánh kết thúc của backend hiện có. Trách nhiệm của từng thành phần được giải thích trong phần mô tả và sequence diagram. Tương tác trên màn hình là yêu cầu cho client; không xác nhận dự án đã có frontend hoàn chỉnh.
@@ -297,6 +369,22 @@ Tra cứu áp dụng quyền sở hữu trước khi trả kết quả. Với m�
 ![Hoạt động tra cứu và xuất CSV](diagrams/05-activity-search.png)
 
 CSV xuất theo một job cụ thể và kiểm tra quyền độc lập. Mỗi dòng là một appearance, có cả text máy và text hiệu lực, trạng thái duyệt, phương pháp nhận diện, vị trí frame/timestamp. CSV không phải bộ nhãn chuẩn đánh giá model. Không sử dụng text đã sửa để báo accuracy máy một cách tự động.
+
+Tra cứu cũng bao gồm kết quả live: mỗi track live là một job, nên mọi track đều được tính (không áp quy tắc "lượt mới nhất" của media). Bộ lọc `origin`, camera, phiên, giờ chụp, mức tin cậy; `group_by=sighting` gộp các track cùng biển trên một camera trong vài phút thành một dòng.
+
+### 7.5 Nhận diện trên camera YouTube Live
+
+Người dùng tạo camera (URL YouTube Live, vùng loại trừ) rồi bật phiên, hoặc bật chế độ 24/7 để worker tự mở phiên. Worker chỉ nhận phiên khi GPU rảnh (job upload và live không chạy cùng lúc trên GPU 8 GB), rồi chạy tiến trình `python -m app.live`:
+- `yt-dlp` lấy URL HLS; ffmpeg giải mã với `-re` (nhịp thật) và `-copyts` (giữ timestamp gốc của segment);
+- `Pacer` giới hạn tốc độ đuổi kịp sau khi kẹt mạng ở 1,3×, để buffer không phải bỏ frame giữa track;
+- `TrackSession` dùng chung lõi với video upload: adaptive sampling, empty-scene gate, YOLO11l (bỏ detection trong vùng loại trừ), BoT-SORT; track quá `max_track_seconds` được chốt (xe đỗ/chờ đèn);
+- mỗi track đủ 5 frame được ghi crop/keyframe, OCR joint 5 frame, gắn giờ của luồng theo `#EXT-X-PROGRAM-DATE-TIME` (hoặc giờ nhận frame) và phân loại `readable`/`low_confidence`/`unreadable` theo ngưỡng.
+
+![Từ frame live đến kết quả và cảnh báo](diagrams/19-activity-live-track.png)
+
+Worker nhận từng track qua stdout, chuyển thư mục bằng chứng sang `recognition/{job}`, kiểm tra bằng chứng như kết quả upload rồi ghi trong một transaction: job `succeeded`, appearance, sự kiện `track` và sự kiện `alert` nếu biển khớp watchlist. Track được gán `sighting_id` khi cùng biển (hoặc lệch một ký tự) với một track gần đây trên cùng camera. Trigger PostgreSQL gửi NOTIFY khi commit; API đẩy sự kiện tới client qua SSE.
+
+Định kỳ, worker dọn bằng chứng theo cấu hình camera: sau một số giờ mỗi track chỉ giữ một keyframe (crop luôn còn), sau một số ngày track bị xóa; track đã kiểm duyệt hoặc có cảnh báo được giữ.
 
 ## 8. Sơ đồ sequence và ranh giới transaction
 
@@ -360,6 +448,18 @@ Trong transaction, backend rename thư mục cần xóa sang `trash/<uuid>` trư
 
 **Giới hạn vận hành:** PostgreSQL và filesystem không tham gia transaction phân tán. Crash đúng giữa rename và commit/restore có thể cần đối chiếu DB với thư mục trash; bản đầu chưa có bộ đối soát tự động cho mọi trạng thái crash. Backup cần chứa cả DB và file tại thời điểm nhất quán.
 
+### 8.6. Phiên live, nhập track và sự kiện real-time - UC13-UC16
+
+![Sequence phiên live](diagrams/17-seq-live-session.png)
+
+Nguồn chỉnh sửa: [17-seq-live-session.puml](diagrams/17-seq-live-session.puml).
+
+API chỉ ghi trạng thái mong muốn: tạo phiên `queued` (có snapshot pipeline và cấu hình camera tại thời điểm bật) hoặc đặt `stop_requested_at`. Worker là nơi duy nhất điều khiển tiến trình live. Nó nhận phiên bằng `FOR UPDATE SKIP LOCKED` khi GPU rảnh, kiểm checksum snapshot như job upload, rồi spawn `python -m app.live`; dừng bằng dòng `stop` trên stdin, quá thời hạn thì kill cả cây tiến trình.
+
+Mỗi track được nhập trong một transaction gồm: job `succeeded`, appearance, detection, prediction, cập nhật `tracks_count`, sự kiện `track` và các sự kiện `alert`. Trước transaction, thư mục bằng chứng được chuyển sang `recognition/{job}` và kiểm như kết quả upload; transaction lỗi thì chuyển lại. Trigger trên `live_session_events` và `live_sessions` gửi NOTIFY khi commit, nên SSE không bao giờ đẩy dữ liệu chưa commit. SSE hub chỉ nhận id qua NOTIFY rồi đọc lại các dòng sau con trỏ của từng stream; vì vậy nối lại bằng `Last-Event-ID` không thiếu, không trùng sự kiện, kể cả sau khi kết nối `LISTEN` bị đứt.
+
+**Khôi phục:** worker khởi động lại chuyển các phiên đang hoạt động sang `interrupted` và nhập các track còn trên đĩa; trên Windows tiến trình live bị kill theo worker nên track đang mở dở bị mất. Camera 24/7 được bật phiên mới ở lượt kế tiếp.
+
 ## 9 Mô hình trạng thái
 
 ### 9.1 Trạng thái job
@@ -378,15 +478,25 @@ Hai trạng thái độc lập. Máy có thể `readable`, `unreadable`, `ambigu
 
 Mọi trạng thái review đều có thể nhận thao tác tiếp theo hợp lệ. Sơ đồ rút gọn các chuyển tiếp lặp bằng trạng thái lựa chọn hành động; đây không phải một trạng thái được lưu trong DB. Mỗi lần commit tăng revision một đơn vị và thêm lịch sử, không thay đổi trạng thái máy.
 
+### 9.3 Trạng thái phiên live
+
+Phiên bắt đầu `queued`, chuyển `starting` khi worker nhận, `running` khi có frame đầu tiên và `reconnecting` khi mất luồng. Yêu cầu dừng chuyển `stopping`; tiến trình chốt và OCR các track đang mở rồi phiên thành `stopped`. Các trạng thái kết thúc khác: `ended` (hết live, video bị gỡ), `failed` (lỗi khởi động, quá số lần kết nối lại, tiến trình im lặng quá `PLATE_LIVE_STALL_SECONDS`) và `interrupted` (worker dừng hoặc khởi động lại). Mỗi lần đổi trạng thái được ghi vào `live_session_events`.
+
+![Trạng thái phiên live](diagrams/18-state-live-session.png)
+
+Mỗi camera chỉ có một phiên ở các trạng thái hoạt động (ràng buộc bằng unique index một phần). Camera 24/7 không có phiên hoạt động thì worker tạo phiên `queued` mới; nếu các phiên liên tiếp sống dưới hai phút, lần tạo kế tiếp chờ 1, 2, 4… tối đa 30 phút. Người dùng dừng phiên thì chế độ 24/7 tắt.
+
 ## 10. Thiết kế cơ sở dữ liệu PostgreSQL
 
-**Ngày đối chiếu:** 14/10/2026. Đây là thiết kế vật lý đang được mã nguồn sử dụng sau ba migration, không phải một schema đề xuất chưa triển khai. Có **8 bảng nghiệp vụ và 1 bảng kỹ thuật**. Các bảng dùng tên tiếng Anh; ý nghĩa và quy tắc được giải thích bằng tiếng Việt.
+**Ngày đối chiếu:** 24/10/2026. Đây là thiết kế vật lý đang được mã nguồn sử dụng sau sáu migration (0004-0006 bổ sung nhận diện YouTube Live), không phải một schema đề xuất chưa triển khai. Có **12 bảng nghiệp vụ và 1 bảng kỹ thuật**. Các bảng dùng tên tiếng Anh; ý nghĩa và quy tắc được giải thích bằng tiếng Việt.
 
 ### 10.1. Nguyên tắc mô hình hóa
 
 Đơn vị nghiệp vụ trung tâm là `plate_appearances`: một lần biển số xuất hiện trong **một job cụ thể**. Ảnh tạo một appearance cho mỗi detection; video tạo một appearance cho mỗi track đủ điều kiện. Cùng văn bản biển số xuất hiện ở hai nguồn hoặc hai lượt chạy vẫn là hai bản ghi khác nhau. Không đặt unique trên `machine_text`, `effective_text` hoặc `source_track_id` toàn hệ thống.
 
 `media_assets` tách khỏi `recognition_jobs` để chạy lại một nguồn với cấu hình khác. Quyền sở hữu đặt ở nguồn: appearance, detection và prediction truy ngược qua job đến `media_assets.owner_id`. `reviewer_id` là người thực hiện kiểm duyệt, có thể là Admin và không nhất thiết là chủ nguồn. Không có bảng phương tiện, chủ xe, giao dịch bãi xe hoặc liên kết danh tính giữa các track.
+
+Với live, quyền sở hữu đặt ở camera (`stream_sources.owner_id`); mỗi track đã chốt là một `recognition_jobs` có `live_session_id` thay cho `media_id`, nên appearance/detection/prediction/review của track live dùng đúng các bảng và quy tắc của kết quả upload.
 
 Ảnh/video/crop nằm trên filesystem; DB giữ metadata và storage key tương đối. Hash nguồn phục vụ đối chiếu nội dung, **không** là khóa sở hữu dùng chung giữa tài khoản. DB không chứa Base64. Snapshot pipeline là dữ liệu nội bộ và có thể chứa đường dẫn checkpoint; API lọc thông tin đó trước khi trả về client.
 
@@ -403,6 +513,9 @@ Nguồn chỉnh sửa: [12-erd.puml](diagrams/12-erd.puml). Sơ đồ thể hi�
 - Một appearance có nhiều detection và lịch sử review; luồng hiện hành dùng một detection cho ảnh, năm detection được chọn cho video.
 - OCR theo crop tham chiếu một detection. OCR joint tham chiếu một appearance và danh sách năm đầu vào có thứ tự. **Mỗi prediction chỉ thuộc đúng một nhánh**, không đồng thời cả hai.
 - Một user có thể tạo nhiều review; mỗi review có đúng một người thực hiện.
+- Một user sở hữu nhiều camera; một camera có nhiều phiên live, tối đa một phiên ở trạng thái hoạt động; một phiên có nhiều sự kiện và nhiều job (mỗi job một track).
+- Mỗi job có **đúng một nguồn**: `media_id` (upload) hoặc `live_session_id` (live).
+- Một user có nhiều mục watchlist; biển số là duy nhất trong watchlist của từng user.
 
 ### 10.3. Quy ước từ điển dữ liệu
 
@@ -459,7 +572,7 @@ Luồng upload hiện hành kiểm tra giải mã và metadata; các cột kích
 | Trường | Kiểu PostgreSQL | NULL | Ràng buộc và ý nghĩa |
 |---|---|---|---|
 | `id` | `varchar(32)` | Không | PK; ID lượt chạy. |
-| `media_id` | `varchar(32)` | Không | FK → `media_assets.id`, ON DELETE RESTRICT. |
+| `media_id` | `varchar(32)` | Có | FK → `media_assets.id`, ON DELETE RESTRICT. NULL với job live; CHECK đúng một trong `media_id`/`live_session_id`. |
 | `job_kind` | `varchar(16)` | Không | D=`'recognize'`; CHECK trong `detect_only`, `recognize`. Prepare và job lịch sử dùng `detect_only`. |
 | `input_mode` | `varchar(16)` | Không | D=`'scene'`; CHECK trong `scene`, `plate_crop`. |
 | `pipeline_snapshot` | `jsonb` | Không | D=`'{}'::jsonb`; CHECK kiểu JSON là object. Cấu hình và phiên bản/checksum lúc chạy. |
@@ -471,6 +584,17 @@ Luồng upload hiện hành kiểm tra giải mã và metadata; các cột kích
 | `finished_at` | `timestamptz` | Có | Thời điểm kết thúc thành công/thất bại. |
 | `error_code` | `varchar(100)` | Có | Mã lỗi khi có. |
 | `error_message` | `text` | Có | Thông báo lỗi phù hợp để API hiển thị. |
+| `live_session_id` | `varchar(32)` | Có | FK → `live_sessions.id`, ON DELETE RESTRICT. Phiên live tạo ra track này. |
+| `live_track_key` | `varchar(32)` | Có | Khóa track trong phiên (`e000-t000042`); UQ `(live_session_id, live_track_key)` giữ cho việc nhập track idempotent. |
+| `captured_from`, `captured_to` | `timestamptz` | Có | Giờ chụp của track live: giờ của luồng (PROGRAM-DATE-TIME) hoặc giờ nhận; nguồn giờ ghi ở `statistics.capture_clock`. |
+| `confidence_status` | `varchar(16)` | Có | CHECK trong `readable`, `low_confidence`, `unreadable`; phân loại tham khảo theo ngưỡng của phiên. |
+| `duplicate_of_job_id` | `varchar(32)` | Có | FK → `recognition_jobs.id`, ON DELETE SET NULL; track trước có khả năng cùng xe (tham khảo). |
+| `sighting_id` | `varchar(32)` | Có | Khóa nhóm lượt xuất hiện (job id của track đầu tiên), không phải FK; xóa track đầu vẫn giữ nhóm. |
+| `alerted` | `boolean` | Không | D=`false`; track khớp watchlist, được giữ khi dọn dữ liệu. |
+| `evidence_bytes` | `bigint` | Có | Dung lượng bằng chứng của track live. |
+| `evidence_pruned_at` | `timestamptz` | Có | Thời điểm dọn dữ liệu bỏ bớt keyframe (crop vẫn giữ). |
+
+CHECK `recognition_jobs_live_fields`: job upload để NULL toàn bộ cột live; job live bắt buộc `live_track_key`, `captured_from`, `captured_to >= captured_from` và `confidence_status`.
 
 Video chỉ dùng `scene`; profile Kaggle joint chỉ nhận video. Hai điều kiện này được API/worker kiểm tra, không phải CHECK xuyên bảng. `succeeded` chỉ xác nhận xử lý hoàn tất, không xác nhận accuracy. DB chưa có CHECK ghép trạng thái với các mốc thời gian.
 
@@ -573,6 +697,63 @@ DB không có CHECK ghép action với corrected_text hoặc FK ghép revision �
 
 Bảng này được tạo bởi `migrate.ts`, không nằm trong file 0001. Migration chạy dưới transaction và advisory lock, chỉ áp dụng phiên bản chưa có; checksum phát hiện việc sửa một migration đã chạy. Readiness kiểm tra đủ tập phiên bản/checksum và báo lỗi nếu schema lệch. Không sửa nội dung migration đã dùng cho môi trường triển khai; thay đổi tiếp theo cần file migration mới.
 
+#### 10.3.10. `stream_sources` - camera live
+
+| Trường | Kiểu PostgreSQL | NULL | Ràng buộc và ý nghĩa |
+|---|---|---|---|
+| `id` | `varchar(32)` | Không | PK. |
+| `owner_id` | `varchar(32)` | Không | FK → `users.id`, ON DELETE RESTRICT; chủ camera. |
+| `name` | `varchar(200)` | Không | Tên hiển thị. |
+| `source_type` | `varchar(16)` | Không | D=`'youtube'`; CHECK chỉ `youtube`. |
+| `url` | `text` | Không | URL YouTube Live; API kiểm host. |
+| `exclude_zones` | `jsonb` | Không | D=`'[]'`; CHECK là mảng. Hình chữ nhật chuẩn hóa `[x1,y1,x2,y2]`. |
+| `always_on` | `boolean` | Không | D=`false`; worker giữ một phiên chạy liên tục. CHECK: bật thì `auto_settings` phải có `pipeline_id`. |
+| `auto_settings` | `jsonb` | Không | D=`'{}'`; CHECK object; `pipeline_id`, `min_confidence`, `max_track_seconds`, `max_height` cho phiên tự bật. |
+| `keyframe_retention_hours` | `integer` | Có | D=24; CHECK >= 0; NULL là giữ mãi. |
+| `track_retention_days` | `integer` | Có | D=7; CHECK >= 0; NULL là giữ mãi. |
+| `created_at`, `updated_at` | `timestamptz` | Không | D=`now()`. |
+
+#### 10.3.11. `live_sessions` - phiên live
+
+| Trường | Kiểu PostgreSQL | NULL | Ràng buộc và ý nghĩa |
+|---|---|---|---|
+| `id` | `varchar(32)` | Không | PK. |
+| `stream_source_id` | `varchar(32)` | Không | FK → `stream_sources.id`, ON DELETE RESTRICT. |
+| `requested_by` | `varchar(32)` | Không | FK → `users.id`; người bật (chủ camera với phiên tự bật). |
+| `pipeline_snapshot` | `jsonb` | Không | CHECK object; snapshot pipeline lúc bật, cùng dạng với job. |
+| `settings` | `jsonb` | Không | D=`'{}'`; ngưỡng, `max_track_seconds`, `max_height`, vùng loại trừ lúc bật. |
+| `status` | `varchar(16)` | Không | D=`'queued'`; CHECK trong `queued`, `starting`, `running`, `reconnecting`, `stopping`, `stopped`, `ended`, `failed`, `interrupted`. |
+| `stop_requested_at` | `timestamptz` | Có | API đặt khi người dùng dừng; worker đọc để gửi `stop`. |
+| `created_at`, `started_at`, `finished_at` | `timestamptz` | Có/Không | `created_at` D=`now()`. |
+| `error_code`, `error_message` | `varchar(100)`, `text` | Có | Ví dụ `STREAM_FAILED`, `LIVE_STALLED`, `WORKER_INTERRUPTED`. |
+| `stats` | `jsonb` | Không | D=`'{}'`; số liệu mới nhất của tiến trình (frame đọc/bỏ, độ trễ, track đang mở). |
+| `stats_at` | `timestamptz` | Có | Lần ghi stats gần nhất. |
+| `tracks_count` | `integer` | Không | D=0; số track đã nhập (lịch sử, không giảm khi xóa job). |
+
+Unique index một phần `live_sessions_one_active (stream_source_id) WHERE status IN ('queued','starting','running','reconnecting','stopping')` bảo đảm mỗi camera tối đa một phiên hoạt động.
+
+#### 10.3.12. `live_session_events` - lịch sử phiên
+
+| Trường | Kiểu PostgreSQL | NULL | Ràng buộc và ý nghĩa |
+|---|---|---|---|
+| `id` | `bigint` | Không | PK, `GENERATED ALWAYS AS IDENTITY`; tăng dần, dùng làm `Last-Event-ID` của SSE. |
+| `session_id` | `varchar(32)` | Không | FK → `live_sessions.id`, ON DELETE CASCADE. |
+| `event_type` | `varchar(32)` | Không | CHECK trong `status`, `error`, `track_rejected`, `track`, `alert`. |
+| `payload` | `jsonb` | Không | D=`'{}'`; CHECK object. `track`: job/result/biển/giờ/5 detection id; `alert`: mục watchlist, người đặt, khoảng cách. |
+| `created_at` | `timestamptz` | Không | D=`now()`. |
+
+Trigger `live_session_events_notify` (AFTER INSERT) và `live_sessions_notify` (AFTER UPDATE trên `live_sessions`) gọi `pg_notify` với id; NOTIFY chỉ được gửi khi transaction commit.
+
+#### 10.3.13. `plate_watchlist` - biển số theo dõi
+
+| Trường | Kiểu PostgreSQL | NULL | Ràng buộc và ý nghĩa |
+|---|---|---|---|
+| `id` | `varchar(32)` | Không | PK. |
+| `owner_id` | `varchar(32)` | Không | FK → `users.id`, ON DELETE CASCADE. |
+| `plate` | `varchar(16)` | Không | Đã chuẩn hóa; CHECK khác rỗng, chữ hoa, không khoảng trắng/gạch nối. UQ `(owner_id, plate)`. |
+| `note` | `text` | Có | Ghi chú. |
+| `created_at` | `timestamptz` | Không | D=`now()`. |
+
 ### 10.4. Thiết kế JSONB và dữ liệu bất biến
 
 `pipeline_snapshot` lưu cấu hình server đã resolve: ID/version/task pipeline, detector, tracker, recognizer, preprocessing/fusion, device, interpreter và checksum checkpoint/code tùy nhánh. Snapshot hiện hành gồm thêm `sampling`, `tracking`, `empty_scene_gate` và `recognizer.config` (decoder, beam_width, use_tta); job lịch sử có cấu trúc riêng, không chạy lại được. Mặc dù SQL chỉ CHECK object, registry và worker xác minh cấu hình, file và checksum khi nhận/chạy job. Client gửi `pipeline_id`, không được gửi đường dẫn checkpoint hoặc interpreter tùy ý.
@@ -599,6 +780,13 @@ Mỗi PK/UQ nêu trong từ điển được PostgreSQL bảo vệ bằng unique
 | `plate_detections_legacy_crop` | `(legacy_crop_id)` | Giữ từ 0001 cho dữ liệu lịch sử; API hiện hành không truy vấn. |
 | `ocr_predictions_appearance` | `(appearance_id) WHERE appearance_id IS NOT NULL` | Truy vấn dự đoán joint theo appearance. |
 | `recognition_reviews_reviewer` | `(reviewer_id)` | Truy vết người kiểm duyệt. |
+| `stream_sources_owner_created` | `(owner_id, created_at DESC)` | Danh sách camera theo chủ. |
+| `live_sessions_queue` | `(status, created_at, id)` | Worker nhận phiên `queued` theo thứ tự. |
+| `live_sessions_source_created` | `(stream_source_id, created_at DESC, id DESC)` | Phiên của camera; tính lùi dần khi tự bật lại. |
+| `live_session_events_session` | `(session_id, id)` | Lịch sử phiên và phát lại SSE theo id. |
+| `recognition_jobs_live_captured` | `(live_session_id, captured_from) WHERE live_session_id IS NOT NULL` | Kết quả của phiên theo giờ chụp. |
+| `recognition_jobs_live_captured_to` | `(live_session_id, captured_to) WHERE live_session_id IS NOT NULL` | Dọn dữ liệu theo tuổi; tìm track gần đây khi gộp lượt. |
+| `recognition_jobs_sighting` | `(sighting_id) WHERE sighting_id IS NOT NULL` | Gộp và liệt kê một lượt xuất hiện. |
 
 UQ `(appearance_id, selected_order)` hỗ trợ tải detection có thứ tự. UQ `(appearance_id, revision)` hỗ trợ lịch sử review; UQ `(detection_id, variant)` hỗ trợ OCR từng crop. Không giả định PostgreSQL tự tạo index cho mọi FK. Chưa có GIN cho JSONB hoặc trigram để tìm gần đúng; chức năng hiện hành tìm bằng `effective_text = giá_trị_chuẩn_hóa`. Tối ưu thêm phải dựa trên dữ liệu và execution plan, không chỉ số lượng endpoint.
 
@@ -609,6 +797,10 @@ UQ `(appearance_id, selected_order)` hỗ trợ tải detection có thứ tự. 
 **Hàng đợi và lưu kết quả:** worker dùng khóa advisory cho mô hình một worker, claim queued job bằng khóa hàng với `FOR UPDATE SKIP LOCKED`. Sau inference và kiểm tra bằng chứng, transaction khóa job đang running, insert toàn bộ appearance/detection/prediction rồi chuyển sang succeeded. Nếu lưu lỗi, transaction rollback; không công bố một nửa tập kết quả thành công. Việc ghi file và commit SQL không phải distributed transaction; xử lý lỗi và dọn thư mục do runtime đảm nhiệm.
 
 **Kiểm duyệt:** client đọc `revision=r` và gửi `expected_revision=r`. API khóa appearance bằng `FOR UPDATE`, kiểm tra quyền và trạng thái job, so sánh revision, tính kết luận mới, cập nhật appearance rồi insert review revision `r+1` trong cùng transaction. Hai người cùng sửa từ revision r: chỉ lần đầu thành công, lần sau nhận 409 và cần tải lại kết quả.
+
+**Nhập track live:** worker chuyển thư mục bằng chứng của track sang `recognition/{job}`, kiểm bằng chứng, rồi trong một transaction insert job `succeeded` (có các cột live, `captured_from/to`, `sighting_id`, `alerted`), appearance/detection/prediction, tăng `tracks_count`, insert sự kiện `track` và `alert`. Transaction lỗi thì chuyển thư mục về chỗ cũ và ghi sự kiện `track_rejected`. UQ `(live_session_id, live_track_key)` chặn nhập trùng khi worker khởi động lại và quét track còn trên đĩa.
+
+**Phiên live:** API và worker cùng khóa dòng phiên (`FOR UPDATE`, worker nhận bằng `SKIP LOCKED`). Dừng phiên `queued` chuyển ngay sang `stopped`; dừng phiên đang chạy chỉ đặt `stop_requested_at` và tắt `always_on` của camera, worker thực hiện phần còn lại.
 
 `effective_text` là dữ liệu lưu sẵn có kiểm soát, giúp tra cứu không phải tổng hợp toàn bộ review mỗi lần. Lúc tạo kết quả, nó bằng `machine_text`, `review_status='pending'`, revision 0. Các action tạo trạng thái sau:
 
@@ -624,6 +816,8 @@ Vì confirm luôn xác nhận **kết quả máy**, thực hiện confirm sau m�
 FK từ nguồn đến job là RESTRICT: phải xóa tất cả job tham chiếu rồi mới xóa nguồn. API chỉ cho xóa job đã succeeded/failed. Xóa job cascade đến appearances, detections, reviews và prediction ở cả hai nhánh; không xóa media. Người gọi phải có quyền trên nguồn.
 
 Runtime khóa media theo cùng thứ tự khi tạo/xóa job hoặc xóa nguồn, đưa thư mục cần xóa vào vùng cách ly, rồi xóa dữ liệu trong transaction. Nếu SQL thất bại thì phục hồi thư mục; nếu commit thành công nhưng purge file lỗi, phần tồn dư nằm ở vùng rác không được API phục vụ và cần dọn theo quy trình vận hành. Không mô tả cơ chế này là giao dịch nguyên tử tuyệt đối giữa DB và filesystem.
+
+Với live: camera chỉ xóa được khi không còn phiên (FK RESTRICT). `DELETE /live-sessions/{id}` xóa job của phiên (cascade xuống kết quả) và phiên (cascade sự kiện) trong một transaction, sau commit mới xóa thư mục; thư mục còn sót được dọn như thư mục mồ côi. Worker dọn bằng chứng định kỳ theo cấu hình camera: sau `keyframe_retention_hours` đặt `frame_storage_key = NULL` cho 4/5 detection (giữ detection thứ 3), xóa file và ghi `evidence_pruned_at`; sau `track_retention_days` xóa job. Track đã review (`review_status <> 'pending'`) hoặc `alerted` không bị dọn.
 
 Không có API xóa tài khoản trong bản đầu. FK owner/reviewer RESTRICT bảo vệ chủ nguồn và người đã kiểm duyệt; session CASCADE chỉ áp dụng nếu một user thực sự bị xóa bằng thao tác quản trị phù hợp. Sao lưu cần gồm **PostgreSQL và cây file bằng chứng tương ứng**, vì backup DB đơn lẻ không tái tạo ảnh/video.
 
@@ -769,6 +963,32 @@ Tra cứu mặc định chỉ chọn job `succeeded` mới nhất mỗi nguồn 
 
 CSV gồm ID appearance/job/track, machine/effective text, machine/review status, recognition_method, agreement_count, first/last frame, start/end seconds. Joint-five xuất agreement rỗng do DB NULL. CSV escape dấu nháy và tiền tố có thể trở thành công thức bảng tính; xuất file không thay đổi review hoặc tạo ground truth.
 
+### 11.6. Danh mục 17 endpoint live
+
+Quyền đi theo chủ camera; Admin xem tất cả. Track live là job nên API12-API21 (kết quả, bằng chứng, review, CSV, xóa job) dùng chung; `GET /recognition-jobs` mặc định chỉ trả job upload (`origin=upload|live|all`).
+
+| Mã | Method và đường dẫn | Input chính | Kết quả thành công | Use case |
+|---|---|---|---|---|
+| API22 | `POST /stream-sources` | `name`, `url` YouTube, `exclude_zones?` | `201` camera kèm `embed_url` | UC13 |
+| API23 | `GET /stream-sources` | Phân trang | `200` camera kèm phiên hoạt động | UC13 |
+| API24 | `GET /stream-sources/{id}` | ID | `200` camera | UC13 |
+| API25 | `PATCH /stream-sources/{id}` | `name`, `exclude_zones`, `always_on`, `auto_settings`, thời hạn lưu | `200` camera sau cập nhật | UC13, UC14 |
+| API26 | `DELETE /stream-sources/{id}` | ID | `204` khi không còn phiên | UC13 |
+| API27 | `GET /stream-sources/{id}/snapshot` | ID | `200` keyframe mới nhất (JPEG) | UC13 |
+| API28 | `POST /stream-sources/{id}/sessions` | `pipeline_id`, `min_confidence?`, `max_track_seconds?`, `max_height?` | `202` phiên `queued` | UC14 |
+| API29 | `GET /live-sessions` | `stream_source_id`, `status`, phân trang | `200` danh sách phiên | UC14 |
+| API30 | `GET /live-sessions/{id}` | ID | `200` trạng thái, stats, `tracks_count`, `evidence_bytes` | UC14 |
+| API31 | `POST /live-sessions/{id}/stop` | ID | `202`; tắt `always_on` | UC14 |
+| API32 | `DELETE /live-sessions/{id}` | ID | `204` xóa phiên đã kết thúc cùng track và bằng chứng | UC17 |
+| API33 | `GET /live-sessions/{id}/events` | ID, phân trang | `200` lịch sử theo id tăng dần | UC14, UC15 |
+| API34 | `GET /live-events/stream` | `live_session_id?`, `stream_source_id?`, `after?`, header `Last-Event-ID` | `200` `text/event-stream` | UC15 |
+| API35 | `GET /watchlist` | Phân trang | `200` biển đang theo dõi của mình | UC16 |
+| API36 | `POST /watchlist` | `plate`, `note?` | `201`; trùng `409` | UC16 |
+| API37 | `DELETE /watchlist/{id}` | ID | `204` | UC16 |
+| API38 | `GET /sightings/{id}/results` | ID lượt, phân trang | `200` các track của một lượt xuất hiện | UC08 |
+
+API17 bổ sung bộ lọc `origin`, `stream_source_id`, `live_session_id`, `captured_from/to`, `confidence_status`, `exclude_duplicates` và `group_by=sighting`. Stream SSE gửi sự kiện bền vững có `id` (`status`, `error`, `track_rejected`, `track`, `alert`), sự kiện `session` (trạng thái và stats, không có id), heartbeat và `end` khi phiên được lọc kết thúc. `EventSource` của trình duyệt không gửi được header Bearer nên client đọc stream bằng `fetch`. Mỗi tiến trình API mở tối đa `PLATE_SSE_MAX_CLIENTS` stream (`503` khi vượt).
+
 ### 11.4. Endpoint vận hành
 
 `GET /` trả thông tin dịch vụ; `GET /health` là liveness; `GET /health/ready` kiểm kết nối PostgreSQL và toàn bộ version/checksum migration, trả `503` khi thiếu/sai schema. Các endpoint này không tính trong 21 API nghiệp vụ. Swagger được phục vụ ở `/docs`; tài liệu API không chứng minh frontend đã xây hoặc worker/model đang chạy.
@@ -799,7 +1019,7 @@ Body lỗi có dạng `{detail: ...}`. Lỗi xử lý sau khi đã nhận job kh
 
 ### 12.1 Ranh giới hệ thống
 
-Client gọi API NestJS bằng Bearer token. API chịu trách nhiệm xác thực, phân quyền, validation, upload, query và review. Worker Node là tiến trình riêng, lấy việc từ PostgreSQL và điều khiển subprocess Python. Python chạy detector, tracking và OCR; không trực tiếp quản lý tài khoản hoặc ghi bảng nghiệp vụ.
+Client gọi API NestJS bằng Bearer token. API chịu trách nhiệm xác thực, phân quyền, validation, upload, query, review, camera/phiên live và watchlist; một SSE hub trong API giữ một kết nối PostgreSQL riêng để `LISTEN` và đẩy sự kiện live. Worker Node là tiến trình riêng, lấy việc từ PostgreSQL và điều khiển subprocess Python: job upload qua supervisor, phiên live qua tiến trình `app.live` (stdin để dừng, stdout là JSON lines). Worker cũng dọn bằng chứng live. Python chạy detector, tracking và OCR; không trực tiếp quản lý tài khoản hoặc ghi bảng nghiệp vụ.
 
 ![Kiến trúc thành phần](diagrams/15-architecture.png)
 
@@ -833,6 +1053,11 @@ Khi đóng gói hoặc chuyển host, phải đưa theo migration SQL, mã `app/
 | Prediction bất biến ở tầng ứng dụng | Giữ bằng chứng đánh giá; `effective_text` là bản chiếu cập nhật theo review trong cùng transaction. |
 | Joint OCR lưu ở appearance | Biểu diễn đúng model nhận năm frame đồng thời, không tạo năm kết quả giả. |
 | File ngoài DB | Tránh ảnh/video Base64 trong bảng; phải quản lý sao lưu và xóa file cùng metadata. |
+| Mỗi track live là một job | Dùng lại xem, kiểm duyệt, tra cứu, CSV, xóa; quyền đi theo chủ camera; không cần bảng kết quả live riêng. |
+| Tiến trình live thường trú, không cắt clip | Tracking liên tục qua ranh giới clip, độ trễ vài giây; worker giám sát, kết nối lại và tự bật lại. |
+| LISTEN/NOTIFY + SSE | Không thêm message broker; NOTIFY chỉ gửi id, client đọc lại dòng đã commit nên nối lại theo `Last-Event-ID` không mất sự kiện. |
+| Chia GPU giữa upload và live | Đo được hai tiến trình cùng nạp model làm tràn VRAM 8 GB và cả hai gần như đứng; đánh đổi: upload chờ khi camera chạy. |
+| Giờ chụp theo PROGRAM-DATE-TIME | PTS gốc của segment (`-copyts`) ứng với PDT theo độ lệch không đổi; giờ nhận frame chỉ là phương án dự phòng. |
 
 ## 13. Nghiệm thu, truy vết và đánh giá đề tài
 
@@ -862,6 +1087,13 @@ Các tình huống dưới đây là tiêu chí có thể thực hiện lại; m
 | AT18 | Xóa job running, terminal và nguồn còn/hết tham chiếu | Running 409; terminal xóa dữ liệu phát sinh; v2 giữ nguồn; media có job 409 | UC10-11; FR17 |
 | AT19 | Chạy migration, FK/cascade, rollback | Schema đúng checksum; migration đã áp dụng không bị sửa; rollback không để dữ liệu dở | FR18; NFR02-03 |
 | AT20 | DB mất kết nối/thiếu migration và API còn chạy | Liveness 200, readiness 503; không suy ra model đã sẵn sàng | NFR07 |
+| AT21 | Camera không phải YouTube, vùng sai, phiên thứ hai, người khác truy cập | 422/409/404 tương ứng; một camera một phiên hoạt động | UC13-UC14; FR19-FR20 |
+| AT22 | Phiên live trên luồng thật 60 phút | Không crash, bộ nhớ không tăng dần, bỏ frame thấp, dừng sạch | UC14; NFR09-NFR10 |
+| AT23 | Track live: xem, review, tra cứu theo biển, CSV, xóa job | Hành vi như kết quả upload; giờ chụp theo luồng | UC06-UC09; FR22 |
+| AT24 | SSE: mở, nối lại `Last-Event-ID`, cắt kết nối LISTEN | Không thiếu/trùng sự kiện; cảnh báo chỉ tới người đặt | UC15-UC16; FR23-FR24 |
+| AT25 | Camera 24/7, kill worker, dừng qua API | Tự bật lại; dừng thì tắt 24/7; không còn tiến trình con | UC14; FR21 |
+| AT26 | Kẹt mạng 12 s; chạy job upload khi camera chạy | Đuổi kịp không bỏ frame; job upload chờ đến khi GPU rảnh | NFR09, NFR11; BR27 |
+| AT27 | Dọn dữ liệu, xóa phiên | Còn 1 keyframe/track, crop còn; track review/cảnh báo được giữ; phiên đang chạy 409 | UC17; FR25 |
 
 ### 13.2. Ma trận liên kết yêu cầu với thành phần thực hiện
 
@@ -877,12 +1109,17 @@ Các tình huống dưới đây là tiêu chí có thể thực hiện lại; m
 | FR17-18: xóa, migration | API10, API16 | FK/cascade, storage, schema_migrations | `tests/db.test.ts`, `tests/api.test.ts` |
 | NFR07: hợp đồng API/schema | Health, Swagger | schema_migrations | `tests/openapi.test.ts`, `tests/db.test.ts` |
 | NFR08: chất lượng nghiên cứu | Đánh giá offline | Ground truth độc lập, output đã cố định | [EVALUATION.md](../EVALUATION.md), evaluator tests |
+| FR19-FR22: camera, phiên, track live | API22-API33 | stream_sources, live_sessions, recognition_jobs (live) | `tests/live.test.ts`, `tests/live-ops.test.ts`, `tests/test_live.py` |
+| FR23-FR24: SSE, watchlist | API34-API37 | live_session_events, plate_watchlist | `tests/live-events.test.ts`, `tests/db.test.ts` |
+| FR25, NFR09-NFR11: vận hành live | API25, API32, API38 | sighting_id, evidence_bytes, retention | `tests/live-ops.test.ts`, [TESTING.md](../../TESTING.md) (đo trên luồng thật) |
 
 ### 13.3. Mức bằng chứng kiểm thử đã có
 
 Baseline đã ghi nhận trong các lượt triển khai là **48 test Node và 98 test Python đạt**; một lượt kiểm tra API/OpenAPI tiếp theo ghi nhận **24 test có mục tiêu đạt**, kèm build/format. Hai số Node không cộng thành 72 vì lượt 24 là chạy lại một phần phạm vi. Đây là bằng chứng đã ghi nhận của các lượt trước, không phải tuyên bố vừa chạy lại toàn bộ test khi soạn tài liệu.
 
 Test Node dùng NestJS/HTTP và PostgreSQL thật trong DB/cluster tạm; nhiều kết quả ML hoàn tất được tạo bằng fixture để kiểm quyền, transaction và hợp đồng. Test adapter/runner kiểm số frame, preprocessing, output và lỗi nhưng không đo accuracy. Đã ghi nhận smoke inference checkpoint/video thực trong quá trình tích hợp; smoke chứng minh đường chạy thực hiện được trên mẫu đó, không chứng minh chất lượng toàn tập hoặc khả năng tổng quát sang biển số Việt Nam.
+
+Sau khi bổ sung live (giai đoạn 1-5a), lượt chạy gần nhất ghi nhận **64 test Node và 112 test Python đạt** cùng format check; các phép đo trên luồng YouTube thật (60 phút, kẹt mạng, 24/7, dọn dữ liệu, giờ luồng) được ghi trong [TESTING.md](../../TESTING.md) kèm ngày và phần cứng.
 
 Để tái lập xác minh kỹ thuật, dùng [TESTING_NEST.md](../TESTING_NEST.md) và lệnh trong [README](../../README.md). Cần lưu commit, dependency, cấu hình, phần cứng, ngày chạy và log từng đợt nếu dùng các con số này trong báo cáo nghiệm thu. Sau một thay đổi runtime mới, chỉ báo test là hiện hành khi đã chạy lại phạm vi chịu ảnh hưởng.
 
@@ -922,6 +1159,12 @@ Các tình huống dưới đây là tiêu chí để nghiệm thu hệ thống.
 | AC10 | Nguồn có nhiều lượt succeeded/queued/failed | Tìm kiếm chỉ dùng lượt v2 succeeded mới nhất theo created_at rồi ID, bao gồm prepare; job khác trạng thái không che lượt thành công cũ. | FR15; UC08 |
 | AC11 | Export có ký tự phân cách, dấu nháy, tiền tố công thức hoặc không có kết quả | CSV đọc được, escape đúng, có các cột nguồn kết quả/vị trí; không có kết quả vẫn có header. | FR16; UC09 |
 | AC12 | Xóa job kết thúc và nguồn còn/không còn tham chiếu | Không xóa queued/running; xóa job giữ nguồn; nguồn còn job bị chặn 409; xóa hợp lệ không ảnh hưởng nguồn độc lập khác. | FR17; UC10-UC11 |
+| AC13 | Tạo camera, bật phiên, dừng phiên | Camera theo chủ sở hữu; phiên thứ hai trên cùng camera bị 409; dừng phiên chốt track đang mở, không còn tiến trình con. | FR19-FR20; UC13-UC14 |
+| AC14 | Track live đủ 5 frame | Thành job succeeded có 5 crop, giờ chụp và mức tin cậy; xem, kiểm duyệt, tra cứu và CSV dùng như kết quả upload; người khác không thấy. | FR22; UC06-UC09 |
+| AC15 | Mở stream SSE, nối lại bằng `Last-Event-ID` | Nhận trạng thái/stats/track theo thời gian thực; nối lại không thiếu, không trùng sự kiện. | FR23; UC15 |
+| AC16 | Watchlist khớp biển đọc được | Cảnh báo đến người đặt; người khác (kể cả Admin không đặt) không nhận. | FR24; UC16 |
+| AC17 | Camera 24/7, worker bị kill rồi khởi động lại | Phiên cũ `interrupted`; worker tự bật phiên mới; dừng qua API thì 24/7 tắt và không bật lại. | FR21; UC14 |
+| AC18 | Dọn dữ liệu và xóa phiên | Keyframe giảm còn 1/track, crop còn; track đã review/có cảnh báo được giữ; xóa phiên đang chạy bị 409. | FR25; UC17 |
 
 Với nghiệm thu low-resolution, cần thêm tập ground truth độc lập, danh sách split và cấu hình thiết bị. Báo cáo riêng chất lượng OCR trên crop và chất lượng toàn pipeline; checkpoint đã chạy được không đồng nghĩa đã đạt accuracy mục tiêu. Các yêu cầu tương lai về OCR ảnh đơn, SR, client hoàn chỉnh hoặc vận hành đa worker cần được bổ sung thành phạm vi và tiêu chí riêng trước khi nghiệm thu.
 
@@ -938,7 +1181,8 @@ Với nghiệm thu low-resolution, cần thêm tập ground truth độc lập, 
 | [runner.py](../../app/recognition/runner.py), [icpr_adapter.py](../../app/recognition/icpr_adapter.py), [icpr_model.py](../../app/recognition/icpr_model.py) | Tích hợp ML, preprocessing và inference joint-five hiện hành. |
 | [results.controller.ts](../../src/results/results.controller.ts) | Prediction detail, thứ tự detection_ids, review/revision, latest succeeded search và CSV. |
 | [video_tracking.py](../../app/recognition/video_tracking.py), [icpr_adapter.py](../../app/recognition/icpr_adapter.py), [ctc_decoders.py](../../app/recognition/ctc_decoders.py) | Tracking, chọn 5 crop, model OCR và decoder port từ notebook. |
-| [0001_business.sql](../../src/database/migrations/0001_business.sql), [0002_joint_ocr.sql](../../src/database/migrations/0002_joint_ocr.sql), [0003_ocr_decoding.sql](../../src/database/migrations/0003_ocr_decoding.sql) | Schema và ràng buộc vật lý; nguồn chính cho phần thiết kế DB. |
+| [0001_business.sql](../../src/database/migrations/0001_business.sql), [0002_joint_ocr.sql](../../src/database/migrations/0002_joint_ocr.sql), [0003_ocr_decoding.sql](../../src/database/migrations/0003_ocr_decoding.sql) đến [0006_live_ops.sql](../../src/database/migrations/0006_live_ops.sql) | Schema và ràng buộc vật lý; nguồn chính cho phần thiết kế DB. |
+| [src/live](../../src/live), [app/live](../../app/live) | Camera, phiên, live manager, nhập track, SSE hub, watchlist, dọn dữ liệu; tiến trình live (yt-dlp, ffmpeg, Pacer, giờ luồng). |
 | [main.ts](../../src/main.ts), [app.module.ts](../../src/app.module.ts), [http.ts](../../src/common/http.ts) | Bootstrap, Swagger, response headers, health và ánh xạ lỗi. |
 | [API.md](../API.md), [MODEL_INTEGRATION.md](../MODEL_INTEGRATION.md), [OCR_KAGGLE.md](../OCR_KAGGLE.md), [OPERATIONS.md](../OPERATIONS.md) | Hướng dẫn tích hợp/vận hành hỗ trợ; đối chiếu với mã nguồn khi có khác biệt. |
 | [Notebook PBL6 PIPELINE](https://www.kaggle.com/code/trnvnhun/pbl6-pipeline) | Nguồn pipeline, model, preprocessing và decoder; đã đối chiếu checksum checkpoint với báo cáo lần chạy 13/10/2026; không dùng chỉ số trong notebook như accuracy của backend. Provenance cục bộ ở [icpr-source.json](../../models/icpr-source.json). |
@@ -952,7 +1196,8 @@ Các sơ đồ PlantUML và SVG đi kèm là sản phẩm mô hình hóa mã ngu
 3. **Một worker và filesystem riêng.** Advisory lock chủ động giới hạn một worker trên DB. Chưa có hàng đợi phân tán, object storage, scale nhiều worker hoặc cơ chế tự reconcile mọi crash giữa DB/file.
 4. **Readiness có phạm vi.** Health kiểm DB/schema, pipelines.ready kiểm file/config/checksum; chỉ job thực mới kiểm được toàn runtime/model/thiết bị. Chưa có endpoint xác nhận heartbeat worker đang sống.
 5. **Đánh giá chất lượng còn tách riêng.** Test và smoke không thay ground truth độc lập; chưa xác nhận accuracy Việt Nam, SLA hoặc tải đồng thời production.
-6. **Phạm vi nghiệp vụ giới hạn.** Chưa có camera live, bãi xe, chủ phương tiện, xử phạt, hủy job, chia sẻ dữ liệu, public signup, email reset, giao diện đầy đủ hoặc SR. Đây không phải các API bị bỏ sót trong 21 endpoint đã thống nhất cho bản đầu.
+6. **Live trên một GPU.** Mỗi phiên khoảng 4,4 GB VRAM nên GPU 8 GB chỉ chạy một camera, và job upload phải chờ khi camera chạy. Chất lượng phụ thuộc băng thông (1080p cần khoảng 4 Mbit/s). Nhãn `readable` dựa trên ngưỡng 0.85 chưa hiệu chỉnh bằng nhãn độc lập; lượt xuất hiện là gợi ý theo chuỗi đọc được.
+7. **Phạm vi nghiệp vụ giới hạn.** Chưa có camera CCTV/RTSP, bãi xe, chủ phương tiện, xử phạt, hủy job, chia sẻ dữ liệu, public signup, email reset, giao diện đầy đủ hoặc SR. Đây không phải các API bị bỏ sót trong 38 endpoint hiện có.
 
 ### 14.3. Thứ tự mở rộng đề xuất
 

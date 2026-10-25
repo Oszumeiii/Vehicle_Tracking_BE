@@ -7,21 +7,30 @@ left to right direction
 node "Máy người dùng" {
   artifact "HTTP client\nSwagger hoặc frontend" as client
 }
-node "Host ứng dụng bản đầu" {
-  artifact "NestJS API\nnpm start" as api
-  artifact "Node worker\nnpm run worker" as worker
-  artifact "Python environment\nCPU hoặc CUDA" as python
+node "Host ứng dụng (1 GPU)" {
+  artifact "NestJS API\nnpm start\nSSE hub" as api
+  artifact "Node worker\nnpm run worker\nlive manager, dọn dữ liệu" as worker
+  artifact "Python environment\nCUDA" as python
+  artifact "python -m app.live\n+ ffmpeg (imageio-ffmpeg)" as live
   folder "Storage data" as storage
   folder "app/recognition\nProfile và checkpoint" as model
 }
 node "PostgreSQL host\nCó thể cùng máy" {
   database "Business database" as db
 }
-client --> api : HTTP(S) theo cấu hình triển khai
-api --> db : DATABASE_URL
+cloud "YouTube" as youtube
+client --> api : HTTP(S), SSE
+api --> db : DATABASE_URL\n+ kết nối LISTEN
 worker --> db : DATABASE_URL và advisory lock
 api --> storage : PLATE_DATA_DIR
-worker --> python : Subprocess được giám sát
+worker --> python : Job upload (giám sát)
+worker --> live : Phiên live (stdin/stdout)
+live --> youtube : HLS ~4 Mbit/s (1080p)
 python --> storage : Nguồn / crop / keyframe
+live --> storage : live/{phiên}/tracks
 python --> model : Snapshot và checksum
+note bottom of worker
+  PLATE_LIVE_EXCLUSIVE_GPU: job upload và
+  phiên live không chạy cùng lúc trên GPU 8 GB.
+end note
 @enduml

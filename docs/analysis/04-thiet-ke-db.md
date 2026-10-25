@@ -1,12 +1,14 @@
 # 10. Thiết kế cơ sở dữ liệu PostgreSQL
 
-**Ngày đối chiếu:** 14/10/2026. Đây là thiết kế vật lý đang được mã nguồn sử dụng sau ba migration, không phải một schema đề xuất chưa triển khai. Có **8 bảng nghiệp vụ và 1 bảng kỹ thuật**. Các bảng dùng tên tiếng Anh; ý nghĩa và quy tắc được giải thích bằng tiếng Việt.
+**Ngày đối chiếu:** 24/10/2026. Đây là thiết kế vật lý đang được mã nguồn sử dụng sau sáu migration (0004–0006 bổ sung nhận diện YouTube Live), không phải một schema đề xuất chưa triển khai. Có **12 bảng nghiệp vụ và 1 bảng kỹ thuật**. Các bảng dùng tên tiếng Anh; ý nghĩa và quy tắc được giải thích bằng tiếng Việt.
 
 ## 10.1. Nguyên tắc mô hình hóa
 
 Đơn vị nghiệp vụ trung tâm là `plate_appearances`: một lần biển số xuất hiện trong **một job cụ thể**. Ảnh tạo một appearance cho mỗi detection; video tạo một appearance cho mỗi track đủ điều kiện. Cùng văn bản biển số xuất hiện ở hai nguồn hoặc hai lượt chạy vẫn là hai bản ghi khác nhau. Không đặt unique trên `machine_text`, `effective_text` hoặc `source_track_id` toàn hệ thống.
 
 `media_assets` tách khỏi `recognition_jobs` để chạy lại một nguồn với cấu hình khác. Quyền sở hữu đặt ở nguồn: appearance, detection và prediction truy ngược qua job đến `media_assets.owner_id`. `reviewer_id` là người thực hiện kiểm duyệt, có thể là Admin và không nhất thiết là chủ nguồn. Không có bảng phương tiện, chủ xe, giao dịch bãi xe hoặc liên kết danh tính giữa các track.
+
+Với live, quyền sở hữu đặt ở camera (`stream_sources.owner_id`); mỗi track đã chốt là một `recognition_jobs` có `live_session_id` thay cho `media_id`, nên appearance/detection/prediction/review của track live dùng đúng các bảng và quy tắc của kết quả upload.
 
 Ảnh/video/crop nằm trên filesystem; DB giữ metadata và storage key tương đối. Hash nguồn phục vụ đối chiếu nội dung, **không** là khóa sở hữu dùng chung giữa tài khoản. DB không chứa Base64. Snapshot pipeline là dữ liệu nội bộ và có thể chứa đường dẫn checkpoint; API lọc thông tin đó trước khi trả về client.
 
@@ -23,6 +25,9 @@ Nguồn chỉnh sửa: [12-erd.puml](diagrams/12-erd.puml). Sơ đồ thể hi�
 - Một appearance có nhiều detection và lịch sử review; luồng hiện hành dùng một detection cho ảnh, năm detection được chọn cho video.
 - OCR theo crop tham chiếu một detection. OCR joint tham chiếu một appearance và danh sách năm đầu vào có thứ tự. **Mỗi prediction chỉ thuộc đúng một nhánh**, không đồng thời cả hai.
 - Một user có thể tạo nhiều review; mỗi review có đúng một người thực hiện.
+- Một user sở hữu nhiều camera; một camera có nhiều phiên live, tối đa một phiên ở trạng thái hoạt động; một phiên có nhiều sự kiện và nhiều job (mỗi job một track).
+- Mỗi job có **đúng một nguồn**: `media_id` (upload) hoặc `live_session_id` (live).
+- Một user có nhiều mục watchlist; biển số là duy nhất trong watchlist của từng user.
 
 ## 10.3. Quy ước từ điển dữ liệu
 
@@ -79,7 +84,7 @@ Luồng upload hiện hành kiểm tra giải mã và metadata; các cột kích
 | Trường | Kiểu PostgreSQL | NULL | Ràng buộc và ý nghĩa |
 |---|---|---|---|
 | `id` | `varchar(32)` | Không | PK; ID lượt chạy. |
-| `media_id` | `varchar(32)` | Không | FK → `media_assets.id`, ON DELETE RESTRICT. |
+| `media_id` | `varchar(32)` | Có | FK → `media_assets.id`, ON DELETE RESTRICT. NULL với job live; CHECK đúng một trong `media_id`/`live_session_id`. |
 | `job_kind` | `varchar(16)` | Không | D=`'recognize'`; CHECK trong `detect_only`, `recognize`. Prepare và job lịch sử dùng `detect_only`. |
 | `input_mode` | `varchar(16)` | Không | D=`'scene'`; CHECK trong `scene`, `plate_crop`. |
 | `pipeline_snapshot` | `jsonb` | Không | D=`'{}'::jsonb`; CHECK kiểu JSON là object. Cấu hình và phiên bản/checksum lúc chạy. |
@@ -91,6 +96,17 @@ Luồng upload hiện hành kiểm tra giải mã và metadata; các cột kích
 | `finished_at` | `timestamptz` | Có | Thời điểm kết thúc thành công/thất bại. |
 | `error_code` | `varchar(100)` | Có | Mã lỗi khi có. |
 | `error_message` | `text` | Có | Thông báo lỗi phù hợp để API hiển thị. |
+| `live_session_id` | `varchar(32)` | Có | FK → `live_sessions.id`, ON DELETE RESTRICT. Phiên live tạo ra track này. |
+| `live_track_key` | `varchar(32)` | Có | Khóa track trong phiên (`e000-t000042`); UQ `(live_session_id, live_track_key)` giữ cho việc nhập track idempotent. |
+| `captured_from`, `captured_to` | `timestamptz` | Có | Giờ chụp của track live: giờ của luồng (PROGRAM-DATE-TIME) hoặc giờ nhận; nguồn giờ ghi ở `statistics.capture_clock`. |
+| `confidence_status` | `varchar(16)` | Có | CHECK trong `readable`, `low_confidence`, `unreadable`; phân loại tham khảo theo ngưỡng của phiên. |
+| `duplicate_of_job_id` | `varchar(32)` | Có | FK → `recognition_jobs.id`, ON DELETE SET NULL; track trước có khả năng cùng xe (tham khảo). |
+| `sighting_id` | `varchar(32)` | Có | Khóa nhóm lượt xuất hiện (job id của track đầu tiên), không phải FK; xóa track đầu vẫn giữ nhóm. |
+| `alerted` | `boolean` | Không | D=`false`; track khớp watchlist, được giữ khi dọn dữ liệu. |
+| `evidence_bytes` | `bigint` | Có | Dung lượng bằng chứng của track live. |
+| `evidence_pruned_at` | `timestamptz` | Có | Thời điểm dọn dữ liệu bỏ bớt keyframe (crop vẫn giữ). |
+
+CHECK `recognition_jobs_live_fields`: job upload để NULL toàn bộ cột live; job live bắt buộc `live_track_key`, `captured_from`, `captured_to >= captured_from` và `confidence_status`.
 
 Video chỉ dùng `scene`; profile Kaggle joint chỉ nhận video. Hai điều kiện này được API/worker kiểm tra, không phải CHECK xuyên bảng. `succeeded` chỉ xác nhận xử lý hoàn tất, không xác nhận accuracy. DB chưa có CHECK ghép trạng thái với các mốc thời gian.
 
@@ -193,6 +209,63 @@ DB không có CHECK ghép action với corrected_text hoặc FK ghép revision �
 
 Bảng này được tạo bởi `migrate.ts`, không nằm trong file 0001. Migration chạy dưới transaction và advisory lock, chỉ áp dụng phiên bản chưa có; checksum phát hiện việc sửa một migration đã chạy. Readiness kiểm tra đủ tập phiên bản/checksum và báo lỗi nếu schema lệch. Không sửa nội dung migration đã dùng cho môi trường triển khai; thay đổi tiếp theo cần file migration mới.
 
+### 10.3.10. `stream_sources` — camera live
+
+| Trường | Kiểu PostgreSQL | NULL | Ràng buộc và ý nghĩa |
+|---|---|---|---|
+| `id` | `varchar(32)` | Không | PK. |
+| `owner_id` | `varchar(32)` | Không | FK → `users.id`, ON DELETE RESTRICT; chủ camera. |
+| `name` | `varchar(200)` | Không | Tên hiển thị. |
+| `source_type` | `varchar(16)` | Không | D=`'youtube'`; CHECK chỉ `youtube`. |
+| `url` | `text` | Không | URL YouTube Live; API kiểm host. |
+| `exclude_zones` | `jsonb` | Không | D=`'[]'`; CHECK là mảng. Hình chữ nhật chuẩn hóa `[x1,y1,x2,y2]`. |
+| `always_on` | `boolean` | Không | D=`false`; worker giữ một phiên chạy liên tục. CHECK: bật thì `auto_settings` phải có `pipeline_id`. |
+| `auto_settings` | `jsonb` | Không | D=`'{}'`; CHECK object; `pipeline_id`, `min_confidence`, `max_track_seconds`, `max_height` cho phiên tự bật. |
+| `keyframe_retention_hours` | `integer` | Có | D=24; CHECK >= 0; NULL là giữ mãi. |
+| `track_retention_days` | `integer` | Có | D=7; CHECK >= 0; NULL là giữ mãi. |
+| `created_at`, `updated_at` | `timestamptz` | Không | D=`now()`. |
+
+### 10.3.11. `live_sessions` — phiên live
+
+| Trường | Kiểu PostgreSQL | NULL | Ràng buộc và ý nghĩa |
+|---|---|---|---|
+| `id` | `varchar(32)` | Không | PK. |
+| `stream_source_id` | `varchar(32)` | Không | FK → `stream_sources.id`, ON DELETE RESTRICT. |
+| `requested_by` | `varchar(32)` | Không | FK → `users.id`; người bật (chủ camera với phiên tự bật). |
+| `pipeline_snapshot` | `jsonb` | Không | CHECK object; snapshot pipeline lúc bật, cùng dạng với job. |
+| `settings` | `jsonb` | Không | D=`'{}'`; ngưỡng, `max_track_seconds`, `max_height`, vùng loại trừ lúc bật. |
+| `status` | `varchar(16)` | Không | D=`'queued'`; CHECK trong `queued`, `starting`, `running`, `reconnecting`, `stopping`, `stopped`, `ended`, `failed`, `interrupted`. |
+| `stop_requested_at` | `timestamptz` | Có | API đặt khi người dùng dừng; worker đọc để gửi `stop`. |
+| `created_at`, `started_at`, `finished_at` | `timestamptz` | Có/Không | `created_at` D=`now()`. |
+| `error_code`, `error_message` | `varchar(100)`, `text` | Có | Ví dụ `STREAM_FAILED`, `LIVE_STALLED`, `WORKER_INTERRUPTED`. |
+| `stats` | `jsonb` | Không | D=`'{}'`; số liệu mới nhất của tiến trình (frame đọc/bỏ, độ trễ, track đang mở). |
+| `stats_at` | `timestamptz` | Có | Lần ghi stats gần nhất. |
+| `tracks_count` | `integer` | Không | D=0; số track đã nhập (lịch sử, không giảm khi xóa job). |
+
+Unique index một phần `live_sessions_one_active (stream_source_id) WHERE status IN ('queued','starting','running','reconnecting','stopping')` bảo đảm mỗi camera tối đa một phiên hoạt động.
+
+### 10.3.12. `live_session_events` — lịch sử phiên
+
+| Trường | Kiểu PostgreSQL | NULL | Ràng buộc và ý nghĩa |
+|---|---|---|---|
+| `id` | `bigint` | Không | PK, `GENERATED ALWAYS AS IDENTITY`; tăng dần, dùng làm `Last-Event-ID` của SSE. |
+| `session_id` | `varchar(32)` | Không | FK → `live_sessions.id`, ON DELETE CASCADE. |
+| `event_type` | `varchar(32)` | Không | CHECK trong `status`, `error`, `track_rejected`, `track`, `alert`. |
+| `payload` | `jsonb` | Không | D=`'{}'`; CHECK object. `track`: job/result/biển/giờ/5 detection id; `alert`: mục watchlist, người đặt, khoảng cách. |
+| `created_at` | `timestamptz` | Không | D=`now()`. |
+
+Trigger `live_session_events_notify` (AFTER INSERT) và `live_sessions_notify` (AFTER UPDATE trên `live_sessions`) gọi `pg_notify` với id; NOTIFY chỉ được gửi khi transaction commit.
+
+### 10.3.13. `plate_watchlist` — biển số theo dõi
+
+| Trường | Kiểu PostgreSQL | NULL | Ràng buộc và ý nghĩa |
+|---|---|---|---|
+| `id` | `varchar(32)` | Không | PK. |
+| `owner_id` | `varchar(32)` | Không | FK → `users.id`, ON DELETE CASCADE. |
+| `plate` | `varchar(16)` | Không | Đã chuẩn hóa; CHECK khác rỗng, chữ hoa, không khoảng trắng/gạch nối. UQ `(owner_id, plate)`. |
+| `note` | `text` | Có | Ghi chú. |
+| `created_at` | `timestamptz` | Không | D=`now()`. |
+
 ## 10.4. Thiết kế JSONB và dữ liệu bất biến
 
 `pipeline_snapshot` lưu cấu hình server đã resolve: ID/version/task pipeline, detector, tracker, recognizer, preprocessing/fusion, device, interpreter và checksum checkpoint/code tùy nhánh. Snapshot hiện hành gồm thêm `sampling`, `tracking`, `empty_scene_gate` và `recognizer.config` (decoder, beam_width, use_tta); job lịch sử có cấu trúc riêng, không chạy lại được. Mặc dù SQL chỉ CHECK object, registry và worker xác minh cấu hình, file và checksum khi nhận/chạy job. Client gửi `pipeline_id`, không được gửi đường dẫn checkpoint hoặc interpreter tùy ý.
@@ -219,6 +292,13 @@ Mỗi PK/UQ nêu trong từ điển được PostgreSQL bảo vệ bằng unique
 | `plate_detections_legacy_crop` | `(legacy_crop_id)` | Giữ từ 0001 cho dữ liệu lịch sử; API hiện hành không truy vấn. |
 | `ocr_predictions_appearance` | `(appearance_id) WHERE appearance_id IS NOT NULL` | Truy vấn dự đoán joint theo appearance. |
 | `recognition_reviews_reviewer` | `(reviewer_id)` | Truy vết người kiểm duyệt. |
+| `stream_sources_owner_created` | `(owner_id, created_at DESC)` | Danh sách camera theo chủ. |
+| `live_sessions_queue` | `(status, created_at, id)` | Worker nhận phiên `queued` theo thứ tự. |
+| `live_sessions_source_created` | `(stream_source_id, created_at DESC, id DESC)` | Phiên của camera; tính lùi dần khi tự bật lại. |
+| `live_session_events_session` | `(session_id, id)` | Lịch sử phiên và phát lại SSE theo id. |
+| `recognition_jobs_live_captured` | `(live_session_id, captured_from) WHERE live_session_id IS NOT NULL` | Kết quả của phiên theo giờ chụp. |
+| `recognition_jobs_live_captured_to` | `(live_session_id, captured_to) WHERE live_session_id IS NOT NULL` | Dọn dữ liệu theo tuổi; tìm track gần đây khi gộp lượt. |
+| `recognition_jobs_sighting` | `(sighting_id) WHERE sighting_id IS NOT NULL` | Gộp và liệt kê một lượt xuất hiện. |
 
 UQ `(appearance_id, selected_order)` hỗ trợ tải detection có thứ tự. UQ `(appearance_id, revision)` hỗ trợ lịch sử review; UQ `(detection_id, variant)` hỗ trợ OCR từng crop. Không giả định PostgreSQL tự tạo index cho mọi FK. Chưa có GIN cho JSONB hoặc trigram để tìm gần đúng; chức năng hiện hành tìm bằng `effective_text = giá_trị_chuẩn_hóa`. Tối ưu thêm phải dựa trên dữ liệu và execution plan, không chỉ số lượng endpoint.
 
@@ -229,6 +309,10 @@ UQ `(appearance_id, selected_order)` hỗ trợ tải detection có thứ tự. 
 **Hàng đợi và lưu kết quả:** worker dùng khóa advisory cho mô hình một worker, claim queued job bằng khóa hàng với `FOR UPDATE SKIP LOCKED`. Sau inference và kiểm tra bằng chứng, transaction khóa job đang running, insert toàn bộ appearance/detection/prediction rồi chuyển sang succeeded. Nếu lưu lỗi, transaction rollback; không công bố một nửa tập kết quả thành công. Việc ghi file và commit SQL không phải distributed transaction; xử lý lỗi và dọn thư mục do runtime đảm nhiệm.
 
 **Kiểm duyệt:** client đọc `revision=r` và gửi `expected_revision=r`. API khóa appearance bằng `FOR UPDATE`, kiểm tra quyền và trạng thái job, so sánh revision, tính kết luận mới, cập nhật appearance rồi insert review revision `r+1` trong cùng transaction. Hai người cùng sửa từ revision r: chỉ lần đầu thành công, lần sau nhận 409 và cần tải lại kết quả.
+
+**Nhập track live:** worker chuyển thư mục bằng chứng của track sang `recognition/{job}`, kiểm bằng chứng, rồi trong một transaction insert job `succeeded` (có các cột live, `captured_from/to`, `sighting_id`, `alerted`), appearance/detection/prediction, tăng `tracks_count`, insert sự kiện `track` và `alert`. Transaction lỗi thì chuyển thư mục về chỗ cũ và ghi sự kiện `track_rejected`. UQ `(live_session_id, live_track_key)` chặn nhập trùng khi worker khởi động lại và quét track còn trên đĩa.
+
+**Phiên live:** API và worker cùng khóa dòng phiên (`FOR UPDATE`, worker nhận bằng `SKIP LOCKED`). Dừng phiên `queued` chuyển ngay sang `stopped`; dừng phiên đang chạy chỉ đặt `stop_requested_at` và tắt `always_on` của camera, worker thực hiện phần còn lại.
 
 `effective_text` là dữ liệu lưu sẵn có kiểm soát, giúp tra cứu không phải tổng hợp toàn bộ review mỗi lần. Lúc tạo kết quả, nó bằng `machine_text`, `review_status='pending'`, revision 0. Các action tạo trạng thái sau:
 
@@ -244,6 +328,8 @@ Vì confirm luôn xác nhận **kết quả máy**, thực hiện confirm sau m�
 FK từ nguồn đến job là RESTRICT: phải xóa tất cả job tham chiếu rồi mới xóa nguồn. API chỉ cho xóa job đã succeeded/failed. Xóa job cascade đến appearances, detections, reviews và prediction ở cả hai nhánh; không xóa media. Người gọi phải có quyền trên nguồn.
 
 Runtime khóa media theo cùng thứ tự khi tạo/xóa job hoặc xóa nguồn, đưa thư mục cần xóa vào vùng cách ly, rồi xóa dữ liệu trong transaction. Nếu SQL thất bại thì phục hồi thư mục; nếu commit thành công nhưng purge file lỗi, phần tồn dư nằm ở vùng rác không được API phục vụ và cần dọn theo quy trình vận hành. Không mô tả cơ chế này là giao dịch nguyên tử tuyệt đối giữa DB và filesystem.
+
+Với live: camera chỉ xóa được khi không còn phiên (FK RESTRICT). `DELETE /live-sessions/{id}` xóa job của phiên (cascade xuống kết quả) và phiên (cascade sự kiện) trong một transaction, sau commit mới xóa thư mục; thư mục còn sót được dọn như thư mục mồ côi. Worker dọn bằng chứng định kỳ theo cấu hình camera: sau `keyframe_retention_hours` đặt `frame_storage_key = NULL` cho 4/5 detection (giữ detection thứ 3), xóa file và ghi `evidence_pruned_at`; sau `track_retention_days` xóa job. Track đã review (`review_status <> 'pending'`) hoặc `alerted` không bị dọn.
 
 Không có API xóa tài khoản trong bản đầu. FK owner/reviewer RESTRICT bảo vệ chủ nguồn và người đã kiểm duyệt; session CASCADE chỉ áp dụng nếu một user thực sự bị xóa bằng thao tác quản trị phù hợp. Sao lưu cần gồm **PostgreSQL và cây file bằng chứng tương ứng**, vì backup DB đơn lẻ không tái tạo ảnh/video.
 
