@@ -52,7 +52,17 @@ Người dùng tạo camera (URL YouTube Live, vùng loại trừ) rồi bật p
 
 Worker nhận từng track qua stdout, chuyển thư mục bằng chứng sang `recognition/{job}`, kiểm tra bằng chứng như kết quả upload rồi ghi trong một transaction: job `succeeded`, appearance, sự kiện `track` và sự kiện `alert` nếu biển khớp watchlist. Track được gán `sighting_id` khi cùng biển (hoặc lệch một ký tự) với một track gần đây trên cùng camera. Trigger PostgreSQL gửi NOTIFY khi commit; API đẩy sự kiện tới client qua SSE.
 
-Định kỳ, worker dọn bằng chứng theo cấu hình camera: sau một số giờ mỗi track chỉ giữ một keyframe (crop luôn còn), sau một số ngày track bị xóa; track đã kiểm duyệt hoặc có cảnh báo được giữ.
+Định kỳ, worker dọn bằng chứng theo cấu hình camera: sau một số giờ mỗi track chỉ giữ một keyframe (crop luôn còn), sau một số ngày track bị xóa; track đã kiểm duyệt, có cảnh báo hoặc nằm trong bộ mẫu gán nhãn được giữ.
+
+**Nhiều camera.** Khi `PLATE_LIVE_MAX_SESSIONS` lớn hơn 1, worker không chạy mỗi phiên một tiến trình mà gửi lệnh `start`/`stop` (JSON) tới một host `python -m app.live --host`. Host nạp detector và OCR một lần; mỗi phiên là một `LiveRunner` trên thread riêng. Lời gọi model đi qua một lock, còn giải mã, tracking và ghi bằng chứng chạy song song. Event của host mang `session` và được tách lại cho từng phiên, nên phần quản lý trạng thái phiên không đổi. Host bật cùng phiên đầu tiên và thoát sau phiên cuối để nhả GPU cho job upload.
+
+**Camera demo.** Admin có thể tạo camera nguồn `file` trỏ tới video trong `demo-videos`. Tiến trình live đọc file bằng OpenCV theo nhịp thật và lặp lại khi hết, PTS tăng liên tục qua các vòng; phần còn lại của luồng giống camera YouTube.
+
+### 7.6 Gán nhãn độc lập và hiệu chỉnh ngưỡng
+
+Admin tạo bộ mẫu từ một camera hoặc phiên: hệ thống lấy ngẫu nhiên tối đa N track có confidence ở mỗi khoảng 0–0,5, 0,5–0,7, 0,7–0,8, 0,8–0,85, 0,85–0,9, 0,9–0,95, 0,95–1, để đo được precision gần mọi ngưỡng ứng viên. Người gán nhận mẫu kế tiếp theo thứ tự xáo trộn ổn định riêng cho từng người (băm id người gán với id mẫu), chỉ thấy 5 crop và một keyframe, rồi gõ biển, chọn không đọc được hoặc bỏ qua. Nhãn được lưu riêng, không đụng review.
+
+Báo cáo lấy nhãn đồng thuận của mỗi mẫu (mẫu bất đồng bị loại), rồi với từng ngưỡng 0,50–0,99 tính số track máy đánh dấu `readable`, số đúng (khớp chính xác sau chuẩn hóa), precision và coverage. Ngưỡng đề xuất là ngưỡng nhỏ nhất đạt precision mục tiêu. Cách tính giống `app/evaluation.calibrate_threshold`, và báo cáo xuất được file để đối chiếu bằng script.
 
 ## 9 Mô hình trạng thái
 
@@ -84,7 +94,7 @@ Mỗi camera chỉ có một phiên ở các trạng thái hoạt động (ràng
 
 ### 12.1 Ranh giới hệ thống
 
-Client gọi API NestJS bằng Bearer token. API chịu trách nhiệm xác thực, phân quyền, validation, upload, query, review, camera/phiên live và watchlist; một SSE hub trong API giữ một kết nối PostgreSQL riêng để `LISTEN` và đẩy sự kiện live. Worker Node là tiến trình riêng, lấy việc từ PostgreSQL và điều khiển subprocess Python: job upload qua supervisor, phiên live qua tiến trình `app.live` (stdin để dừng, stdout là JSON lines). Worker cũng dọn bằng chứng live. Python chạy detector, tracking và OCR; không trực tiếp quản lý tài khoản hoặc ghi bảng nghiệp vụ.
+Client gọi API NestJS bằng Bearer token. API chịu trách nhiệm xác thực, phân quyền, validation, upload, query, review, camera/phiên live và watchlist; một SSE hub trong API giữ một kết nối PostgreSQL riêng để `LISTEN` và đẩy sự kiện live. Worker Node là tiến trình riêng, lấy việc từ PostgreSQL và điều khiển subprocess Python: job upload qua supervisor, phiên live qua tiến trình `app.live` (stdin để dừng, stdout là JSON lines), hoặc qua một host `app.live --host` dùng chung cho nhiều phiên. Worker cũng dọn bằng chứng live. Python chạy detector, tracking và OCR; không trực tiếp quản lý tài khoản hoặc ghi bảng nghiệp vụ.
 
 ![Kiến trúc thành phần](diagrams/15-architecture.png)
 
@@ -122,4 +132,6 @@ Khi đóng gói hoặc chuyển host, phải đưa theo migration SQL, mã `app/
 | Tiến trình live thường trú, không cắt clip | Tracking liên tục qua ranh giới clip, độ trễ vài giây; worker giám sát, kết nối lại và tự bật lại. |
 | LISTEN/NOTIFY + SSE | Không thêm message broker; NOTIFY chỉ gửi id, client đọc lại dòng đã commit nên nối lại theo `Last-Event-ID` không mất sự kiện. |
 | Chia GPU giữa upload và live | Đo được hai tiến trình cùng nạp model làm tràn VRAM 8 GB và cả hai gần như đứng; đánh đổi: upload chờ khi camera chạy. |
+| Nhiều phiên trong một host dùng chung model | Đo được VRAM mỗi tiến trình chủ yếu là CUDA context và bộ đệm allocator; dùng chung thì hai camera tốn như một. GPU chỉ bận 31–38% nên giữ nguyên tần suất lấy mẫu. Đánh đổi: phiên treo làm cả host bị kill; mọi phiên phải cùng pipeline. |
+| Nhãn đánh giá tách khỏi review | Review là kết luận vận hành, có thể bị ảnh hưởng bởi kết quả máy; nhãn mù mới đo được độ chính xác. |
 | Giờ chụp theo PROGRAM-DATE-TIME | PTS gốc của segment (`-copyts`) ứng với PDT theo độ lệch không đổi; giờ nhận frame chỉ là phương án dự phòng. |

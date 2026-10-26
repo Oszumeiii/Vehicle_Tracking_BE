@@ -28,6 +28,7 @@ Nguồn chỉnh sửa: [12-erd.puml](diagrams/12-erd.puml). Sơ đồ thể hi�
 - Một user sở hữu nhiều camera; một camera có nhiều phiên live, tối đa một phiên ở trạng thái hoạt động; một phiên có nhiều sự kiện và nhiều job (mỗi job một track).
 - Mỗi job có **đúng một nguồn**: `media_id` (upload) hoặc `live_session_id` (live).
 - Một user có nhiều mục watchlist; biển số là duy nhất trong watchlist của từng user.
+- Một bộ mẫu gán nhãn có nhiều mẫu, mỗi mẫu trỏ tới đúng một job live; một job xuất hiện tối đa một lần trong mỗi bộ mẫu. Mỗi mẫu có tối đa một nhãn của mỗi người gán.
 
 ## 10.3. Quy ước từ điển dữ liệu
 
@@ -216,8 +217,8 @@ Bảng này được tạo bởi `migrate.ts`, không nằm trong file 0001. Mig
 | `id` | `varchar(32)` | Không | PK. |
 | `owner_id` | `varchar(32)` | Không | FK → `users.id`, ON DELETE RESTRICT; chủ camera. |
 | `name` | `varchar(200)` | Không | Tên hiển thị. |
-| `source_type` | `varchar(16)` | Không | D=`'youtube'`; CHECK chỉ `youtube`. |
-| `url` | `text` | Không | URL YouTube Live; API kiểm host. |
+| `source_type` | `varchar(16)` | Không | D=`'youtube'`; CHECK `youtube` hoặc `file` (camera demo, từ migration 0007). |
+| `url` | `text` | Không | URL YouTube Live (API kiểm host), hoặc với camera demo là đường dẫn tương đối trong `demo-videos` (API kiểm không ra ngoài thư mục). |
 | `exclude_zones` | `jsonb` | Không | D=`'[]'`; CHECK là mảng. Hình chữ nhật chuẩn hóa `[x1,y1,x2,y2]`. |
 | `always_on` | `boolean` | Không | D=`false`; worker giữ một phiên chạy liên tục. CHECK: bật thì `auto_settings` phải có `pipeline_id`. |
 | `auto_settings` | `jsonb` | Không | D=`'{}'`; CHECK object; `pipeline_id`, `min_confidence`, `max_track_seconds`, `max_height` cho phiên tự bật. |
@@ -266,6 +267,38 @@ Trigger `live_session_events_notify` (AFTER INSERT) và `live_sessions_notify` (
 | `note` | `text` | Có | Ghi chú. |
 | `created_at` | `timestamptz` | Không | D=`now()`. |
 
+### 10.3.14. `evaluation_sets` — bộ mẫu gán nhãn
+
+| Trường | Kiểu PostgreSQL | NULL | Ràng buộc và ý nghĩa |
+|---|---|---|---|
+| `id` | `varchar(32)` | Không | PK. |
+| `name` | `varchar(200)` | Không | Tên bộ mẫu. |
+| `created_by` | `varchar(32)` | Không | FK → `users.id`, ON DELETE RESTRICT; Admin tạo bộ mẫu. |
+| `stream_source_id` | `varchar(32)` | Có | FK → `stream_sources.id`, ON DELETE SET NULL; camera được lấy mẫu. |
+| `live_session_id` | `varchar(32)` | Có | FK → `live_sessions.id`, ON DELETE SET NULL; hoặc một phiên. |
+| `params` | `jsonb` | Không | D=`'{}'`; CHECK object; `per_bin` và các mốc khoảng confidence. |
+| `created_at` | `timestamptz` | Không | D=`now()`. |
+
+### 10.3.15. `evaluation_items` — mẫu trong bộ
+
+| Trường | Kiểu PostgreSQL | NULL | Ràng buộc và ý nghĩa |
+|---|---|---|---|
+| `id` | `varchar(32)` | Không | PK. |
+| `set_id` | `varchar(32)` | Không | FK → `evaluation_sets.id`, ON DELETE CASCADE. |
+| `job_id` | `varchar(32)` | Không | FK → `recognition_jobs.id`, ON DELETE CASCADE; track live được lấy mẫu. UQ `(set_id, job_id)`. |
+| `bin` | `smallint` | Không | CHECK >= 0; chỉ số khoảng confidence lúc lấy mẫu. |
+
+### 10.3.16. `evaluation_labels` — nhãn độc lập
+
+| Trường | Kiểu PostgreSQL | NULL | Ràng buộc và ý nghĩa |
+|---|---|---|---|
+| `item_id` | `varchar(32)` | Không | FK → `evaluation_items.id`, ON DELETE CASCADE. PK `(item_id, labeler_id)`. |
+| `labeler_id` | `varchar(32)` | Không | FK → `users.id`, ON DELETE CASCADE; người gán. |
+| `plate_text` | `varchar(32)` | Có | Biển đã chuẩn hóa; CHECK khác rỗng. `NULL` nghĩa là người gán cũng không đọc được. |
+| `labeled_at` | `timestamptz` | Không | D=`now()`; cập nhật khi sửa nhãn. |
+
+Nhãn tách khỏi `recognition_reviews`: review là kết luận vận hành trên kết quả máy, còn nhãn là ground truth đo độ chính xác, được gán mà không thấy kết quả máy.
+
 ## 10.4. Thiết kế JSONB và dữ liệu bất biến
 
 `pipeline_snapshot` lưu cấu hình server đã resolve: ID/version/task pipeline, detector, tracker, recognizer, preprocessing/fusion, device, interpreter và checksum checkpoint/code tùy nhánh. Snapshot hiện hành gồm thêm `sampling`, `tracking`, `empty_scene_gate` và `recognizer.config` (decoder, beam_width, use_tta); job lịch sử có cấu trúc riêng, không chạy lại được. Mặc dù SQL chỉ CHECK object, registry và worker xác minh cấu hình, file và checksum khi nhận/chạy job. Client gửi `pipeline_id`, không được gửi đường dẫn checkpoint hoặc interpreter tùy ý.
@@ -299,6 +332,8 @@ Mỗi PK/UQ nêu trong từ điển được PostgreSQL bảo vệ bằng unique
 | `recognition_jobs_live_captured` | `(live_session_id, captured_from) WHERE live_session_id IS NOT NULL` | Kết quả của phiên theo giờ chụp. |
 | `recognition_jobs_live_captured_to` | `(live_session_id, captured_to) WHERE live_session_id IS NOT NULL` | Dọn dữ liệu theo tuổi; tìm track gần đây khi gộp lượt. |
 | `recognition_jobs_sighting` | `(sighting_id) WHERE sighting_id IS NOT NULL` | Gộp và liệt kê một lượt xuất hiện. |
+| `evaluation_sets_created` | `(created_at DESC, id DESC)` | Danh sách bộ mẫu. |
+| `evaluation_items_job` | `(job_id)` | Retention kiểm tra track có nằm trong bộ mẫu không. |
 
 UQ `(appearance_id, selected_order)` hỗ trợ tải detection có thứ tự. UQ `(appearance_id, revision)` hỗ trợ lịch sử review; UQ `(detection_id, variant)` hỗ trợ OCR từng crop. Không giả định PostgreSQL tự tạo index cho mọi FK. Chưa có GIN cho JSONB hoặc trigram để tìm gần đúng; chức năng hiện hành tìm bằng `effective_text = giá_trị_chuẩn_hóa`. Tối ưu thêm phải dựa trên dữ liệu và execution plan, không chỉ số lượng endpoint.
 
@@ -329,7 +364,7 @@ FK từ nguồn đến job là RESTRICT: phải xóa tất cả job tham chiếu
 
 Runtime khóa media theo cùng thứ tự khi tạo/xóa job hoặc xóa nguồn, đưa thư mục cần xóa vào vùng cách ly, rồi xóa dữ liệu trong transaction. Nếu SQL thất bại thì phục hồi thư mục; nếu commit thành công nhưng purge file lỗi, phần tồn dư nằm ở vùng rác không được API phục vụ và cần dọn theo quy trình vận hành. Không mô tả cơ chế này là giao dịch nguyên tử tuyệt đối giữa DB và filesystem.
 
-Với live: camera chỉ xóa được khi không còn phiên (FK RESTRICT). `DELETE /live-sessions/{id}` xóa job của phiên (cascade xuống kết quả) và phiên (cascade sự kiện) trong một transaction, sau commit mới xóa thư mục; thư mục còn sót được dọn như thư mục mồ côi. Worker dọn bằng chứng định kỳ theo cấu hình camera: sau `keyframe_retention_hours` đặt `frame_storage_key = NULL` cho 4/5 detection (giữ detection thứ 3), xóa file và ghi `evidence_pruned_at`; sau `track_retention_days` xóa job. Track đã review (`review_status <> 'pending'`) hoặc `alerted` không bị dọn.
+Với live: camera chỉ xóa được khi không còn phiên (FK RESTRICT). `DELETE /live-sessions/{id}` xóa job của phiên (cascade xuống kết quả) và phiên (cascade sự kiện) trong một transaction, sau commit mới xóa thư mục; thư mục còn sót được dọn như thư mục mồ côi. Worker dọn bằng chứng định kỳ theo cấu hình camera: sau `keyframe_retention_hours` đặt `frame_storage_key = NULL` cho 4/5 detection (giữ detection thứ 3), xóa file và ghi `evidence_pruned_at`; sau `track_retention_days` xóa job. Track đã review (`review_status <> 'pending'`), `alerted`, hoặc nằm trong `evaluation_items` không bị dọn. Xóa bộ mẫu cascade xuống mẫu và nhãn nhưng giữ job; xóa job (ví dụ khi xóa phiên) cascade xuống mẫu và nhãn của nó.
 
 Không có API xóa tài khoản trong bản đầu. FK owner/reviewer RESTRICT bảo vệ chủ nguồn và người đã kiểm duyệt; session CASCADE chỉ áp dụng nếu một user thực sự bị xóa bằng thao tác quản trị phù hợp. Sao lưu cần gồm **PostgreSQL và cây file bằng chứng tương ứng**, vì backup DB đơn lẻ không tái tạo ảnh/video.
 
@@ -403,10 +438,13 @@ ORDER BY r.revision;
 - [Migration 0001](../../src/database/migrations/0001_business.sql): tám bảng, FK/UQ/CHECK và index gốc.
 - [Migration 0002](../../src/database/migrations/0002_joint_ocr.sql): joint OCR, nullable count, parent XOR và provenance.
 - [Migration 0003](../../src/database/migrations/0003_ocr_decoding.sql): bằng chứng decoder CTC `decoding`.
+- [Migration 0004](../../src/database/migrations/0004_live.sql) đến [0006](../../src/database/migrations/0006_live_ops.sql): camera, phiên, sự kiện, watchlist, vận hành live.
+- [Migration 0007](../../src/database/migrations/0007_demo_sources.sql): `source_type = file` cho camera demo.
+- [Migration 0008](../../src/database/migrations/0008_evaluation.sql): bộ mẫu, mẫu và nhãn độc lập.
 - [Migration runner](../../src/database/migrate.ts): bảng schema_migrations, checksum và readiness.
 - [Worker engine](../../src/recognition/engine.ts): claim, validation năm crop, lưu kết quả trong transaction.
 - [Results controller](../../src/results/results.controller.ts): review, effective_text, tìm kiếm mới nhất, CSV và lọc storage key.
 - [Jobs controller](../../src/jobs/jobs.controller.ts), [Media controller](../../src/media/media.controller.ts): tạo/xóa và khóa nguồn.
 - [Ownership](../../src/common/ownership.ts): quyền truy cập xuyên quan hệ.
 
-Tài liệu ghi nhận schema hiện tại, không khẳng định đã có chính sách retention tự động, mã hóa từng file, tìm kiếm gần đúng, RLS, audit mọi hành động Admin, hay benchmark tải lớn. Khi bổ sung các yêu cầu này, cần cập nhật nghiệp vụ, migration và kiểm thử tương ứng.
+Tài liệu ghi nhận schema hiện tại (retention tự động chỉ áp dụng cho bằng chứng live), không khẳng định đã có chính sách retention cho dữ liệu upload, mã hóa từng file, tìm kiếm gần đúng, RLS, audit mọi hành động Admin, hay benchmark tải lớn. Khi bổ sung các yêu cầu này, cần cập nhật nghiệp vụ, migration và kiểm thử tương ứng.
