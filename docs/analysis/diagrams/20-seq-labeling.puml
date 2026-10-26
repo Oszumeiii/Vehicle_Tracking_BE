@@ -1,0 +1,42 @@
+@startuml
+skinparam defaultFontName Arial
+skinparam defaultFontSize 15
+skinparam shadowing false
+skinparam backgroundColor white
+skinparam sequenceMessageAlign center
+actor "Admin" as admin
+actor "Người gán nhãn" as labeler
+participant "API NestJS" as api
+database "PostgreSQL" as db
+collections "Storage" as files
+
+== Tạo bộ mẫu (UC19) ==
+admin -> api : POST /evaluation-sets\n{name, stream_source_id, per_bin}
+api -> db : Lấy track live có confidence\n(ngẫu nhiên, tối đa per_bin mỗi khoảng)
+api -> db : BEGIN; INSERT evaluation_sets,\nevaluation_items; COMMIT
+api --> admin : 201 bộ mẫu và tiến độ
+
+== Gán nhãn mù (UC19) ==
+loop đến khi hết mẫu
+  labeler -> api : GET /evaluation-sets/{id}/next?exclude=…
+  api -> db : Mẫu chưa có nhãn của người này\nORDER BY md5(labeler_id || item_id)
+  api --> labeler : {remaining, item}: chỉ URL 5 crop + keyframe\n(không có biển máy đọc, confidence, review)
+  labeler -> api : GET …/items/{item}/artifacts/{order}/crop
+  api -> files : Đọc crop theo storage key
+  api --> labeler : Ảnh
+  alt đọc được
+    labeler -> api : PUT …/items/{item}/label {plate_text}
+  else không đọc được
+    labeler -> api : PUT …/label {plate_text: null}
+  else bỏ qua
+    labeler -> labeler : Thêm id vào exclude
+  end
+  api -> db : INSERT … ON CONFLICT (item_id, labeler_id)\nDO UPDATE
+end
+
+== Báo cáo ngưỡng (UC20) ==
+admin -> api : GET /evaluation-sets/{id}/report?target=0.95
+api -> db : Mẫu + biển máy đọc + confidence\n+ json_agg(nhãn)
+api -> api : Nhãn đồng thuận (loại mẫu bất đồng)\nprecision/coverage cho ngưỡng 0,50–0,99
+api --> admin : Ngưỡng đề xuất, đồng thuận,\nđộ chính xác theo khoảng
+@enduml
