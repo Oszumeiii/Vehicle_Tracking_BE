@@ -34,5 +34,10 @@ note bottom of worker
   phiên live không chạy cùng lúc trên GPU 8 GB.
   PLATE_LIVE_MAX_SESSIONS >= 2: các phiên chạy
   trong một host dùng chung model (2 camera / 8 GB).
+  Một luồng GPU; batch đệm 1/4/16, warm-up một lần.
+end note
+note top of api
+  Hoặc Docker Compose (--profile app):
+  postgres, api, worker (GPU), web (nginx).
 end note
 @enduml

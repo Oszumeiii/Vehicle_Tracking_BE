@@ -1,6 +1,6 @@
 # 10. Thiết kế cơ sở dữ liệu PostgreSQL
 
-**Ngày đối chiếu:** 24/10/2026. Đây là thiết kế vật lý đang được mã nguồn sử dụng sau sáu migration (0004–0006 bổ sung nhận diện YouTube Live), không phải một schema đề xuất chưa triển khai. Có **12 bảng nghiệp vụ và 1 bảng kỹ thuật**. Các bảng dùng tên tiếng Anh; ý nghĩa và quy tắc được giải thích bằng tiếng Việt.
+**Ngày đối chiếu:** 26/10/2026. Đây là thiết kế vật lý đang được mã nguồn sử dụng sau chín migration, không phải một schema đề xuất chưa triển khai: 0004–0006 bổ sung YouTube Live, 0007 camera demo, 0008 gán nhãn, còn 0009 chỉ cập nhật dữ liệu. Có **15 bảng nghiệp vụ và 1 bảng kỹ thuật**. Các bảng dùng tên tiếng Anh; ý nghĩa và quy tắc được giải thích bằng tiếng Việt.
 
 ## 10.1. Nguyên tắc mô hình hóa
 
@@ -221,7 +221,7 @@ Bảng này được tạo bởi `migrate.ts`, không nằm trong file 0001. Mig
 | `url` | `text` | Không | URL YouTube Live (API kiểm host), hoặc với camera demo là đường dẫn tương đối trong `demo-videos` (API kiểm không ra ngoài thư mục). |
 | `exclude_zones` | `jsonb` | Không | D=`'[]'`; CHECK là mảng. Hình chữ nhật chuẩn hóa `[x1,y1,x2,y2]`. |
 | `always_on` | `boolean` | Không | D=`false`; worker giữ một phiên chạy liên tục. CHECK: bật thì `auto_settings` phải có `pipeline_id`. |
-| `auto_settings` | `jsonb` | Không | D=`'{}'`; CHECK object; `pipeline_id`, `min_confidence`, `max_track_seconds`, `max_height` cho phiên tự bật. |
+| `auto_settings` | `jsonb` | Không | D=`'{}'`; CHECK object; `pipeline_id`, `min_confidence`, `max_track_seconds`, `max_height` cho phiên tự bật. Migration 0009 đổi `min_confidence` từ đúng 0.85 (mặc định cũ) sang 0.96. |
 | `keyframe_retention_hours` | `integer` | Có | D=24; CHECK >= 0; NULL là giữ mãi. |
 | `track_retention_days` | `integer` | Có | D=7; CHECK >= 0; NULL là giữ mãi. |
 | `created_at`, `updated_at` | `timestamptz` | Không | D=`now()`. |
@@ -441,6 +441,7 @@ ORDER BY r.revision;
 - [Migration 0004](../../src/database/migrations/0004_live.sql) đến [0006](../../src/database/migrations/0006_live_ops.sql): camera, phiên, sự kiện, watchlist, vận hành live.
 - [Migration 0007](../../src/database/migrations/0007_demo_sources.sql): `source_type = file` cho camera demo.
 - [Migration 0008](../../src/database/migrations/0008_evaluation.sql): bộ mẫu, mẫu và nhãn độc lập.
+- [Migration 0009](../../src/database/migrations/0009_live_threshold.sql): chỉ cập nhật dữ liệu, đổi `auto_settings.min_confidence` 0.85 thành 0.96; camera đặt giá trị khác giữ nguyên.
 - [Migration runner](../../src/database/migrate.ts): bảng schema_migrations, checksum và readiness.
 - [Worker engine](../../src/recognition/engine.ts): claim, validation năm crop, lưu kết quả trong transaction.
 - [Results controller](../../src/results/results.controller.ts): review, effective_text, tìm kiếm mới nhất, CSV và lọc storage key.
