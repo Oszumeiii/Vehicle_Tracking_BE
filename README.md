@@ -64,7 +64,7 @@ Dùng Python 3.12. Tracking và OCR nằm trong `app/recognition` (không còn c
 
 Máy không có GPU NVIDIA thì cài bản CPU (`--index-url https://download.pytorch.org/whl/cpu`) và đặt `PLATE_DEVICE=cpu`; YOLO11l ở imgsz 1280 chạy chậm hơn nhiều trên CPU.
 
-Đặt `PLATE_PIPELINE_PYTHON`, `PLATE_DEVICE`, `PLATE_PIPELINES_CONFIG=config/pipelines.kaggle.json`. Có hai profile: `pbl6-resnet34c-joint5-v1` cho video nhận diện đầy đủ và `pbl6-yolo11l-botsort-prepare-v1` cho ảnh/video lấy bằng chứng. Checkpoint/interpreter thiếu hoặc sai checksum thì profile tương ứng trả `ready=false`, tạo job trả `503`.
+Đặt `PLATE_PIPELINE_PYTHON`, `PLATE_DEVICE`, `PLATE_PIPELINES_CONFIG=config/pipelines.kaggle.json`. Có hai profile chính: `pbl6-resnet34c-joint5-v1` cho video nhận diện đầy đủ và `pbl6-yolo11l-botsort-prepare-v1` cho ảnh/video lấy bằng chứng. Profile thử nghiệm `pbl6-resnet34c-joint5-hfps-v1` giống v1 nhưng lấy mẫu 15/20/25 frame/s. Đo trên clip demo, profile này không cho thêm biển đọc được, và chạy hai camera cùng lúc thì bỏ 12–17% frame, nên không dùng làm mặc định (xem `TESTING.md`). Checkpoint/interpreter thiếu hoặc sai checksum thì profile tương ứng trả `ready=false`, tạo job trả `503`.
 
 Checkpoint OCR `models/icpr_resnet34c_single_model_best.pt` và detector `models/license-plate-finetune-v1l.pt` được kiểm checksum và không đưa vào Git. Cách tải lại, kiến trúc, decoder và đối chiếu với notebook tại [OCR_KAGGLE.md](docs/OCR_KAGGLE.md). File `config/pipelines.example.json` chỉ là mẫu adapter OCR một ảnh để mở rộng sau này.
 

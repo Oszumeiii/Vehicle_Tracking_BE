@@ -79,6 +79,53 @@
           "use_tta": false
         }
       }
+    },
+    {
+      "id": "pbl6-resnet34c-joint5-hfps-v1",
+      "name": "Thử nghiệm · PBL6 lấy mẫu 15/20/25 fps → OCR joint 5 frame (chỉ 1 camera)",
+      "version": "pbl6-pipeline-1",
+      "task": "recognize",
+      "detector": {
+        "model": "yolo11l",
+        "version": "morsetechlab/yolov11-license-plate-detection/license-plate-finetune-v1l.pt@251a30d7daedca065f56e04b0af04052c907c68f",
+        "checkpoint": "../models/license-plate-finetune-v1l.pt",
+        "sha256": "f3d25e066e4ff41c64c2bcbf4fd35fa85abaad5a37769b61c804de8f3291ff2c"
+      },
+      "sampling": {
+        "low_fps": 15,
+        "med_fps": 20,
+        "high_fps": 25,
+        "threshold_low": 2,
+        "threshold_high": 6
+      },
+      "tracking": {
+        "imgsz": 1280,
+        "batch": 16,
+        "track_buffer_seconds": 1.5,
+        "crop_padding": 0.15,
+        "crop_confidence": 0.25
+      },
+      "empty_scene_gate": {
+        "enabled": true,
+        "probe_seconds": 0.25,
+        "empty_confirmations": 3,
+        "motion_fraction": 0.003,
+        "warmup_frames": 60
+      },
+      "recognizer": {
+        "version": "trnvnhun/icpr-2026-model/icpr_checkpoints_resnet34c/single_model_best.pt",
+        "checkpoint": "../models/icpr_resnet34c_single_model_best.pt",
+        "sha256": "e934a8644f06e28631a291b01c04a95274a546c19013f874c8b1995b30423c9c",
+        "module_root": "../app/recognition",
+        "factory": "icpr_adapter:create_recognizer",
+        "input_mode": "five_frame_joint",
+        "preprocessing_version": "pbl6-rgb-cv2-linear-48x192-normalize-0.5",
+        "config": {
+          "decoder": "beam_filter",
+          "beam_width": 8,
+          "use_tta": false
+        }
+      }
     }
   ]
 }

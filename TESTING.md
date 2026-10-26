@@ -251,3 +251,31 @@ RTX 4060 Laptop 8 GB, Ryzen 7 7735HS. Ứng dụng khác đã chiếm khoảng 1
 **Ảnh hưởng tới job upload:** thời gian gần như không đổi (60 s clip ban ngày: 28,3 → 28,1 s; clip đêm: 30,3 → 28,3 s). Số track giữ nguyên.
 
 **Đánh đổi:** frame đệm chỉ được tính rồi bỏ kết quả. Đổi cỡ batch làm kết quả fp16 sai khác rất nhỏ (48 frame thử: box lệch tối đa 0,75 px, 1 frame có thêm một box sát ngưỡng conf 0,10). Mức dao động này vốn đã có khi bộ lọc cảnh trống đổi cỡ batch. Live và upload vẫn dùng chung một đường code.
+
+## Thử lấy mẫu 15/20/25 fps (2026-10-26)
+
+**Câu hỏi:** nâng lấy mẫu detector từ 8/12/15 lên 15/20/25 frame/s có giúp bắt được nhiều biển hơn không?
+
+**Cách đo:**
+- So sánh pipeline `pbl6-resnet34c-joint5-hfps-v1` với `-v1`. Hai pipeline giống hệt nhau, chỉ khác `sampling`.
+- Ngưỡng `readable` 0.96. Đo sau khi đã sửa lỗi bỏ frame lúc khởi động.
+- Máy: RTX 4060 Laptop.
+
+| Bài đo | 8/12/15 (v1) | 15/20/25 (hfps) |
+|---|---|---|
+| (a) Clip ban ngày 3 phút, phát không bỏ frame: track / `readable` / track bị loại vì thiếu frame | 37 / 3 / 15 | 64 / 2 / 28 |
+| (a) Track có confidence ≥ 0,9 | 8 | 8 |
+| (b) Camera demo nhịp thật, 1 phiên, 5 phút: track / `readable`; bỏ frame; lag p95; GPU | 68 / 7; 0%; 0,86 s; 22% | 111 / 6; 0%; 0,86 s; 54% |
+| (c) Demo + YouTube Camboriú 720p trong một host, 10 phút: bỏ frame demo / YouTube | 0% / 0,07% | **12,5% / 16,6%** |
+| (c) Lag p95 demo / YouTube; GPU | 1,03 / 0,89 s; 37% | 1,5 / 2,07 s; 64% |
+
+**Kết luận: giữ 8/12/15 làm mặc định.**
+- **Không bắt thêm biển đọc được:**
+  - số track gần gấp đôi, nhưng số `readable` và số track có confidence ≥ 0,9 không tăng;
+  - các track chỉ có ở hfps có confidence trung vị khoảng 0,47, tức phần lớn là biển ở xa hoặc quá nhỏ để đọc;
+  - chúng chỉ làm tăng OCR, dung lượng bằng chứng và danh sách cần duyệt.
+- **"Mất frame" của 8/12/15 là bỏ qua có chủ ý**, không làm sót xe:
+  - mỗi track vẫn có đủ 5 crop ứng viên tốt;
+  - frame bị bỏ thật (`frames_dropped`) với 8/12/15 hiện gần 0.
+- **Hai camera với hfps thì CPU/GPU không theo kịp:** bỏ 12–17% frame, vượt xa mục tiêu dưới 1%.
+- **Pipeline hfps chỉ để thử nghiệm** cho job upload hoặc một camera. Không dùng hfps cho hai camera cùng lúc: mọi phiên trong host dùng chung pipeline đầu tiên được nạp.
