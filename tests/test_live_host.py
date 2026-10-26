@@ -137,15 +137,22 @@ def test_startup_errors_and_another_pipeline_are_reported_per_session(tmp_path):
     assert events.of("a", "status")[0]["reason"] == "startup"
 
     host, _, _ = make_host(tmp_path)
-    start(host, tmp_path, "a", "camboriu")
-    start(host, tmp_path, "b", "other", {**SNAPSHOT, "id": "other"})
     events = host.emit
+    start(host, tmp_path, "a", "camboriu")
+    # Wait until a has loaded its pipeline; otherwise b may load first and a gets the error.
+    wait(lambda: events.of("a", "status"))
+    start(host, tmp_path, "b", "other", {**SNAPSHOT, "id": "other"})
     wait(lambda: events.of("b", "exit"))
     assert "another pipeline" in events.of("b", "error")[0]["message"]
     # Outside the data directory is refused before any model work.
     host.command(dict(cmd="start", session="c", payload=payload(tmp_path, "x"), out=str(tmp_path.parent / "elsewhere")))
     wait(lambda: events.of("c", "exit"))
     assert "inside the host data directory" in events.of("c", "error")[0]["message"]
+    # ".." is normalized before the check, so it cannot climb out of the data directory.
+    host.command(dict(cmd="start", session="d", payload=payload(tmp_path, "x"),
+                      out=str(tmp_path / "live" / ".." / ".." / "elsewhere")))
+    wait(lambda: events.of("d", "exit"))
+    assert "inside the host data directory" in events.of("d", "error")[0]["message"]
     host.serve(iter(["not json", '{"cmd": "stop"}']))
     assert [e["status"] for e in events.events if e["type"] == "host"] == ["ready", "error", "error", "stopped"]
 
