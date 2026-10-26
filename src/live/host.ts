@@ -7,6 +7,7 @@ import { createInterface } from 'node:readline';
 import { PassThrough } from 'node:stream';
 import { stopTree } from '../recognition/engine';
 import type { SpawnLive } from './manager';
+import { DEFAULT_MIN_CONFIDENCE } from './payload';
 
 /** A session inside the shared host, shaped like the child process LiveManager expects. */
 export type SessionChild = ChildProcess & { terminate(): void };
@@ -61,7 +62,7 @@ export class SharedLiveHost {
       session,
       payload: argument(args, '--payload'),
       out,
-      min_confidence: Number(argument(args, '--min-confidence') ?? 0.85),
+      min_confidence: Number(argument(args, '--min-confidence') ?? DEFAULT_MIN_CONFIDENCE),
       max_track_seconds: Number(argument(args, '--max-track-seconds') ?? 30),
     }).catch((error) => {
       entry.stderr.write(`[host] ${error instanceof Error ? error.message : error}\n`);

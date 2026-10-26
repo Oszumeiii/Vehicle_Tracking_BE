@@ -14,7 +14,7 @@ import {
 } from '../recognition/engine';
 import { PipelineRegistry } from '../recognition/registry';
 import { ingestTrack } from './ingest';
-import { demoVideoFile, isLivePipeline, livePayload } from './payload';
+import { DEFAULT_MIN_CONFIDENCE, demoVideoFile, isLivePipeline, livePayload } from './payload';
 import { ACTIVE_SQL, recordEvent } from './sessions';
 
 type Row = Record<string, any>;
@@ -191,7 +191,7 @@ export class LiveManager {
       }
       this.restartBlocked.delete(camera.id);
       const settings = {
-        min_confidence: auto.min_confidence ?? 0.85,
+        min_confidence: auto.min_confidence ?? DEFAULT_MIN_CONFIDENCE,
         max_track_seconds: auto.max_track_seconds ?? 30,
         max_height: auto.max_height ?? 1080,
         exclude_zones: camera.exclude_zones,
@@ -359,7 +359,7 @@ export class LiveManager {
         '--data-dir',
         this.options.dataDir,
         '--min-confidence',
-        String(session.settings.min_confidence ?? 0.85),
+        String(session.settings.min_confidence ?? DEFAULT_MIN_CONFIDENCE),
         '--max-track-seconds',
         String(session.settings.max_track_seconds ?? 30),
       ]);

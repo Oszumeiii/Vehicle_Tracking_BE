@@ -7,7 +7,7 @@ lock, while decoding, tracking and evidence writing overlap.
 
 Commands are JSON lines on stdin:
   {"cmd": "start", "session": ID, "payload": PATH, "out": DIR,
-   "min_confidence": 0.85, "max_track_seconds": 30}
+   "min_confidence": 0.96, "max_track_seconds": 30}
   {"cmd": "stop", "session": ID}
 EOF (or {"cmd": "shutdown"}) stops every session; open tracks are finished first.
 Events are the single-session JSON lines plus "session": ID, and a final
@@ -22,6 +22,8 @@ import signal
 import sys
 import threading
 import traceback
+
+from app.live import DEFAULT_MIN_CONFIDENCE
 
 STARTUP_CODES = {"ENVIRONMENT_ERROR", "CUDA_UNAVAILABLE", "CUDA_ERROR", "CHECKPOINT_MISSING", "PIPELINE_FAILED"}
 
@@ -154,7 +156,7 @@ class Host:
                 model, recognizer = self.models.get(snapshot)
                 runner = self.runner_factory(
                     snapshot, out, self.source_factory(payload["source"]), emit, model, recognizer,
-                    data_dir=self.data_dir, min_confidence=float(message.get("min_confidence", .85)),
+                    data_dir=self.data_dir, min_confidence=float(message.get("min_confidence", DEFAULT_MIN_CONFIDENCE)),
                     max_track_seconds=float(message.get("max_track_seconds", 30.)),
                     buffer_seconds=self.buffer_seconds, exclude_zones=payload["source"].get("exclude_zones") or (),
                     sampling_scale=self.sampling_scale)

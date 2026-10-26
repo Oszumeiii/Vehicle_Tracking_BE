@@ -6,6 +6,9 @@ const YOUTUBE_HOSTS = ['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu
 
 export type Zone = [number, number, number, number];
 
+/** Readable from this OCR confidence: precision 0.95 on labelled ICPR tracks (docs/EVALUATION.md). */
+export const DEFAULT_MIN_CONFIDENCE = 0.96;
+
 /** True for a YouTube watch, live or short link; the live process resolves it with yt-dlp. */
 export function isYoutubeUrl(url: string) {
   return z.url().safeParse(url).success && YOUTUBE_HOSTS.includes(new URL(url).hostname);
