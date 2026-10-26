@@ -3,6 +3,7 @@ import { spawn, ChildProcess } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
 import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
+import type { PoolClient } from 'pg';
 import { Database } from '../database/database';
 import { fusePredictions, normalizePlate } from './fusion';
 import { sha256 } from './registry';
@@ -103,20 +104,21 @@ export async function stopTree(child: ChildProcess) {
   }
 }
 
-export const executeRecognition: Runner = async (job, folder, options, stage) => {
+/** The pinned models, tracking code and interpreter must still be the ones the snapshot recorded. */
+export async function verifySnapshot(snapshot: Row, options: WorkerOptions) {
   checkInterrupted(options);
   if (!options.python)
     throw Object.assign(new Error('ML interpreter is not configured'), {
       code: 'ENVIRONMENT_ERROR',
     });
-  const task = job.pipeline_snapshot?.task;
+  const task = snapshot?.task;
   // Removed v1 extraction jobs carry no pipeline task and cannot run any more.
   if (!['prepare', 'recognize'].includes(task))
     throw Object.assign(new Error('Unsupported pipeline snapshot'), { code: 'PIPELINE_FAILED' });
   for (const entry of [
-    job.pipeline_snapshot.detector,
-    ...(task === 'prepare' ? [] : [job.pipeline_snapshot.recognizer]),
-    ...job.pipeline_snapshot.code_files,
+    snapshot.detector,
+    ...(task === 'prepare' ? [] : [snapshot.recognizer]),
+    ...snapshot.code_files,
   ]) {
     if ((await sha256(entry.checkpoint ?? entry.path).catch(() => '')) !== entry.sha256)
       throw Object.assign(new Error('Checkpoint or source changed'), {
@@ -124,8 +126,23 @@ export const executeRecognition: Runner = async (job, folder, options, stage) =>
       });
     checkInterrupted(options);
   }
-  if (path.resolve(options.python) !== path.resolve(job.pipeline_snapshot.pipeline_python))
+  if (path.resolve(options.python) !== path.resolve(snapshot.pipeline_python))
     throw Object.assign(new Error('ML interpreter changed'), { code: 'ENVIRONMENT_ERROR' });
+}
+
+/** Environment for every ML subprocess (recognition supervisor and live process). */
+export function pythonEnv(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    PYTHONUNBUFFERED: '1',
+    PYTHONIOENCODING: 'utf-8',
+    HF_HUB_OFFLINE: '1',
+    PYTHONPATH: [process.cwd(), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
+  };
+}
+
+export const executeRecognition: Runner = async (job, folder, options, stage) => {
+  await verifySnapshot(job.pipeline_snapshot, options);
   const input = path.join(folder, 'recognition-input.json');
   await writeFile(
     input,
@@ -161,13 +178,7 @@ export const executeRecognition: Runner = async (job, folder, options, stage) =>
       windowsHide: true,
       detached: process.platform !== 'win32',
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        PYTHONUNBUFFERED: '1',
-        PYTHONIOENCODING: 'utf-8',
-        HF_HUB_OFFLINE: '1',
-        PYTHONPATH: [process.cwd(), process.env.PYTHONPATH].filter(Boolean).join(path.delimiter),
-      },
+      env: pythonEnv(),
     },
   );
   // A full/unwritable log volume must fail this job rather than crash Node and
@@ -436,8 +447,14 @@ export async function validateResult(
       const [width, height] = await imageSize(frame);
       if ([detection.bbox, detection.crop_bbox].some((box) => box[2] > width || box[3] > height))
         throw new Error('Detection geometry extends outside its source frame');
+      // Live tracks carry stream PTS of one connection (epoch), not file positions.
+      const timestampSource = !video
+        ? 'still_image'
+        : job.live_session_id
+          ? 'live_pts'
+          : 'video_pts';
       if (
-        detection.timestamp_source !== (video ? 'video_pts' : 'still_image') ||
+        detection.timestamp_source !== timestampSource ||
         (!video && (detection.frame_index != null || detection.timestamp_seconds != null))
       )
         throw new Error('Invalid evidence timestamp provenance');
@@ -516,6 +533,98 @@ export async function validateResult(
   }
 }
 
+type Client = Pick<PoolClient, 'query'>;
+
+/** Insert one validated appearance with its detections and OCR predictions; returns their ids. */
+export async function persistAppearance(client: Client, job: Row, appearance: Row) {
+  const appearanceId = id();
+  const detectionIds: string[] = [];
+  await client.query(
+    `INSERT INTO plate_appearances
+    (id,job_id,source_track_id,first_frame,last_frame,start_seconds,end_seconds,machine_text,machine_status,agreement_count,effective_text,review_status,revision,recognition_method)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$8,'pending',0,$11)`,
+    [
+      appearanceId,
+      job.id,
+      appearance.source_track_id,
+      appearance.first_frame,
+      appearance.last_frame,
+      appearance.start_seconds,
+      appearance.end_seconds,
+      appearance.machine_text,
+      appearance.machine_status,
+      appearance.agreement_count,
+      appearance.recognition_method ??
+        (job.job_kind === 'recognize'
+          ? job.media_type === 'video'
+            ? 'per_crop_majority'
+            : 'single_image'
+          : null),
+    ],
+  );
+  for (const detection of appearance.detections) {
+    const detectionId = id();
+    detectionIds.push(detectionId);
+    await client.query(
+      `INSERT INTO plate_detections
+      (id,appearance_id,selected_order,frame_index,timestamp_seconds,timestamp_source,bbox,crop_bbox,detection_score,crop_storage_key,frame_storage_key,crop_width,crop_height)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+      [
+        detectionId,
+        appearanceId,
+        detection.selected_order,
+        detection.frame_index,
+        detection.timestamp_seconds,
+        detection.timestamp_source,
+        JSON.stringify(detection.bbox),
+        JSON.stringify(detection.crop_bbox),
+        detection.detection_score,
+        detection.crop_storage_key,
+        detection.frame_storage_key,
+        detection.crop_width,
+        detection.crop_height,
+      ],
+    );
+    for (const prediction of detection.predictions)
+      await client.query(
+        `INSERT INTO ocr_predictions
+      (id,detection_id,variant,raw_text,normalized_text,ocr_score,character_scores,input_storage_key,latency_ms)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [
+          id(),
+          detectionId,
+          prediction.variant,
+          prediction.raw_text,
+          prediction.normalized_text,
+          prediction.ocr_score,
+          prediction.character_scores == null ? null : JSON.stringify(prediction.character_scores),
+          prediction.input_storage_key,
+          prediction.latency_ms,
+        ],
+      );
+  }
+  for (const prediction of appearance.predictions ?? [])
+    await client.query(
+      `INSERT INTO ocr_predictions
+      (id,appearance_id,variant,raw_text,normalized_text,ocr_score,character_scores,input_storage_keys,frame_weights,decoding,latency_ms)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+      [
+        id(),
+        appearanceId,
+        prediction.variant,
+        prediction.raw_text,
+        prediction.normalized_text,
+        prediction.ocr_score,
+        prediction.character_scores == null ? null : JSON.stringify(prediction.character_scores),
+        JSON.stringify(prediction.input_storage_keys),
+        prediction.frame_weights == null ? null : JSON.stringify(prediction.frame_weights),
+        prediction.decoding == null ? null : JSON.stringify(prediction.decoding),
+        prediction.latency_ms,
+      ],
+    );
+  return { appearanceId, detectionIds };
+}
+
 export async function persistResult(database: Database, job: Row, result: Row) {
   await database.transaction(async (client) => {
     const running = await client.query(
@@ -523,95 +632,7 @@ export async function persistResult(database: Database, job: Row, result: Row) {
       [job.id],
     );
     if (!running.rows.length) throw new Error('Job is no longer running');
-    for (const appearance of result.appearances) {
-      const appearanceId = id();
-      await client.query(
-        `INSERT INTO plate_appearances
-        (id,job_id,source_track_id,first_frame,last_frame,start_seconds,end_seconds,machine_text,machine_status,agreement_count,effective_text,review_status,revision,recognition_method)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$8,'pending',0,$11)`,
-        [
-          appearanceId,
-          job.id,
-          appearance.source_track_id,
-          appearance.first_frame,
-          appearance.last_frame,
-          appearance.start_seconds,
-          appearance.end_seconds,
-          appearance.machine_text,
-          appearance.machine_status,
-          appearance.agreement_count,
-          appearance.recognition_method ??
-            (job.job_kind === 'recognize'
-              ? job.media_type === 'video'
-                ? 'per_crop_majority'
-                : 'single_image'
-              : null),
-        ],
-      );
-      for (const detection of appearance.detections) {
-        const detectionId = id();
-        await client.query(
-          `INSERT INTO plate_detections
-          (id,appearance_id,selected_order,frame_index,timestamp_seconds,timestamp_source,bbox,crop_bbox,detection_score,crop_storage_key,frame_storage_key,crop_width,crop_height)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-          [
-            detectionId,
-            appearanceId,
-            detection.selected_order,
-            detection.frame_index,
-            detection.timestamp_seconds,
-            detection.timestamp_source,
-            JSON.stringify(detection.bbox),
-            JSON.stringify(detection.crop_bbox),
-            detection.detection_score,
-            detection.crop_storage_key,
-            detection.frame_storage_key,
-            detection.crop_width,
-            detection.crop_height,
-          ],
-        );
-        for (const prediction of detection.predictions)
-          await client.query(
-            `INSERT INTO ocr_predictions
-          (id,detection_id,variant,raw_text,normalized_text,ocr_score,character_scores,input_storage_key,latency_ms)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-            [
-              id(),
-              detectionId,
-              prediction.variant,
-              prediction.raw_text,
-              prediction.normalized_text,
-              prediction.ocr_score,
-              prediction.character_scores == null
-                ? null
-                : JSON.stringify(prediction.character_scores),
-              prediction.input_storage_key,
-              prediction.latency_ms,
-            ],
-          );
-      }
-      for (const prediction of appearance.predictions ?? [])
-        await client.query(
-          `INSERT INTO ocr_predictions
-          (id,appearance_id,variant,raw_text,normalized_text,ocr_score,character_scores,input_storage_keys,frame_weights,decoding,latency_ms)
-          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-          [
-            id(),
-            appearanceId,
-            prediction.variant,
-            prediction.raw_text,
-            prediction.normalized_text,
-            prediction.ocr_score,
-            prediction.character_scores == null
-              ? null
-              : JSON.stringify(prediction.character_scores),
-            JSON.stringify(prediction.input_storage_keys),
-            prediction.frame_weights == null ? null : JSON.stringify(prediction.frame_weights),
-            prediction.decoding == null ? null : JSON.stringify(prediction.decoding),
-            prediction.latency_ms,
-          ],
-        );
-    }
+    for (const appearance of result.appearances) await persistAppearance(client, job, appearance);
     await client.query(
       "UPDATE recognition_jobs SET status='succeeded',stage='complete',statistics=$2,finished_at=now() WHERE id=$1",
       [job.id, JSON.stringify(result.statistics)],

@@ -161,3 +161,47 @@ Kiểm thử riêng bộ chấm:
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests/test_evaluation.py -q
 ```
+
+## Hiệu chỉnh ngưỡng tin cậy live
+
+`min_confidence` (mặc định 0.85) quyết định track live nào được đánh dấu `readable`. Ngưỡng chỉ được hiệu chỉnh bằng **nhãn độc lập**; review trong ứng dụng không phải nhãn và không được dùng làm ground truth.
+
+### Cách 1: trang gán nhãn trong ứng dụng (khuyên dùng)
+
+1. **Admin tạo bộ mẫu:** tab **Gán nhãn**, chọn camera và số mẫu mỗi khoảng tin cậy (mặc định 30; 7 khoảng 0–0,5, 0,5–0,7, 0,7–0,8, 0,8–0,85, 0,85–0,9, 0,9–0,95, 0,95–1, tức tối đa 210 mẫu). API tương ứng: `POST /api/v2/evaluation-sets`.
+2. **Người gán nhãn** (mọi tài khoản, nên là người không làm model) mở bộ mẫu:
+   - mỗi mẫu có 5 crop và một keyframe;
+   - gõ biển đọc được rồi nhấn Enter; chọn **Không đọc được** nếu chính mình cũng không đọc ra; **Bỏ qua** để xem sau; **Quay lại** để sửa nhãn vừa gán;
+   - **gán mù:** trang không hiện biển máy đọc, confidence hay trạng thái review;
+   - mỗi người gán theo một thứ tự xáo trộn riêng, nên nhiều người có thể gán song song.
+3. **Admin mở tab Báo cáo ngưỡng:**
+   - precision/coverage theo từng ngưỡng (biểu đồ và bảng), ngưỡng đề xuất theo precision mục tiêu;
+   - độ đồng thuận giữa người gán, độ chính xác theo từng khoảng confidence;
+   - **chỉ mẫu mà mọi người gán đồng ý mới được tính**, mẫu bất đồng bị loại và có đếm riêng. Có thể yêu cầu tối thiểu 2–3 nhãn mỗi mẫu.
+4. **Nhãn được lưu riêng** (`evaluation_labels`), không đụng tới review.
+   - Track nằm trong bộ mẫu không bị retention xóa hay bỏ keyframe.
+   - Xóa bộ mẫu thì xóa nhãn, nhưng giữ track.
+5. **Đối chiếu chéo:** `GET /api/v2/evaluation-sets/{id}/report?format=files` trả `predictions` và `ground_truth` đúng định dạng bên dưới để chạy lại bằng `scripts.calibrate_threshold`. Cách tính của hai bên giống nhau; trên cùng dữ liệu, hai bên cho cùng ngưỡng đề xuất và precision.
+
+### Cách 2: file
+
+1. Xuất mẫu phân tầng theo confidence từ một camera hoặc phiên:
+
+   ```powershell
+   node dist/src/cli.js export-live-samples --source CAMERA_ID --out data/evaluation/live --per-bin 20
+   ```
+
+   Thư mục chứa `samples/{id}/crop_1..5` và các keyframe còn giữ, `predictions.json` (biển máy đọc và `confidence`) và `ground_truth.template.json`.
+2. Người gán nhãn mở crop/keyframe của từng mẫu, điền `plate_text` bằng biển đọc được; không đọc được thì đặt `null`. Không xem `predictions.json` trong lúc gán nhãn. Lưu thành `ground_truth.json`.
+3. Tính precision/coverage theo từng ngưỡng:
+
+   ```powershell
+   .\.venv\Scripts\python.exe -m scripts.calibrate_threshold `
+     --ground-truth data/evaluation/live/ground_truth.json `
+     --predictions data/evaluation/live/predictions.json `
+     --target-precision 0.95 --output data/evaluation/live/threshold.json
+   ```
+
+   Với mỗi ngưỡng từ 0.50 đến 0.99, báo cáo có số track `readable`, số đúng (khớp chính xác sau chuẩn hóa), precision và coverage (tỉ lệ mẫu được đánh dấu `readable`). `recommended_threshold` là ngưỡng nhỏ nhất đạt precision mục tiêu. Mẫu người gán nhãn ghi `null` mà máy vẫn đọc ra chữ được tính là sai.
+
+Báo cáo chỉ có ý nghĩa với tập nhãn đủ lớn và đại diện cho camera đang dùng. Ngưỡng mới áp dụng qua `min_confidence` khi bật phiên hoặc trong `auto_settings` của camera.

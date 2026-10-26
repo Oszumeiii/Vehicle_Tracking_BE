@@ -156,6 +156,68 @@ async function completed(
   return { mediaId, jobId, resultId, detectionId, cropKey };
 }
 
+test('FinalV1 media URLs authenticate only asset reads and preserve ownership', async () => {
+  const item = await completed();
+  const crop = `/api/v2/detections/${item.detectionId}/artifacts/crop`;
+  await api.get(crop).query({ token: ownerToken }).expect(200);
+  await api.get(crop).query({ token: strangerToken }).expect(404);
+  await api
+    .get(crop)
+    .query({ token: ownerToken })
+    .set('Authorization', 'Bearer invalid')
+    .expect(401);
+  await api.get('/api/v2/auth/me').query({ token: ownerToken }).expect(401);
+  await api
+    .delete(`/api/v2/recognition-jobs/${item.jobId}`)
+    .query({ token: ownerToken })
+    .expect(401);
+  await api
+    .get(`/api/v2/media/${item.mediaId}/content`)
+    .query({ token: ownerToken })
+    .set('Range', 'bytes=0-7')
+    .expect(206);
+});
+
+test('FinalV1 metadata and optional partial search preserve reviewed results', async () => {
+  const item = await completed({ text: 'V1TEST42' });
+  const auth = { Authorization: `Bearer ${ownerToken}` };
+  const job = (await api.get(`/api/v2/recognition-jobs/${item.jobId}`).set(auth).expect(200)).body;
+  assert.equal(job.media_type, 'image');
+  assert.equal(job.media_original_name, 'input.png');
+  const results = (
+    await api.get(`/api/v2/recognition-jobs/${item.jobId}/results`).set(auth).expect(200)
+  ).body;
+  assert.equal(results.items[0].primary_detection_id, item.detectionId);
+  assert.deepEqual(results.items[0].primary_bbox, [0, 0, 8, 4]);
+  const query = { media_id: item.mediaId, plate: 'test' };
+  assert.equal(
+    (await api.get('/api/v2/recognition-results').query(query).set(auth).expect(200)).body.total,
+    0,
+  );
+  const partial = await api
+    .get('/api/v2/recognition-results')
+    .query({ ...query, match: 'contains' })
+    .set(auth)
+    .expect(200);
+  assert.equal(partial.body.total, 1);
+  assert.equal(partial.body.items[0].primary_detection_id, item.detectionId);
+  await api
+    .post(`/api/v2/recognition-results/${item.resultId}/reviews`)
+    .set(auth)
+    .send({ action: 'reject', expected_revision: 0 })
+    .expect(201);
+  assert.equal(
+    (
+      await api
+        .get('/api/v2/recognition-results')
+        .query({ ...query, match: 'contains' })
+        .set(auth)
+        .expect(200)
+    ).body.total,
+    0,
+  );
+});
+
 test('sessions preserve password bytes, revoke on logout/disable/reset, and protect administration', async () => {
   const unauthenticated = await api.get('/api/v2/media').expect(401);
   assert.match(unauthenticated.headers['www-authenticate'], /Bearer/i);

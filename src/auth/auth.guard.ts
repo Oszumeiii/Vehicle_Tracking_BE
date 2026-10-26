@@ -9,7 +9,12 @@ export class AuthGuard implements CanActivate {
     const request = context.switchToHttp().getRequest();
     const authHeader = request.headers.authorization ?? '';
     let token = /^Bearer ([A-Za-z0-9_-]+)$/i.exec(authHeader)?.[1];
-    if (!token && typeof request.query?.token === 'string') {
+    const assetRequest =
+      ['GET', 'HEAD'].includes(request.method) &&
+      /^\/api\/v2\/(?:media\/[^/]+\/content|detections\/[^/]+\/artifacts\/(?:crop|frame|enhanced))\/?$/.test(
+        request.path,
+      );
+    if (!authHeader && assetRequest && typeof request.query?.token === 'string') {
       token = request.query.token;
     }
     if (!token) throw new UnauthorizedException('Authentication required.');

@@ -10,7 +10,7 @@ skinparam classBackgroundColor #F8FAFC
 skinparam classBorderColor #475569
 skinparam ArrowColor #64748B
 hide circle
-title ERD — 8 bảng nghiệp vụ PostgreSQL
+title ERD — 12 bảng nghiệp vụ PostgreSQL
 
 entity "users" as users {
   * id <<PK>>
@@ -29,8 +29,31 @@ entity "media_assets" as media {
 }
 entity "recognition_jobs" as jobs {
   * id <<PK>>
-  * media_id <<FK>>
+  media_id <<FK>>
+  live_session_id <<FK>>
   * status
+  sighting_id
+}
+entity "stream_sources" as cameras {
+  * id <<PK>>
+  * owner_id <<FK>>
+  * url
+  * always_on
+}
+entity "live_sessions" as live {
+  * id <<PK>>
+  * stream_source_id <<FK>>
+  * status
+}
+entity "live_session_events" as events {
+  * id <<PK, tăng dần>>
+  * session_id <<FK>>
+  * event_type
+}
+entity "plate_watchlist" as watchlist {
+  * id <<PK>>
+  * owner_id <<FK>>
+  * plate <<UQ theo owner>>
 }
 entity "plate_appearances" as appearances {
   * id <<PK>>
@@ -58,7 +81,12 @@ entity "recognition_reviews" as reviews {
 
 users ||--o{ sessions : sở hữu phiên
 users ||--o{ media : upload
-media ||--o{ jobs : chạy lại
+media |o--o{ jobs : chạy lại
+users ||--o{ cameras : sở hữu
+cameras ||--o{ live : phiên chạy
+live ||--o{ events : lịch sử
+live |o--o{ jobs : một job / track
+users ||--o{ watchlist : theo dõi
 jobs ||--o{ appearances : tạo kết quả
 appearances ||--o{ detections : có bằng chứng
 appearances ||--o{ reviews : được kiểm duyệt
@@ -69,6 +97,11 @@ appearances |o--o{ predictions : OCR joint
 note bottom of predictions
   XOR: đúng một parent có giá trị.
   Chi tiết joint/crop ở sơ đồ OCR.
+end note
+note right of jobs
+  XOR: media_id hoặc live_session_id.
+  sighting_id gom các track
+  cùng một lượt xe (không FK).
 end note
 legend bottom
   * = NOT NULL. Từ điển DB liệt kê toàn bộ cột.

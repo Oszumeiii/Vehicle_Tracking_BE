@@ -25,7 +25,7 @@ import type { Response } from 'express';
 import { z } from 'zod';
 import { Database } from '../database/database';
 import { Actor, checkDates, instant, newId, normalizePlate, pagination } from '../common/http';
-import { Ownership } from '../common/ownership';
+import { APPEARANCE_MEDIA_FIELDS, JOB_OWNER, JOB_SOURCES, Ownership } from '../common/ownership';
 import {
   ApiFailures,
   ApiFileResponse,
@@ -40,14 +40,32 @@ import { AuthGuard } from '../auth/auth.guard';
 const search = pagination
   .extend({
     plate: z.string().max(128).optional(),
+    match: z.enum(['exact', 'contains']).default('exact'),
+    origin: z.enum(['upload', 'live']).optional(),
     media_id: z.string().optional(),
+    stream_source_id: z.string().optional(),
+    live_session_id: z.string().optional(),
     review_status: z
       .enum(['pending', 'confirmed', 'corrected', 'unreadable', 'rejected'])
       .optional(),
+    confidence_status: z.enum(['readable', 'low_confidence', 'unreadable']).optional(),
+    exclude_duplicates: z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((value) => value === 'true'),
     uploaded_from: instant,
     uploaded_to: instant,
+    captured_from: instant,
+    captured_to: instant,
+    group_by: z.enum(['sighting']).optional(),
   })
   .strict();
+// A live sighting groups the tracks of one vehicle passage; every upload result stands alone.
+const SIGHTING = 'coalesce(j.sighting_id, a.id)';
+const RESULT_FIELDS = `a.*,${APPEARANCE_MEDIA_FIELDS},m.uploaded_at,
+  CASE WHEN j.live_session_id IS NULL THEN 'upload' ELSE 'live' END AS origin,
+  s.stream_source_id,j.live_session_id,j.captured_from,j.captured_to,j.confidence_status,
+  j.duplicate_of_job_id,j.sighting_id`;
 const review = z
   .object({
     action: z.enum(['confirm', 'correct', 'unreadable', 'reject']),
@@ -81,46 +99,108 @@ export class ResultsController {
     type: String,
     description: 'Exact normalized plate text; uppercase without spaces/hyphens',
   })
+  @ApiQuery({
+    name: 'match',
+    required: false,
+    enum: ['exact', 'contains'],
+    description: 'Plate matching; exact by default.',
+  })
+  @ApiQuery({ name: 'origin', required: false, enum: ['upload', 'live'] })
   @ApiQuery({ name: 'media_id', required: false, type: String })
+  @ApiQuery({ name: 'stream_source_id', required: false, type: String })
+  @ApiQuery({ name: 'live_session_id', required: false, type: String })
   @ApiQuery({
     name: 'review_status',
     required: false,
     enum: ['pending', 'confirmed', 'corrected', 'unreadable', 'rejected'],
   })
+  @ApiQuery({
+    name: 'confidence_status',
+    required: false,
+    enum: ['readable', 'low_confidence', 'unreadable'],
+    description: 'Live tracks only; advisory OCR confidence band.',
+  })
+  @ApiQuery({
+    name: 'exclude_duplicates',
+    required: false,
+    enum: ['true', 'false'],
+    description: 'Hide live tracks linked to an earlier track of the same vehicle.',
+  })
+  @ApiTimeRange('captured_from', 'captured_to')
+  @ApiQuery({
+    name: 'group_by',
+    required: false,
+    enum: ['sighting'],
+    description:
+      'One row per vehicle sighting (live tracks of the same plate on a camera within PLATE_LIVE_SIGHTING_MINUTES), with sighting_count, first_seen and last_seen.',
+  })
   async search(@Req() req: { user: Actor }, @Query() input: unknown) {
     const f = search.parse(input);
     checkDates(f.uploaded_from, f.uploaded_to);
+    checkDates(f.captured_from, f.captured_to);
+    // Uploads count only their latest successful run; every live track is its own run.
     const values: unknown[] = [req.user.role === 'admin', req.user.id],
-      clauses = ['($1::boolean OR m.owner_id=$2)'];
+      clauses = [JOB_OWNER, '(j.live_session_id IS NOT NULL OR latest.id IS NOT NULL)'];
+    if (f.plate !== undefined && !normalizePlate(f.plate))
+      throw new UnprocessableEntityException('Plate query cannot be empty.');
+    if (f.origin)
+      clauses.push(
+        f.origin === 'live' ? 'j.live_session_id IS NOT NULL' : 'j.media_id IS NOT NULL',
+      );
+    if (f.exclude_duplicates) clauses.push('j.duplicate_of_job_id IS NULL');
     if (f.plate !== undefined) {
-      const cleanPlate = normalizePlate(f.plate);
-      if (!cleanPlate) throw new UnprocessableEntityException('Plate query cannot be empty.');
-      values.push(`%${cleanPlate}%`);
-      clauses.push(`(COALESCE(a.effective_text, a.machine_text, '') ILIKE $${values.length})`);
+      const plate = normalizePlate(f.plate);
+      values.push(f.match === 'contains' ? `%${plate}%` : plate);
+      clauses.push(`a.effective_text ${f.match === 'contains' ? 'LIKE' : '='} $${values.length}`);
     }
     for (const [value, sql] of [
       [f.media_id, 'm.id='],
+      [f.stream_source_id, 's.stream_source_id='],
+      [f.live_session_id, 'j.live_session_id='],
       [f.review_status, 'a.review_status='],
+      [f.confidence_status, 'j.confidence_status='],
       [f.uploaded_from, 'm.uploaded_at>='],
       [f.uploaded_to, 'm.uploaded_at<='],
+      [f.captured_from, 'j.captured_from>='],
+      [f.captured_to, 'j.captured_from<='],
     ] as const) {
       if (value !== undefined) {
         values.push(value);
         clauses.push(`${sql}$${values.length}`);
       }
     }
-    const from = `FROM plate_appearances a JOIN recognition_jobs j ON j.id=a.job_id JOIN media_assets m ON m.id=j.media_id
-      JOIN (SELECT DISTINCT ON (media_id) id FROM recognition_jobs WHERE status='succeeded'
-        AND (job_kind='recognize' OR pipeline_snapshot->>'task'='prepare')
+    const from = `FROM plate_appearances a JOIN ${JOB_SOURCES} ON j.id=a.job_id
+      LEFT JOIN (SELECT DISTINCT ON (media_id) id FROM recognition_jobs WHERE status='succeeded'
+        AND media_id IS NOT NULL AND (job_kind='recognize' OR pipeline_snapshot->>'task'='prepare')
         ORDER BY media_id,created_at DESC,id DESC) latest ON latest.id=j.id
       WHERE ${clauses.join(' AND ')}`;
+    const page = `LIMIT $${values.length + 1} OFFSET $${values.length + 2}`;
+    if (f.group_by === 'sighting') {
+      // One row per sighting: a reviewed track first, then the most confident one.
+      const count = await this.db.query(`SELECT count(DISTINCT ${SIGHTING}) ${from}`, values);
+      const items = await this.db.query(
+        `SELECT * FROM (
+          SELECT DISTINCT ON (${SIGHTING}) ${RESULT_FIELDS},
+            count(*) OVER w AS sighting_count, min(j.captured_from) OVER w AS first_seen,
+            max(j.captured_to) OVER w AS last_seen
+          ${from}
+          WINDOW w AS (PARTITION BY ${SIGHTING})
+          ORDER BY ${SIGHTING}, (a.review_status <> 'pending') DESC,
+            (j.statistics->>'confidence')::float DESC NULLS LAST, a.id
+        ) grouped ORDER BY coalesce(grouped.first_seen, grouped.captured_from, grouped.uploaded_at) DESC, grouped.id
+        ${page}`,
+        [...values, f.limit, f.offset],
+      );
+      return {
+        total: Number(count.rows[0].count),
+        limit: f.limit,
+        offset: f.offset,
+        items: items.rows.map((row) => ({ ...row, sighting_count: Number(row.sighting_count) })),
+      };
+    }
     const count = await this.db.query(`SELECT count(*) ${from}`, values);
     const items = await this.db.query(
-      `SELECT a.*,j.media_id,m.uploaded_at,m.media_type,m.duration_seconds AS media_duration_seconds,m.original_name AS media_original_name,
-        (SELECT d.id FROM plate_detections d WHERE d.appearance_id=a.id ORDER BY d.selected_order,d.id LIMIT 1) AS primary_detection_id,
-        (SELECT d.bbox FROM plate_detections d WHERE d.appearance_id=a.id ORDER BY d.selected_order,d.id LIMIT 1) AS primary_bbox,
-        (SELECT d.crop_bbox FROM plate_detections d WHERE d.appearance_id=a.id ORDER BY d.selected_order,d.id LIMIT 1) AS primary_crop_bbox
-       ${from} ORDER BY m.uploaded_at DESC,a.id LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+      `SELECT ${RESULT_FIELDS} ${from} ORDER BY coalesce(j.captured_from,m.uploaded_at) DESC,a.id ${page}`,
       [...values, f.limit, f.offset],
     );
     return {
@@ -129,6 +209,24 @@ export class ResultsController {
       offset: f.offset,
       items: items.rows,
     };
+  }
+
+  @Get('sightings/:id/results')
+  @ApiPageResponse(SearchResultResponse)
+  @ApiPage()
+  @ApiFailures(404)
+  async sighting(@Req() req: { user: Actor }, @Param('id') id: string, @Query() input: unknown) {
+    const { limit, offset } = pagination.strict().parse(input);
+    const from = `FROM plate_appearances a JOIN ${JOB_SOURCES} ON j.id=a.job_id
+      WHERE j.sighting_id=$3 AND ${JOB_OWNER}`;
+    const values = [req.user.role === 'admin', req.user.id, id];
+    const count = Number((await this.db.query(`SELECT count(*) ${from}`, values)).rows[0].count);
+    if (!count) throw new NotFoundException('Sighting not found.');
+    const items = await this.db.query(
+      `SELECT ${RESULT_FIELDS} ${from} ORDER BY j.captured_from, a.id LIMIT $4 OFFSET $5`,
+      [...values, limit, offset],
+    );
+    return { total: count, limit, offset, items: items.rows };
   }
 
   @Get('recognition-results/:id')
@@ -293,6 +391,8 @@ export class ResultsController {
           [id],
         )
       ).rows[0]?.input_storage_key;
+    // Pruned live keyframes have no key left; their crops stay available.
+    if (!key) throw new NotFoundException('Artifact not found.');
     response.sendFile(await this.storage.file(key));
   }
 
@@ -314,10 +414,11 @@ export class ResultsController {
     // Joint OCR decoder evidence, matching the notebook's ocr_predictions.csv columns.
     const rows = (
       await this.db.query(
-        `SELECT a.*, p.decoding->>'decoder' AS decoder, p.decoding->>'greedy_text' AS greedy_text,
+        `SELECT a.*, j.captured_from, j.captured_to, j.confidence_status,
+           p.decoding->>'decoder' AS decoder, p.decoding->>'greedy_text' AS greedy_text,
            p.decoding->>'format_valid' AS format_valid,
            p.decoding->>'beam_confidence_proxy' AS beam_confidence_proxy
-         FROM plate_appearances a
+         FROM plate_appearances a JOIN recognition_jobs j ON j.id=a.job_id
          LEFT JOIN ocr_predictions p ON p.appearance_id=a.id AND p.variant='joint'
          WHERE a.job_id=$1 ORDER BY a.first_frame,a.id`,
         [id],
@@ -337,13 +438,16 @@ export class ResultsController {
       'last_frame',
       'start_seconds',
       'end_seconds',
+      'captured_from',
+      'captured_to',
+      'confidence_status',
       'decoder',
       'greedy_text',
       'format_valid',
       'beam_confidence_proxy',
     ];
     const cell = (value: unknown) => {
-      let text = value == null ? '' : String(value);
+      let text = value == null ? '' : value instanceof Date ? value.toISOString() : String(value);
       if (/^[=+@\-\t\r\n]/.test(text)) text = "'" + text;
       return '"' + text.replaceAll('"', '""') + '"';
     };

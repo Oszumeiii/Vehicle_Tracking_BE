@@ -1,0 +1,45 @@
+@startuml
+skinparam defaultFontName Arial
+skinparam defaultFontSize 15
+skinparam shadowing false
+skinparam backgroundColor white
+skinparam sequenceMessageAlign center
+title Sequence — Phiên live: bật, nhận track, đẩy real-time, dừng
+actor "User" as U
+participant "API NestJS" as API
+participant "SSE hub" as HUB
+database "PostgreSQL" as DB
+participant "Worker\nlive manager" as W
+participant "app.live\n(Python + ffmpeg)" as P
+participant "YouTube" as YT
+U -> API : GET /live-events/stream (Bearer)
+API -> HUB : mở stream, con trỏ = id lớn nhất
+HUB --> U : event session (trạng thái hiện tại)
+U -> API : POST /stream-sources/{id}/sessions
+API -> DB : INSERT live_sessions (queued)\n+ event status
+API --> U : 202 queued
+DB --> HUB : NOTIFY
+HUB --> U : id + event status / session
+W -> DB : claim FOR UPDATE SKIP LOCKED (starting)
+W -> P : spawn, payload (snapshot, URL, vùng loại trừ)
+P -> YT : yt-dlp lấy HLS, ffmpeg -re -copyts
+loop mỗi frame
+  P -> P : Pacer, TrackSession
+end
+P --> W : stdout {status: running}, {stats}
+W -> DB : UPDATE status / stats
+DB --> HUB : NOTIFY live_sessions
+HUB --> U : event session (stats)
+P --> W : stdout {track: e000-t000042}
+W -> W : chuyển thư mục sang recognition/{job},\nkiểm bằng chứng
+W -> DB : transaction: job succeeded + appearance\n+ event track (+ alert nếu khớp watchlist)
+DB --> HUB : NOTIFY sau commit
+HUB --> U : id + event track / alert
+U -> API : POST /live-sessions/{id}/stop
+API -> DB : stop_requested_at, always_on = false
+W -> P : stdin "stop"
+P -> P : chốt và OCR track đang mở
+P --> W : track cuối, {status: stopped}, thoát
+W -> DB : status stopped + event
+HUB --> U : event status stopped, end (stream lọc theo phiên)
+@enduml

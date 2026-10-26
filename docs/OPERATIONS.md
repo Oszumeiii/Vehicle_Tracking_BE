@@ -90,11 +90,30 @@ Job lỗi trả `error_code` và thông báo an toàn. Chi tiết phía server n
 - `WORKER_INTERRUPTED`: worker dừng trước khi hoàn tất.
 - `RESULT_INVALID`: đầu ra không đáp ứng hợp đồng; xem log và adapter.
 
+Phiên live lỗi có `error_code` trên `GET /api/v2/live-sessions/{id}`. Chi tiết nằm ở `PLATE_DATA_DIR/live/{session_id}/live.log` và `GET /api/v2/live-sessions/{id}/events`. Khi `PLATE_LIVE_MAX_SESSIONS` lớn hơn 1, các phiên chạy chung một host: traceback và log chẩn đoán của host nằm ở `PLATE_DATA_DIR/live/host.log`. Host thoát bất thường thì mọi phiên trong đó cùng chuyển `failed`/`LIVE_PROCESS_EXITED`.
+
+- `STREAM_FAILED`: kết nối lại thất bại quá số lần cho phép.
+- `LIVE_PROCESS_EXITED`: tiến trình live thoát bất thường.
+- `AUTO_RESTART_FAILED` (event trên phiên gần nhất của camera 24/7): không dựng được snapshot pipeline để bật lại; worker thử lại sau 1, 2, 4… tối đa 30 phút.
+- `LIVE_STALLED`: tiến trình live không báo gì trong `PLATE_LIVE_STALL_SECONDS` và đã bị kill. Nguyên nhân thường gặp: GPU hết VRAM vì có tiến trình khác dùng chung. Với host dùng chung, cả host bị kill, vì một lần gọi model bị treo không thể hủy riêng cho một phiên.
+- `WORKER_INTERRUPTED`: worker dừng hoặc khởi động lại giữa phiên.
+- Các mã khởi động (`CHECKPOINT_MISSING`, `ENVIRONMENT_ERROR`, `CUDA_*`, `PIPELINE_FAILED`): giống job upload.
+
+Stream SSE (`/api/v2/live-events/stream`) dùng một kết nối PostgreSQL riêng để `LISTEN`. Mất kết nối thì API tự kết nối lại (chờ lùi dần tối đa 30 s), và client nhận đủ sự kiện nhờ id. Reverse proxy phải tắt buffer cho đường dẫn này; API đã gửi `X-Accel-Buffering: no` và heartbeat mỗi `PLATE_SSE_HEARTBEAT_SECONDS`. Mỗi stream mở tính vào `PLATE_SSE_MAX_CLIENTS`.
+
+Track không nhập được (bằng chứng hỏng) được ghi thành event `track_rejected` và để nguyên trong `live/{session_id}/tracks/`. Bật phiên mới để chạy tiếp.
+
 Chạy lại bằng `POST /api/v2/recognition-jobs` với cùng `media_id`. Job cũ và review cũ còn nguyên. API không có retry/cancel riêng. Tra cứu chung chọn lượt xử lý nghiệp vụ succeeded mới nhất của mỗi nguồn; vẫn xem lịch sử qua job cụ thể.
 
 ## Dừng, khởi động lại và cập nhật
 
-Để bảo trì, ngừng nhận request mới bằng cách dừng API; chờ job hiện tại kết thúc nếu muốn giữ lần xử lý đó, rồi dừng worker bằng Ctrl+C. Dừng worker trong lúc inference sẽ ngắt subprocess và job có thể thành `WORKER_INTERRUPTED`. Nếu tiến trình bị tắt đột ngột, lần khởi động worker tiếp theo chuyển các job còn `running` sang `failed/WORKER_INTERRUPTED`. Các job `queued` tiếp tục được lấy; job `failed` không tự chạy lại.
+Để bảo trì, ngừng nhận request mới bằng cách dừng API; chờ job hiện tại kết thúc nếu muốn giữ lần xử lý đó, rồi dừng worker bằng Ctrl+C. Dừng worker trong lúc inference sẽ ngắt subprocess và job có thể thành `WORKER_INTERRUPTED`. Nếu tiến trình bị tắt đột ngột, lần khởi động worker tiếp theo chuyển các job còn `running` sang `failed/WORKER_INTERRUPTED`.
+
+Worker dọn bằng chứng live mỗi `PLATE_RETENTION_INTERVAL_MINUTES` theo thời hạn của từng camera (xem README). Cột `recognition_jobs.evidence_bytes` cho biết dung lượng từng track; tổng theo phiên có ở `GET /live-sessions/{id}`. Bản sao lưu nên chạy sau một lượt dọn để không mang theo keyframe sắp bị xóa.
+
+Phiên live khi worker dừng bằng Ctrl+C sẽ chốt track đang mở (tối đa `PLATE_LIVE_STOP_SECONDS`, mặc định 120 s) rồi chuyển `interrupted`. Nếu worker bị tắt đột ngột, lần khởi động sau sẽ chuyển phiên sang `interrupted` và nhập các track đã ghi xuống đĩa.
+
+Một phiên live chiếm GPU liên tục. Mặc định (`PLATE_LIVE_EXCLUSIVE_GPU=true`), job upload chờ trong lúc phiên live chạy và ngược lại. Muốn xử lý video upload thì dừng phiên live, hoặc chạy worker trên máy có GPU đủ lớn rồi đặt `false`. Số đo nằm trong `TESTING.md`. Các job `queued` tiếp tục được lấy; job `failed` không tự chạy lại.
 
 Sau khi sao lưu, cập nhật code/dependency, chạy `npm ci`, `npm run build`, `npm run db:migrate`, rồi khởi động API và worker. Migration đã áp dụng có checksum; không sửa nội dung migration cũ để cập nhật schema, hãy thêm migration mới. Cập nhật source hoặc checkpoint có thể làm job đang queued không còn khớp snapshot; giữ bộ model/source cũ cho đến khi hàng đợi hoàn tất hoặc tạo job mới sau cập nhật.
 

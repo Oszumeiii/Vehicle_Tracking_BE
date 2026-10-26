@@ -4,3 +4,7 @@
 ultralytics==8.4.150
 lap==0.5.13
 huggingface-hub==1.11.0
+# Live YouTube source (app/live): yt-dlp resolves the stream (needs Node.js as its
+# JS runtime), the bundled ffmpeg binary decodes HLS (OpenCV's own FFmpeg cannot).
+yt-dlp[default]==2026.10.21
+imageio-ffmpeg==0.6.0

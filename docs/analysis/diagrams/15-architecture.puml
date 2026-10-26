@@ -7,19 +7,27 @@ skinparam componentStyle rectangle
 top to bottom direction
 actor "User / Admin" as user
 component "Client / Swagger" as client
+cloud "YouTube Live\nHLS segments" as youtube
 package "Backend nghiệp vụ" {
-  component "API NestJS\nAuth và ownership\nMedia, job, review, search" as api
-  component "Worker Node\nClaim và recovery\nKiểm manifest, transaction" as worker
+  component "API NestJS\nAuth và ownership\nMedia, job, review, search\nCamera, phiên, watchlist" as api
+  component "SSE hub\nLISTEN/NOTIFY\nphát lại theo id" as hub
+  component "Worker Node\nClaim và recovery\nLive manager, chia GPU\nDọn dữ liệu" as worker
 }
-database "PostgreSQL\n8 bảng nghiệp vụ\nHàng đợi trong jobs" as db
+database "PostgreSQL\n12 bảng nghiệp vụ\nHàng đợi job / phiên\nTrigger NOTIFY" as db
 folder "Filesystem riêng\nNguồn, crop, frame\nManifest và log" as files
 component "Python ML subprocess\nYOLO11l, BoT-SORT\nSE-ResNet34-C joint 5 frame" as ml
+component "Tiến trình live (app.live)\nyt-dlp + ffmpeg, Pacer\nTrackSession, OCR mỗi track" as live
 user --> client
 client --> api : HTTP và\nBearer token
+hub --> client : SSE (fetch)
 api --> db : Metadata và\ntransaction
+db --> hub : NOTIFY khi commit
 api --> files : Upload / đọc\ncó quyền
-worker --> db : Claim / trạng thái\n/ kết quả
+worker --> db : Claim / trạng thái\n/ kết quả / event
 worker <--> ml : Payload snapshot\nManifest kết quả
+worker <--> live : Payload, stdin stop\nJSON lines stdout
+live --> youtube : HLS (yt-dlp)
 ml --> files : Đọc nguồn /\nghi bằng chứng
-worker --> files : Kiểm tra\nbằng chứng
+live --> files : Ghi track
+worker --> files : Kiểm bằng chứng,\nchuyển track, dọn
 @enduml

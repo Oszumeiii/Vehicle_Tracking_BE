@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from app.recognition.runner import _video_detections
-from app.recognition.video_tracking import video_config
+from app.recognition.video_tracking import check_frame_count, video_config
 
 SAMPLING = {"low_fps": 10., "med_fps": 10., "high_fps": 10., "threshold_low": 2., "threshold_high": 6.}
 TRACKING = {"imgsz": 320, "batch": 4, "track_buffer_seconds": 1.5, "crop_padding": .15, "crop_confidence": .25}
@@ -231,3 +231,116 @@ def test_empty_scene_gate_skips_quiet_frames_only_after_confirmations():
     assert gate.decide(0.4) == (False, "idle_skip")
     gate.observe_detection(1, True)
     assert gate.decide(0.5) == (True, "live_track")
+
+
+def _plate_video(path, frames, fps=10.):
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"MJPG"), fps, (320, 180))
+    assert writer.isOpened()
+    for index in range(frames):
+        frame = np.full((180, 320, 3), 80 + index % 100, np.uint8)
+        frame[40:70, 40:140] = 220
+        writer.write(frame)
+    writer.release()
+
+
+def test_streamed_session_matches_file_tracking(tmp_path):
+    """A live source pushing decoded frames gets exactly the file pipeline's result."""
+    from app.recognition.video_tracking import TrackSession, read_frames, track_video
+    video = tmp_path / "input.avi"
+    _plate_video(video, 30)
+    cfg = video_config(video, {"device": "cpu", "sampling": SAMPLING, "tracking": TRACKING, "empty_scene_gate": GATE})
+    _, file_frames, file_candidates, _ = track_video(video, BoxFixture(), cfg, tmp_path)
+    streamed = []
+    with TrackSession(BoxFixture(), cfg) as session:
+        for index, timestamp, image, _ in read_frames(video):
+            streamed += session.push(index, timestamp, image)  # gray computed by the session
+        streamed += session.close()
+    assert streamed == file_candidates and len(streamed) == 1
+    assert session.frames == file_frames
+    assert all(len(frame["sampled_jpeg_sha256"]) == 64 for frame in session.frames)
+
+
+def test_max_track_seconds_finishes_a_parked_track_once(tmp_path):
+    from app.recognition.video_tracking import TrackSession, read_frames
+    video = tmp_path / "parked.avi"
+    _plate_video(video, 40)  # the same plate stays in view for 4 s
+    cfg = {**video_config(video, {"device": "cpu", "sampling": SAMPLING, "tracking": {**TRACKING, "batch": 1},
+                                  "empty_scene_gate": GATE}), "max_track_seconds": 1.0}
+    emitted_at = []
+    with TrackSession(BoxFixture(), cfg) as session:
+        for index, timestamp, image, gray in read_frames(video):
+            emitted_at += [(timestamp, c) for c in session.push(index, timestamp, image, gray)]
+        assert session.close() == []  # the closed track is not finished a second time
+    assert len(emitted_at) == 1
+    timestamp, candidate = emitted_at[0]
+    assert timestamp == pytest.approx(1.0)  # emitted while the stream is still running
+    assert candidate["first_frame"] == 1 and candidate["last_frame"] == 11
+    assert session.active == {}
+    with pytest.raises(ValueError, match="max_track_seconds"):
+        TrackSession(BoxFixture(), {**cfg, "max_track_seconds": -1})
+
+
+def test_retained_images_export_the_same_evidence_as_a_second_decode(tmp_path):
+    from app.recognition.video_tracking import (TrackSession, export_crops, export_retained, read_frames,
+                                                track_video)
+    video = tmp_path / "input.avi"
+    _plate_video(video, 30)
+    cfg = video_config(video, {"device": "cpu", "sampling": SAMPLING, "tracking": TRACKING, "empty_scene_gate": GATE})
+    file_out, live_out = tmp_path / "file", tmp_path / "live"
+    file_out.mkdir()
+    live_out.mkdir()
+    pts, frames, candidates, _ = track_video(video, BoxFixture(), cfg, file_out)
+    expected = export_crops(video, cfg, file_out, pts, frames, candidates)
+    retained = []
+    with TrackSession(BoxFixture(), cfg, retain_images=True) as session:
+        for index, timestamp, image, gray in read_frames(video):
+            retained += session.push(index, timestamp, image, gray)
+            assert session.retained_frames <= index
+        retained += session.close()
+    assert session.frames == [] and session.retained_frames == 0
+    assert [sorted(c["jpeg"]) for c in retained] == [[r["frame_index"] for r in c["rows"]] for c in retained]
+    assert export_retained(retained, cfg, live_out) == expected
+    for row in expected:
+        for key in ("crop_path", "sampled_frame_path"):
+            assert (live_out / row[key]).read_bytes() == (file_out / row[key]).read_bytes()
+
+
+def test_retained_images_are_released_once_a_parked_track_is_finished(tmp_path):
+    from app.recognition.video_tracking import TrackSession, read_frames
+    video = tmp_path / "parked.avi"
+    _plate_video(video, 40)
+    cfg = {**video_config(video, {"device": "cpu", "sampling": SAMPLING, "tracking": {**TRACKING, "batch": 1},
+                                  "empty_scene_gate": GATE}), "max_track_seconds": 1.0}
+    after_finish = []
+    with TrackSession(BoxFixture(), cfg, retain_images=True) as session:
+        for index, timestamp, image, gray in read_frames(video):
+            emitted = session.push(index, timestamp, image, gray)
+            if emitted or after_finish:
+                after_finish.append(session.retained_frames)
+            if emitted:
+                assert len(emitted[0]["jpeg"]) == 5
+        session.close()
+    assert len(after_finish) == 30 and set(after_finish) == {0}  # the closed track keeps nothing
+
+
+def test_read_frames_stops_decoder_when_consumer_leaves_early(tmp_path):
+    import threading
+    from app.recognition.video_tracking import read_frames
+    video = tmp_path / "long.avi"
+    _plate_video(video, 60)
+    frames = read_frames(video, prefetch=2)
+    first = next(frames)
+    assert first[0] == 1 and first[1] == 0 and first[3].shape == (180, 320)
+    frames.close()
+    assert not any(t.name == "video-decode" for t in threading.enumerate())
+    with pytest.raises(ValueError, match="Cannot open video"):
+        next(read_frames(tmp_path / "missing.avi"))
+
+
+def test_frame_count_tolerates_only_a_short_missing_tail():
+    check_frame_count(49584, 49584, 27.5)
+    check_frame_count(49567, 49584, 27.5)  # stream-copied cut: 17 trailing frames never decode
+    check_frame_count(30, 0, 10.)  # container without a frame count
+    for decoded in (49585, 49000):  # surplus, or a gap beyond max(1%, 2 s)
+        with pytest.raises(RuntimeError, match="frame count"):
+            check_frame_count(decoded, 49584, 27.5)

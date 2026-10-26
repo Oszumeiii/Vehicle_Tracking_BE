@@ -56,9 +56,68 @@ export class AcceptedJobResponse {
   @ApiProperty() status_url!: string;
 }
 
-export class JobResponse {
+const confidenceStatus = {
+  type: String,
+  enum: ['readable', 'low_confidence', 'unreadable'],
+  nullable: true,
+  description:
+    'Live tracks only: readable when the OCR confidence reaches the session threshold. Advisory.',
+} as const;
+const zones = {
+  type: 'array',
+  maxItems: 16,
+  items: {
+    type: 'array',
+    items: { type: 'number', minimum: 0, maximum: 1 },
+    minItems: 4,
+    maxItems: 4,
+  },
+  description:
+    'Normalized [x1, y1, x2, y2] frame rectangles; detections centred inside are ignored (e.g. a fixed street sign).',
+} as const;
+
+/** Fields shared by a live track's job and its search results. */
+class LiveTrackFields {
+  @ApiProperty({ ...nullableText, description: 'Set for live tracks; media_id is then null.' })
+  live_session_id!: string | null;
+  @ApiProperty({
+    ...nullableDateTime,
+    description: 'Approximate wall time of the first observation.',
+  })
+  captured_from!: string | null;
+  @ApiProperty(nullableDateTime) captured_to!: string | null;
+  @ApiProperty(confidenceStatus) confidence_status!: string | null;
+  @ApiProperty({
+    ...nullableText,
+    description: 'Earlier live track (job) probably showing the same vehicle. Advisory.',
+  })
+  duplicate_of_job_id!: string | null;
+  @ApiProperty({
+    ...nullableText,
+    description:
+      'Vehicle sighting: live tracks of the same plate on one camera within PLATE_LIVE_SIGHTING_MINUTES share it.',
+  })
+  sighting_id!: string | null;
+}
+
+export class JobResponse extends LiveTrackFields {
+  @ApiProperty(nullableText) media_type!: string | null;
+  @ApiProperty(nullableNumber) media_duration_seconds!: number | null;
+  @ApiProperty(nullableText) media_original_name!: string | null;
   @ApiProperty() id!: string;
-  @ApiProperty() media_id!: string;
+  @ApiProperty({ ...nullableText, description: 'Uploaded source; null for live tracks.' })
+  media_id!: string | null;
+  @ApiProperty({ ...nullableText, description: 'Track key inside the live session.' })
+  live_track_key!: string | null;
+  @ApiProperty({ description: 'A watchlist matched this live track; retention keeps it.' })
+  alerted!: boolean;
+  @ApiProperty({ ...nullableInteger, description: 'Stored evidence of a live track, in bytes.' })
+  evidence_bytes!: number | null;
+  @ApiProperty({
+    ...nullableDateTime,
+    description: 'When retention pruned the track to one keyframe (crops are kept).',
+  })
+  evidence_pruned_at!: string | null;
   @ApiProperty({ enum: ['detect_only', 'recognize'] }) job_kind!: string;
   @ApiProperty({ enum: ['scene', 'plate_crop'] }) input_mode!: string;
   @ApiProperty({ enum: ['queued', 'running', 'succeeded', 'failed'] }) status!: string;
@@ -98,6 +157,12 @@ export class PipelineResponse {
 }
 
 export class AppearanceResponse {
+  @ApiProperty({ ...nullableText, required: false }) media_type?: string | null;
+  @ApiProperty({ ...nullableNumber, required: false }) media_duration_seconds?: number | null;
+  @ApiProperty({ ...nullableText, required: false }) media_original_name?: string | null;
+  @ApiProperty({ ...nullableText, required: false }) primary_detection_id?: string | null;
+  @ApiProperty({ ...boundingBox, required: false }) primary_bbox?: number[] | null;
+  @ApiProperty({ ...boundingBox, required: false }) primary_crop_bbox?: number[] | null;
   @ApiProperty() id!: string;
   @ApiProperty() job_id!: string;
   @ApiProperty({
@@ -139,9 +204,169 @@ export class AppearanceResponse {
 }
 
 export class SearchResultResponse extends AppearanceResponse {
-  @ApiProperty() media_id!: string;
-  @ApiProperty(dateTime) uploaded_at!: string;
+  @ApiProperty({ enum: ['upload', 'live'] }) origin!: string;
+  @ApiProperty(nullableText) media_id!: string | null;
+  @ApiProperty(nullableDateTime) uploaded_at!: string | null;
+  @ApiProperty(nullableText) stream_source_id!: string | null;
+  @ApiProperty(nullableText) live_session_id!: string | null;
+  @ApiProperty(nullableDateTime) captured_from!: string | null;
+  @ApiProperty(nullableDateTime) captured_to!: string | null;
+  @ApiProperty(confidenceStatus) confidence_status!: string | null;
+  @ApiProperty(nullableText) duplicate_of_job_id!: string | null;
+  @ApiProperty(nullableText) sighting_id!: string | null;
+  @ApiProperty({ ...integer, required: false, description: 'group_by=sighting only.' })
+  sighting_count?: number;
+  @ApiProperty({ ...nullableDateTime, required: false, description: 'group_by=sighting only.' })
+  first_seen?: string | null;
+  @ApiProperty({ ...nullableDateTime, required: false, description: 'group_by=sighting only.' })
+  last_seen?: string | null;
 }
+
+const sessionStatuses = [
+  'queued',
+  'starting',
+  'running',
+  'reconnecting',
+  'stopping',
+  'stopped',
+  'ended',
+  'failed',
+  'interrupted',
+];
+
+export class LiveSessionResponse {
+  @ApiProperty() id!: string;
+  @ApiProperty() stream_source_id!: string;
+  @ApiProperty() requested_by!: string;
+  @ApiProperty({ enum: sessionStatuses }) status!: string;
+  @ApiProperty(nullableText) pipeline_id!: string | null;
+  @ApiProperty(nullableText) pipeline_version!: string | null;
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: true,
+    description: 'min_confidence, max_track_seconds and the exclude_zones in use.',
+  })
+  settings!: Record<string, unknown>;
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: true,
+    description: 'Latest live process counters (frames read/dropped, lag, active tracks).',
+  })
+  stats!: Record<string, unknown>;
+  @ApiProperty(nullableDateTime) stats_at!: string | null;
+  @ApiProperty(integer) tracks_count!: number;
+  @ApiProperty(nullableDateTime) stop_requested_at!: string | null;
+  @ApiProperty(dateTime) created_at!: string;
+  @ApiProperty(nullableDateTime) started_at!: string | null;
+  @ApiProperty(nullableDateTime) finished_at!: string | null;
+  @ApiProperty(nullableText) error_code!: string | null;
+  @ApiProperty(nullableText) error_message!: string | null;
+  @ApiProperty({ description: "Search URL listing this session's tracks." }) results_url!: string;
+  @ApiProperty({
+    ...integer,
+    required: false,
+    description: 'Stored evidence of the session in bytes (single and list reads).',
+  })
+  evidence_bytes?: number;
+}
+
+export class StreamSourceResponse {
+  @ApiProperty() id!: string;
+  @ApiProperty() owner_id!: string;
+  @ApiProperty() name!: string;
+  @ApiProperty({ enum: ['youtube', 'file'] }) source_type!: string;
+  @ApiProperty({
+    description: 'YouTube link, or for a demo camera the video path under demo-videos.',
+  })
+  url!: string;
+  @ApiProperty(zones) exclude_zones!: number[][];
+  @ApiProperty({ ...nullableText, description: 'YouTube video id; null for channel links.' })
+  video_id!: string | null;
+  @ApiProperty({
+    ...nullableText,
+    description:
+      'Privacy-enhanced player URL for embedding the stream next to its detections. The player runs a few seconds apart from recognition.',
+  })
+  embed_url!: string | null;
+  @ApiProperty({ description: 'The worker keeps a session running (auto restart).' })
+  always_on!: boolean;
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: true,
+    description: 'pipeline_id, min_confidence, max_track_seconds and max_height for auto sessions.',
+  })
+  auto_settings!: Record<string, unknown>;
+  @ApiProperty({
+    ...nullableInteger,
+    description: 'Prune tracks to one keyframe after; null keeps.',
+  })
+  keyframe_retention_hours!: number | null;
+  @ApiProperty({ ...nullableInteger, description: 'Delete unprotected tracks after; null keeps.' })
+  track_retention_days!: number | null;
+  @ApiProperty(dateTime) created_at!: string;
+  @ApiProperty(dateTime) updated_at!: string;
+  @ApiProperty({ type: LiveSessionResponse, nullable: true })
+  active_session!: LiveSessionResponse | null;
+}
+
+export class LiveEventResponse {
+  @ApiProperty({ description: 'Increasing event id.' }) id!: string;
+  @ApiProperty({ enum: ['status', 'error', 'track_rejected', 'track', 'alert'] })
+  event_type!: string;
+  @ApiProperty({ type: 'object', additionalProperties: true }) payload!: Record<string, unknown>;
+  @ApiProperty(dateTime) created_at!: string;
+}
+
+export class TrackEventPayload {
+  @ApiProperty() job_id!: string;
+  @ApiProperty({ description: 'Result (appearance) id for detail, review and evidence.' })
+  result_id!: string;
+  @ApiProperty({ description: 'Track key inside the session, e.g. e000-t000042.' }) track!: string;
+  @ApiProperty(nullableText) text!: string | null;
+  @ApiProperty(confidenceStatus) confidence_status!: string;
+  @ApiProperty(nullableNumber) confidence!: number | null;
+  @ApiProperty(dateTime) captured_from!: string;
+  @ApiProperty(dateTime) captured_to!: string;
+  @ApiProperty(nullableText) duplicate_of_job_id!: string | null;
+  @ApiProperty() sighting_id!: string;
+  @ApiProperty({
+    enum: ['stream', 'received'],
+    description: 'stream: broadcast clock (HLS program date-time); received: when frames arrived.',
+  })
+  capture_clock!: string;
+  @ApiProperty({
+    type: [String],
+    minItems: 5,
+    maxItems: 5,
+    description: 'Ordered detection ids; fetch crops from /detections/{id}/artifacts/crop.',
+  })
+  detection_ids!: string[];
+}
+
+export class AlertEventPayload {
+  @ApiProperty() watchlist_id!: string;
+  @ApiProperty({ description: 'Watched plate.' }) watch_plate!: string;
+  @ApiProperty({ description: 'User whose watchlist matched; only they receive the alert.' })
+  owner_id!: string;
+  @ApiProperty({ description: 'Plate read on the camera.' }) plate!: string;
+  @ApiProperty({ enum: [0, 1], description: 'Edit distance between the two plates.' })
+  distance!: number;
+  @ApiProperty() job_id!: string;
+  @ApiProperty() result_id!: string;
+  @ApiProperty() stream_source_id!: string;
+  @ApiProperty(confidenceStatus) confidence_status!: string;
+  @ApiProperty(dateTime) captured_from!: string;
+}
+
+export class WatchlistResponse {
+  @ApiProperty() id!: string;
+  @ApiProperty() owner_id!: string;
+  @ApiProperty({ description: 'Normalized plate (uppercase, no spaces/hyphens).' }) plate!: string;
+  @ApiProperty(nullableText) note!: string | null;
+  @ApiProperty(dateTime) created_at!: string;
+}
+
+export const streamZones = zones;
 
 export class DecodingResponse {
   @ApiProperty({ enum: ['greedy', 'beam_plain', 'beam_filter', 'beam_constrained'] })

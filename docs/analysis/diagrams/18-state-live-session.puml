@@ -1,0 +1,30 @@
+@startuml
+skinparam defaultFontName Arial
+skinparam defaultFontSize 16
+skinparam shadowing false
+skinparam backgroundColor white
+hide empty description
+[*] --> queued : POST phiên / worker tự bật (24/7)
+queued --> starting : Worker claim (khi GPU rảnh)
+queued --> stopped : Dừng khi còn chờ
+starting --> running : Frame đầu tiên
+running --> reconnecting : Mất frame 15 s / lỗi luồng
+reconnecting --> running : Kết nối lại được
+starting --> stopping : Yêu cầu dừng
+running --> stopping : Yêu cầu dừng
+reconnecting --> stopping : Yêu cầu dừng
+stopping --> stopped : Chốt track đang mở rồi thoát
+running --> ended : Hết live / video bị gỡ
+reconnecting --> failed : Quá số lần kết nối lại
+starting --> failed : Lỗi khởi động (model, CUDA)
+running --> failed : LIVE_STALLED / tiến trình thoát bất thường
+running --> interrupted : Worker dừng hoặc khởi động lại
+stopped --> [*] : Xóa phiên
+ended --> [*] : Xóa phiên
+failed --> [*] : Xóa phiên
+interrupted --> [*] : Xóa phiên
+note right of interrupted
+Camera always_on: worker tạo phiên mới,
+chờ lùi dần 1–30 phút nếu phiên chết nhanh.
+end note
+@enduml

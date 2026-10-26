@@ -17,7 +17,7 @@ import { ApiBearerAuth, ApiBody, ApiTags, ApiQuery, ApiResponse } from '@nestjs/
 import { z } from 'zod';
 import { Database } from '../database/database';
 import { Actor, checkDates, instant, newId, pagination } from '../common/http';
-import { Ownership } from '../common/ownership';
+import { APPEARANCE_MEDIA_FIELDS, JOB_OWNER, JOB_SOURCES, Ownership } from '../common/ownership';
 import {
   ApiCollectionResponse,
   ApiFailures,
@@ -44,7 +44,9 @@ const createSchema = z
   .strict();
 const filterSchema = pagination
   .extend({
+    origin: z.enum(['upload', 'live', 'all']).default('upload'),
     media_id: z.string().optional(),
+    live_session_id: z.string().optional(),
     status: z.enum(['queued', 'running', 'succeeded', 'failed']).optional(),
     created_from: instant,
     created_to: instant,
@@ -54,6 +56,7 @@ export function jobView(row: any) {
   const { pipeline_snapshot, ...value } = row;
   return {
     ...value,
+    evidence_bytes: value.evidence_bytes == null ? null : Number(value.evidence_bytes),
     pipeline_id: pipeline_snapshot?.id ?? null,
     pipeline_version: pipeline_snapshot?.version ?? null,
     pipeline_task: pipeline_snapshot?.id ? (pipeline_snapshot.task ?? 'recognize') : null,
@@ -73,8 +76,9 @@ export class JobOperations {
     try {
       await this.db.transaction(async (c) => {
         const job = await this.owner.job(actor, id, false, c);
-        // Lock the media consistently with job creation and media deletion.
-        await this.owner.media(actor, job.media_id, c, true);
+        // Lock the source consistently with job creation and media deletion.
+        if (job.media_id) await this.owner.media(actor, job.media_id, c, true);
+        else await this.owner.liveSession(actor, job.live_session_id, c, true);
         const locked = (
           await c.query('SELECT status FROM recognition_jobs WHERE id=$1 FOR UPDATE', [id])
         ).rows[0];
@@ -159,15 +163,27 @@ export class JobsController {
   @ApiPageResponse(JobResponse)
   @ApiPage()
   @ApiTimeRange('created_from', 'created_to')
+  @ApiQuery({
+    name: 'origin',
+    required: false,
+    enum: ['upload', 'live', 'all'],
+    description: 'Uploaded media jobs by default; each finished live track is its own job.',
+  })
   @ApiQuery({ name: 'media_id', required: false, type: String })
+  @ApiQuery({ name: 'live_session_id', required: false, type: String })
   @ApiQuery({ name: 'status', required: false, enum: ['queued', 'running', 'succeeded', 'failed'] })
   async list(@Req() req: { user: Actor }, @Query() input: unknown) {
     const f = filterSchema.parse(input);
     checkDates(f.created_from, f.created_to);
     const values: unknown[] = [req.user.role === 'admin', req.user.id],
-      clauses = ['($1::boolean OR m.owner_id=$2)'];
+      clauses = [JOB_OWNER];
+    if (f.origin !== 'all')
+      clauses.push(
+        f.origin === 'live' ? 'j.live_session_id IS NOT NULL' : 'j.media_id IS NOT NULL',
+      );
     for (const [value, sql] of [
       [f.media_id, 'j.media_id='],
+      [f.live_session_id, 'j.live_session_id='],
       [f.status, 'j.status='],
       [f.created_from, 'j.created_at>='],
       [f.created_to, 'j.created_at<='],
@@ -177,7 +193,7 @@ export class JobsController {
         clauses.push(`${sql}$${values.length}`);
       }
     }
-    const from = `FROM recognition_jobs j JOIN media_assets m ON m.id=j.media_id WHERE ${clauses.join(' AND ')}`;
+    const from = `FROM ${JOB_SOURCES} WHERE ${clauses.join(' AND ')}`;
     const count = await this.db.query(`SELECT count(*) ${from}`, values);
     const items = await this.db.query(
       `SELECT j.*, m.media_type, m.duration_seconds AS media_duration_seconds, m.original_name AS media_original_name ${from} ORDER BY j.created_at DESC,j.id DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
@@ -195,12 +211,12 @@ export class JobsController {
   @ApiFailures(404)
   async get(@Req() req: { user: Actor }, @Param('id') id: string) {
     const job = await this.owner.job(req.user, id);
-    const media = await this.owner.media(req.user, job.media_id);
+    const media = job.media_id ? await this.owner.media(req.user, job.media_id) : null;
     return {
       ...jobView(job),
-      media_type: media.media_type,
-      media_duration_seconds: media.duration_seconds,
-      media_original_name: media.original_name,
+      media_type: media?.media_type ?? null,
+      media_duration_seconds: media?.duration_seconds ?? null,
+      media_original_name: media?.original_name ?? null,
     };
   }
 
@@ -215,13 +231,8 @@ export class JobsController {
       id,
     ]);
     const items = await this.db.query(
-      `SELECT a.*, j.media_id, m.media_type, m.duration_seconds AS media_duration_seconds, m.original_name AS media_original_name,
-        (SELECT d.id FROM plate_detections d WHERE d.appearance_id=a.id ORDER BY d.selected_order,d.id LIMIT 1) AS primary_detection_id,
-        (SELECT d.bbox FROM plate_detections d WHERE d.appearance_id=a.id ORDER BY d.selected_order,d.id LIMIT 1) AS primary_bbox,
-        (SELECT d.crop_bbox FROM plate_detections d WHERE d.appearance_id=a.id ORDER BY d.selected_order,d.id LIMIT 1) AS primary_crop_bbox
-       FROM plate_appearances a
-       JOIN recognition_jobs j ON j.id=a.job_id
-       JOIN media_assets m ON m.id=j.media_id
+      `SELECT a.*, ${APPEARANCE_MEDIA_FIELDS}
+       FROM plate_appearances a JOIN ${JOB_SOURCES} ON j.id=a.job_id
        WHERE a.job_id=$1 ORDER BY a.first_frame, a.id LIMIT $2 OFFSET $3`,
       [id, limit, offset],
     );

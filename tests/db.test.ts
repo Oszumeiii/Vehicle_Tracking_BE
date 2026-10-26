@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { cp, readFile, writeFile } from 'node:fs/promises';
+import { cp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { after, before, test } from 'node:test';
 import { promisify } from 'node:util';
 import { migrate } from '../src/database/migrate';
+import { Client } from 'pg';
 import { verifyPassword } from '../src/auth/security';
 import { newId, seedUser, startTestDatabase, TestDatabase } from './helpers';
 
@@ -87,6 +88,132 @@ test('PostgreSQL schema preserves UTC instants, source restrictions and derived 
   );
 });
 
+test('live schema keeps jobs on one source, one active session per camera and complete live fields', async () => {
+  const db = fixture.database;
+  const owner = await seedUser(db);
+  const sourceId = newId();
+  const sessionId = newId();
+  await db.query(
+    `INSERT INTO stream_sources (id,owner_id,name,url) VALUES ($1,$2,'cam','https://youtu.be/x')`,
+    [sourceId, owner.id],
+  );
+  const session = (id: string, status = 'queued') =>
+    db.query(
+      `INSERT INTO live_sessions (id,stream_source_id,requested_by,pipeline_snapshot,status)
+      VALUES ($1,$2,$3,'{}',$4)`,
+      [id, sourceId, owner.id, status],
+    );
+  await session(sessionId, 'running');
+  await assert.rejects(session(newId()), { code: '23505' });
+  await session(newId(), 'stopped');
+  await assert.rejects(
+    db.query(
+      `INSERT INTO stream_sources (id,owner_id,name,url,exclude_zones) VALUES ($1,$2,'c','u','{}')`,
+      [newId(), owner.id],
+    ),
+    { code: '23514' },
+  );
+  const live = (id: string, key: string) =>
+    db.query(
+      `INSERT INTO recognition_jobs
+      (id,live_session_id,live_track_key,captured_from,captured_to,confidence_status,status)
+      VALUES ($1,$2,$3,'2026-10-23T10:00:00Z','2026-10-23T10:00:02Z','readable','succeeded')`,
+      [id, sessionId, key],
+    );
+  const first = newId();
+  await live(first, 'e000-t000001');
+  await assert.rejects(live(newId(), 'e000-t000001'), { code: '23505' });
+  await assert.rejects(db.query('INSERT INTO recognition_jobs (id) VALUES ($1)', [newId()]), {
+    code: '23514',
+  });
+  await assert.rejects(
+    db.query('INSERT INTO recognition_jobs (id,live_session_id,live_track_key) VALUES ($1,$2,$3)', [
+      newId(),
+      sessionId,
+      'e000-t000002',
+    ]),
+    { code: '23514' },
+  );
+  const second = newId();
+  await live(second, 'e000-t000002');
+  await db.query('UPDATE recognition_jobs SET duplicate_of_job_id=$1 WHERE id=$2', [first, second]);
+  await db.query('DELETE FROM recognition_jobs WHERE id=$1', [first]);
+  assert.equal(
+    (await db.query('SELECT duplicate_of_job_id FROM recognition_jobs WHERE id=$1', [second]))
+      .rows[0].duplicate_of_job_id,
+    null,
+  );
+  await assert.rejects(db.query('DELETE FROM live_sessions WHERE id=$1', [sessionId]), {
+    code: '23001',
+  });
+  await db.query("INSERT INTO live_session_events (session_id,event_type) VALUES ($1,'status')", [
+    sessionId,
+  ]);
+  await assert.rejects(
+    db.query("INSERT INTO live_session_events (session_id,event_type) VALUES ($1,'bogus')", [
+      sessionId,
+    ]),
+    { code: '23514' },
+  );
+});
+
+test('live events notify listeners only after commit and watchlist plates stay normalized', async () => {
+  const db = fixture.database;
+  const owner = await seedUser(db);
+  const sourceId = newId();
+  const sessionId = newId();
+  await db.query(
+    `INSERT INTO stream_sources (id,owner_id,name,url) VALUES ($1,$2,'cam','https://youtu.be/x')`,
+    [sourceId, owner.id],
+  );
+  await db.query(
+    `INSERT INTO live_sessions (id,stream_source_id,requested_by,pipeline_snapshot) VALUES ($1,$2,$3,'{}')`,
+    [sessionId, sourceId, owner.id],
+  );
+  const listener = new Client({ connectionString: fixture.url });
+  await listener.connect();
+  const notes: { channel: string; payload?: string }[] = [];
+  listener.on('notification', (note) => notes.push(note));
+  await listener.query('LISTEN live_session_events');
+  await listener.query('LISTEN live_sessions');
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 200));
+  try {
+    let eventId = '';
+    await db.transaction(async (c) => {
+      for (const type of ['track', 'alert'])
+        eventId = (
+          await c.query(
+            'INSERT INTO live_session_events (session_id,event_type) VALUES ($1,$2) RETURNING id',
+            [sessionId, type],
+          )
+        ).rows[0].id;
+      await settle();
+      assert.equal(notes.length, 0, 'nothing is announced before commit');
+    });
+    await settle();
+    assert.deepEqual(
+      notes.map((n) => n.channel),
+      ['live_session_events', 'live_session_events'],
+    );
+    assert.equal(notes[1].payload, `${sessionId}:${eventId}`);
+    await db.query('UPDATE live_sessions SET stats=\'{"fps":30}\' WHERE id=$1', [sessionId]);
+    await settle();
+    assert.deepEqual([notes[2].channel, notes[2].payload], ['live_sessions', sessionId]);
+  } finally {
+    await listener.end();
+  }
+  const watch = (plate: string) =>
+    db.query('INSERT INTO plate_watchlist (id,owner_id,plate) VALUES ($1,$2,$3)', [
+      newId(),
+      owner.id,
+      plate,
+    ]);
+  await watch('ABC1D23');
+  await assert.rejects(watch('ABC1D23'), { code: '23505' });
+  for (const plate of ['abc1234', 'ABC-1234', 'ABC 1234', ''])
+    await assert.rejects(watch(plate), { code: '23514' });
+});
+
 test('Database transaction rolls back all changes and returns the connection to its pool', async () => {
   const userId = newId();
   await assert.rejects(
@@ -148,6 +275,6 @@ test('SQL migration is idempotent and rejects changes to an applied migration', 
   await assert.rejects(migrate(fixture.database, destination), /has changed/);
   assert.equal(
     (await fixture.database.query('SELECT version FROM schema_migrations')).rows.length,
-    3,
+    (await readdir(resolve('src/database/migrations'))).filter((f) => f.endsWith('.sql')).length,
   );
 });
