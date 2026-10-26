@@ -2,8 +2,8 @@
 
 Runs several live sessions in one process so they share a single copy of the
 detector and OCR model (two processes each loading them overcommit an 8 GB GPU).
-Each session is a LiveRunner on its own thread; model calls take turns behind one
-lock, while decoding, tracking and evidence writing overlap.
+Each session is a LiveRunner on its own thread; model calls take turns on one GPU
+thread, while decoding, tracking and evidence writing overlap.
 
 Commands are JSON lines on stdin:
   {"cmd": "start", "session": ID, "payload": PATH, "out": DIR,
@@ -14,6 +14,7 @@ Events are the single-session JSON lines plus "session": ID, and a final
 {"type": "exit", "session": ID, "code": 0|1} once a session's thread is done.
 Host-level events have no session: {"type": "host", "status": "ready"|"stopped"}.
 """
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import json
 import os
@@ -50,15 +51,17 @@ class HostEmitter:
 
 
 class SharedModels:
-    """One detector and recognizer for every session; model calls are serialized.
+    """One detector and recognizer for every session; model calls run on one thread.
 
     Ultralytics predictors keep per-call state, so two threads must not predict on
-    the same model at once. Sessions must use the pipeline that was loaded first.
+    the same model at once. CUDA also prepares fp16 kernels per batch size and per
+    calling thread (about 1.8 s each), so a single GPU thread lets every session
+    reuse one warm-up. Sessions must use the pipeline that was loaded first.
     """
 
     def __init__(self, load):
         self.load, self.lock, self.loaded = load, threading.Lock(), None
-        self.gpu = threading.Lock()
+        self.gpu = ThreadPoolExecutor(max_workers=1, thread_name_prefix="live-gpu")
 
     @staticmethod
     def key(snapshot):
@@ -69,27 +72,30 @@ class SharedModels:
         with self.lock:
             if self.loaded is None:
                 model, recognizer = self.load(snapshot)
-                self.loaded = (self.key(snapshot), LockedModel(model, self.gpu), self._locked(recognizer))
+                self.loaded = (self.key(snapshot), GpuModel(model, self.gpu), self._on_gpu(recognizer))
             elif self.loaded[0] != self.key(snapshot):
                 raise ValueError("The shared live process already runs another pipeline; "
                                  "all concurrent live sessions must use the same pipeline")
             return self.loaded[1], self.loaded[2]
 
-    def _locked(self, recognizer):
+    def _on_gpu(self, recognizer):
         def recognize(images):
-            with self.gpu:
-                return recognizer(images)
+            return self.gpu.submit(recognizer, images).result()
         return recognize
 
 
-class LockedModel:
-    def __init__(self, inner, lock):
-        self.inner, self.lock = inner, lock
+class GpuModel:
+    """Detector proxy whose predict runs on the shared GPU thread.
+
+    warmed holds the frame shapes any session already warmed up (LiveRunner._warm_up).
+    """
+
+    def __init__(self, inner, gpu):
+        self.inner, self.gpu, self.warmed = inner, gpu, set()
         self.names = getattr(inner, "names", None)
 
     def predict(self, *args, **kwargs):
-        with self.lock:
-            return self.inner.predict(*args, **kwargs)
+        return self.gpu.submit(self.inner.predict, *args, **kwargs).result()
 
 
 class Host:

@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from app.live.host import Host, LockedModel, SharedModels
+from app.live.host import GpuModel, Host, SharedModels
 
 SNAPSHOT = {"id": "joint", "version": "1", "device": "cuda", "detector": {"sha256": "a"},
             "recognizer": {"input_mode": "five_frame_joint"}}
@@ -45,9 +45,10 @@ class FakeModel:
     names = {0: "plate"}
 
     def __init__(self):
-        self.active, self.overlap = 0, False
+        self.active, self.overlap, self.threads = 0, False, set()
 
     def predict(self, *_):
+        self.threads.add(threading.current_thread().name)
         self.active += 1
         self.overlap |= self.active > 1
         time.sleep(.005)
@@ -100,6 +101,7 @@ def test_sessions_share_one_model_load_and_stop_independently(tmp_path):
     wait(lambda: len(events.of("b", "stats")) > count + 3)
     assert not events.of("b", "exit"), "the other session keeps running"
     assert not model.overlap, "model calls never overlap"
+    assert len(model.threads) == 1 and model.threads.pop().startswith("live-gpu"),         "every session's model calls run on the one GPU thread, so CUDA warm-up is shared"
     host.serve(iter([]))  # EOF: stop the rest and wait
     assert events.of("b", "exit")[0]["code"] == 0
     assert events.events[-1] == {"type": "host", "status": "stopped"}
@@ -148,8 +150,10 @@ def test_startup_errors_and_another_pipeline_are_reported_per_session(tmp_path):
     assert [e["status"] for e in events.events if e["type"] == "host"] == ["ready", "error", "error", "stopped"]
 
 
-def test_sampling_scale_is_validated_and_locked_model_keeps_names():
-    lock = threading.Lock()
-    assert LockedModel(FakeModel(), lock).names == {0: "plate"}
+def test_sampling_scale_is_validated_and_gpu_model_keeps_names():
+    models = SharedModels(lambda s: (FakeModel(), lambda images: images))
+    model, recognize = models.get(SNAPSHOT)
+    assert isinstance(model, GpuModel) and model.names == {0: "plate"} and model.warmed == set()
+    assert recognize(["crop"]) == ["crop"]
     with pytest.raises(ValueError):
         Host(".", SharedModels(lambda s: None), Collect, sampling_scale=0, source_factory=str, runner_factory=FakeRunner)

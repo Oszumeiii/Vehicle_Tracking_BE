@@ -227,4 +227,27 @@ RTX 4060 Laptop 8 GB, Ryzen 7 7735HS. Ứng dụng khác đã chiếm khoảng 1
   - VRAM tối đa 6,9 GB, GPU trung bình 31%.
 - **Kill worker đột ngột:** không còn tiến trình `python`/`ffmpeg` sót. Khởi động lại thì hai phiên cũ chuyển `interrupted` (giữ nguyên 366 và 20 track), và hai phiên mới tự bật lại sau khoảng 1 phút, chung một host.
 - **Dừng cả hai:** host tự thoát (0 tiến trình `python`, VRAM về 1,3 GB), GPU được nhả cho job upload.
-- **Lưu ý:** khi hai phiên khởi động cùng lúc, phiên thứ hai có thể bỏ frame trong khoảng 20 s đầu (lần đo: 77/610) do chờ warm-up model của phiên kia.
+- **Lưu ý:** khi hai phiên khởi động cùng lúc, phiên thứ hai có thể bỏ frame trong khoảng 20 s đầu (lần đo: 77/610) do chờ warm-up model của phiên kia. Đã sửa ở mục dưới.
+
+## Nghiệm thu bỏ frame lúc khởi động (2026-10-26)
+
+**Nguyên nhân** (đo trên RTX 4060 Laptop):
+- Detector chạy fp16. Mỗi **kích thước batch mới** mất khoảng **1,8 s** ở lần gọi đầu, và chi phí này tính **riêng cho từng luồng**. Lần đo: batch 16 vừa warm-up, sau đó batch 1, 2, 3, 5, 8, 15 mỗi cái đều mất 1,8 s; ở fp32 thì chỉ 0,08 s.
+- Bộ lọc cảnh trống gửi batch lẻ (1–15 frame) khi cảnh vắng. Warm-up cũ chỉ chạy batch 16.
+- Trong host dùng chung, mỗi phiên gọi model từ luồng riêng và giữ khóa GPU suốt 1,8 s đó, nên **mọi phiên** cùng đứng hình quá bộ đệm 1,5 s và bỏ frame.
+
+**Cách sửa:**
+- Batch trên CUDA được đệm lên 1, 4 hoặc 16 frame (`detector_batch_sizes`), và warm-up chạy cả ba cỡ.
+- Trong host, mọi lần gọi detector/OCR chạy trên **một luồng GPU** (`live-gpu`). Nhờ vậy warm-up dùng chung, và phiên sau bỏ qua warm-up nếu đã có phiên warm-up cùng kích thước frame.
+
+**Kết quả**, hai camera file 1080p30 phát theo nhịp thật (`camboriu-day.mp4` và `camboriu.mp4`) trong một host, đo 60 s sau khi `running`:
+
+| Kịch bản | Trước: frame bỏ (phiên 1 / phiên 2) | Sau | Thời gian đến `running` của phiên 2, trước → sau |
+|---|---|---|---|
+| Bật hai phiên cùng lúc | 17/1797 và 73/1772 | 0 và 0 | 27,6 s → 17,5 s |
+| Phiên 2 bật sau 30 s | 34/1799 và 71/1795 | 0 và 0 | 2,8 s → 0,3 s |
+| Một phiên | 0/913 | 0/1773 | 18,5 s → 14,5 s; lag p95 0,68 → 0,57 s |
+
+**Ảnh hưởng tới job upload:** thời gian gần như không đổi (60 s clip ban ngày: 28,3 → 28,1 s; clip đêm: 30,3 → 28,3 s). Số track giữ nguyên.
+
+**Đánh đổi:** frame đệm chỉ được tính rồi bỏ kết quả. Đổi cỡ batch làm kết quả fp16 sai khác rất nhỏ (48 frame thử: box lệch tối đa 0,75 px, 1 frame có thêm một box sát ngưỡng conf 0,10). Mức dao động này vốn đã có khi bộ lọc cảnh trống đổi cỡ batch. Live và upload vẫn dùng chung một đường code.
