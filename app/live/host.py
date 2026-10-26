@@ -29,6 +29,15 @@ from app.live import DEFAULT_MIN_CONFIDENCE
 STARTUP_CODES = {"ENVIRONMENT_ERROR", "CUDA_UNAVAILABLE", "CUDA_ERROR", "CHECKPOINT_MISSING", "PIPELINE_FAILED"}
 
 
+def absolute(path):
+    r"""Normalized absolute path, without touching the filesystem.
+
+    On Windows, Path.resolve() of a missing directory can return a \\?\ path while
+    another session is creating its parent, which wrongly failed the inside-data check.
+    """
+    return Path(os.path.abspath(path))
+
+
 class HostEmitter:
     """Thread-safe JSON lines; a closed pipe (parent died) stops every session."""
 
@@ -103,7 +112,7 @@ class Host:
                  source_factory=None, runner_factory=None):
         if not 0 < sampling_scale <= 1:
             raise ValueError("sampling_scale must be in (0, 1]")
-        self.data_dir, self.models, self.sampling_scale = Path(data_dir).resolve(), models, sampling_scale
+        self.data_dir, self.models, self.sampling_scale = absolute(data_dir), models, sampling_scale
         self.buffer_seconds = buffer_seconds
         self.sessions, self.lock = {}, threading.Lock()
         self.emit = emit_factory(self.stop_all)
@@ -152,7 +161,7 @@ class Host:
         try:
             try:
                 payload = json.loads(Path(message["payload"]).read_text(encoding="utf-8-sig"))
-                out = Path(message["out"]).resolve()
+                out = absolute(message["out"])
                 if out != self.data_dir and self.data_dir not in out.parents:
                     raise ValueError("out must be inside the host data directory")
                 if (out / "tracks").exists() and any((out / "tracks").iterdir()):

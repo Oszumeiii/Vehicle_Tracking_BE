@@ -146,6 +146,11 @@ def test_startup_errors_and_another_pipeline_are_reported_per_session(tmp_path):
     host.command(dict(cmd="start", session="c", payload=payload(tmp_path, "x"), out=str(tmp_path.parent / "elsewhere")))
     wait(lambda: events.of("c", "exit"))
     assert "inside the host data directory" in events.of("c", "error")[0]["message"]
+    # ".." is normalized before the check, so it cannot climb out of the data directory.
+    host.command(dict(cmd="start", session="d", payload=payload(tmp_path, "x"),
+                      out=str(tmp_path / "live" / ".." / ".." / "elsewhere")))
+    wait(lambda: events.of("d", "exit"))
+    assert "inside the host data directory" in events.of("d", "error")[0]["message"]
     host.serve(iter(["not json", '{"cmd": "stop"}']))
     assert [e["status"] for e in events.events if e["type"] == "host"] == ["ready", "error", "error", "stopped"]
 
