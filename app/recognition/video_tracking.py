@@ -273,6 +273,18 @@ def select_five(rows, cfg):
     return chosen, None
 
 
+def detector_batch_sizes(batch):
+    """Batch sizes the detector runs at on CUDA (smaller batches are padded up to one of them)."""
+    return sorted({size for size in (1, 4) if size < batch} | {batch})
+
+
+def warm_up_detector(model, cfg):
+    """Run every detector batch size once on blank frames, before real frames arrive."""
+    frame = np.zeros((cfg["height"], cfg["width"], 3), np.uint8)
+    for size in detector_batch_sizes(cfg["batch"]) if cfg["device"] != "cpu" else [cfg["batch"]]:
+        detect_plates(model, [frame] * size, cfg)
+
+
 def detect_plates(model, images, cfg):
     """Full-frame YOLO at conf .10 plus the notebook's geometric box filter.
 
@@ -281,8 +293,15 @@ def detect_plates(model, images, cfg):
     """
     cuda = cfg["device"] != "cpu"
     zones = cfg.get("exclude_zones") or ()
-    results = model.predict(images, imgsz=cfg["imgsz"], conf=.10, iou=.7, device=cfg["device"],
-                            quantize="fp16" if cuda else None, verbose=False, max_det=100, rect=True)
+    batch = images
+    if cuda and images:
+        # fp16 CUDA kernels are prepared per batch size and per thread, about 1.8 s
+        # each on an RTX 4060. Padding to a few sizes keeps that cost in warm-up
+        # instead of stalling a stream whenever the empty-scene gate flushes early.
+        size = next((s for s in detector_batch_sizes(cfg.get("batch", 1)) if s >= len(images)), len(images))
+        batch = images + images[-1:] * (size - len(images))
+    results = model.predict(batch, imgsz=cfg["imgsz"], conf=.10, iou=.7, device=cfg["device"],
+                            quantize="fp16" if cuda else None, verbose=False, max_det=100, rect=True)[:len(images)]
     boxes = []
     for result, image in zip(results, images):
         b = result.boxes.cpu().numpy()

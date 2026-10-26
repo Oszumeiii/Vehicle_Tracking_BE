@@ -9,14 +9,13 @@ from datetime import datetime, timedelta, timezone
 import math
 import time
 
-import numpy as np
 from PIL import Image
 
 from app.live import DEFAULT_MIN_CONFIDENCE
 from app.live.source import TIMEOUT, LiveReader, SourceError, StreamEnded
 from app.recognition.fusion import levenshtein
 from app.recognition.runner import _predict_joint, build_appearance, write_json
-from app.recognition.video_tracking import TrackSession, detect_plates, export_retained, tracking_config
+from app.recognition.video_tracking import TrackSession, export_retained, tracking_config, warm_up_detector
 
 
 def utc(value):
@@ -119,14 +118,20 @@ class LiveRunner:
         self.buffer_seconds, self.reader_capacity = buffer_seconds, reader_capacity
         self.stats_interval, self.backoff_max = stats_interval, backoff_max
         self.linker = DuplicateLinker()
-        self.tracks, self.warmed_up = 0, False
+        self.tracks, self.warmed = 0, set()
 
     def _warm_up(self, cfg):
-        """First CUDA calls take seconds; make them before frames start to arrive."""
-        frame = np.zeros((cfg["height"], cfg["width"], 3), np.uint8)
-        detect_plates(self.model, [frame] * cfg["batch"], cfg)
+        """First CUDA calls take seconds; make them before frames start to arrive.
+
+        A shared model (app/live/host.py) remembers what any session already warmed up.
+        """
+        key = (cfg["width"], cfg["height"], cfg["batch"], cfg["imgsz"])
+        warmed = getattr(self.model, "warmed", self.warmed)
+        if key in warmed:
+            return
+        warm_up_detector(self.model, cfg)
         self.recognizer([Image.new("RGB", (192, 48), (shade, shade, shade)) for shade in range(0, 250, 50)])
-        self.warmed_up = True
+        warmed.add(key)
 
     def run(self, stop):
         """Run until the source ends, stop is set, or reconnecting keeps failing. Returns the final status."""
@@ -163,8 +168,7 @@ class LiveRunner:
         cfg = {**tracking_config(info["width"], info["height"], info["fps"], 0, self.tracking_snapshot,
                                  info.get("video_id", "live")), "max_track_seconds": self.max_track_seconds,
                "exclude_zones": self.exclude_zones}
-        if not self.warmed_up:
-            self._warm_up(cfg)
+        self._warm_up(cfg)
         capacity = self.reader_capacity or max(8, math.ceil(self.buffer_seconds * info["fps"]))
         reader = LiveReader(connection, capacity).start()
         self.linker.reset()

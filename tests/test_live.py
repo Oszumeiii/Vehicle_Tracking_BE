@@ -179,6 +179,47 @@ def test_exclude_zones_drop_detections_centred_inside_only():
     assert len(detect_plates(BoxFixture(), images, {**cfg, "exclude_zones": [[.5, .5, 1, 1], [.2, .2, .4, .4]]})[0]) == 0
 
 
+class SizeRecorder(BoxFixture):
+    def __init__(self):
+        self.sizes = []
+
+    def predict(self, images, **kwargs):
+        self.sizes.append(len(images))
+        return super().predict(images, **kwargs)
+
+
+def test_cuda_batches_are_padded_to_a_few_sizes_and_trimmed_back():
+    from app.recognition.video_tracking import detect_plates, detector_batch_sizes
+    assert detector_batch_sizes(16) == [1, 4, 16] and detector_batch_sizes(4) == [1, 4]
+    assert detector_batch_sizes(1) == [1]
+    model, image = SizeRecorder(), np.zeros((180, 320, 3), np.uint8)
+    cfg = {"device": "cuda", "imgsz": 320, "batch": 16}
+    for count in (1, 2, 4, 5, 16):
+        assert len(detect_plates(model, [image] * count, cfg)) == count
+    assert model.sizes == [1, 4, 4, 16, 16]
+    detect_plates(model, [image] * 3, {**cfg, "device": "cpu"})
+    assert model.sizes[-1] == 3, "CPU batches are never padded"
+
+
+def test_warm_up_runs_each_batch_size_once_per_frame_shape(tmp_path):
+    model, ocr_calls = SizeRecorder(), []
+    model.warmed = set()  # a shared model (app/live/host.GpuModel) carries this set
+
+    def ocr(images):
+        ocr_calls.append(len(images))
+        return recognizer(images)
+
+    cfg = {"width": 320, "height": 180, "batch": 16, "imgsz": 320, "device": "cuda"}
+    first = LiveRunner(SNAPSHOT, tmp_path / "a", None, print, model, ocr)
+    first._warm_up(cfg)
+    assert model.sizes == [1, 4, 16] and ocr_calls == [5]
+    first._warm_up(cfg)
+    LiveRunner(SNAPSHOT, tmp_path / "b", None, print, model, ocr)._warm_up(cfg)
+    assert model.sizes == [1, 4, 16], "another session on the shared model skips warm-up"
+    LiveRunner(SNAPSHOT, tmp_path / "c", None, print, model, ocr)._warm_up({**cfg, "width": 640, "height": 360})
+    assert model.sizes[3:] == [1, 4, 16], "a new frame shape is warmed up again"
+
+
 def test_runner_applies_exclude_zones_and_rejects_invalid_ones(tmp_path):
     video = tmp_path / "input.avi"
     _plate_video(video, 30)
