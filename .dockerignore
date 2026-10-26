@@ -1,0 +1,13 @@
+# Data, models and secrets are mounted or passed at run time, never baked in.
+.env
+.env.*
+data
+models
+node_modules
+dist
+.venv
+**/__pycache__
+.pytest_cache
+.git
+Claude outputs
+docs
