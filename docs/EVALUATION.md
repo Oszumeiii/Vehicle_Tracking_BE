@@ -205,3 +205,32 @@ Kiểm thử riêng bộ chấm:
    Với mỗi ngưỡng từ 0.50 đến 0.99, báo cáo có số track `readable`, số đúng (khớp chính xác sau chuẩn hóa), precision và coverage (tỉ lệ mẫu được đánh dấu `readable`). `recommended_threshold` là ngưỡng nhỏ nhất đạt precision mục tiêu. Mẫu người gán nhãn ghi `null` mà máy vẫn đọc ra chữ được tính là sai.
 
 Báo cáo chỉ có ý nghĩa với tập nhãn đủ lớn và đại diện cho camera đang dùng. Ngưỡng mới áp dụng qua `min_confidence` khi bật phiên hoặc trong `auto_settings` của camera.
+
+### Ghi nhận: thử gán nhãn bằng AI trên camera Camboriú (25/10/2026)
+
+**Bộ mẫu:** 210 track (30 mẫu × 7 khoảng confidence), lấy từ camera YouTube Camboriú vào ban ngày ở Brazil (486 track trong 45 phút, 1080p).
+
+**Cách làm:** Claude gán nhãn qua đúng API gán mù, bằng một tài khoản `user` riêng tên "Claude (AI labeller)". Quy tắc: chỉ ghi biển khi đọc chắc chắn (có đối chiếu định dạng LLLNLNN/LLLNNNN), ghi `null` khi không thấy ký tự nào, còn lại bỏ qua.
+
+**Kích thước crop** (crop thứ 3 của mỗi track, đã gồm 15% phần đệm):
+
+| Rộng | Số mẫu |
+|---|---|
+| tối thiểu / trung vị / tối đa | 19 / 42,5 / 71 px |
+| từ 60 px | 21 |
+| từ 50 px | 69 |
+| từ 40 px | 137 |
+| từ 30 px | 190 |
+
+**Kết quả:**
+- Sau 34 mẫu (ưu tiên các mẫu crop từ 48 px trở lên), chỉ 4 mẫu đọc được chắc chắn, đều có crop rộng 56–71 px.
+- 2 mẫu hoàn toàn không đọc được; 28 mẫu chỉ thấy một phần.
+- Với tỷ lệ này, cả bộ chỉ được khoảng 10–15 nhãn, không đủ để ước lượng precision theo ngưỡng. Đoán các mẫu mờ thì sẽ tạo ra ground truth giả. Vì vậy **không gửi nhãn nào lên hệ thống** và chưa đổi ngưỡng.
+
+**Kết luận cho đánh giá:**
+- Ở khoảng cách của camera này, phần lớn biển chỉ rộng 30–50 px trong khung 1080p. Mỗi ký tự chỉ vài pixel: người gán nhãn cũng sẽ gặp đúng giới hạn đó, và đây chính là bài toán biển số độ phân giải thấp của đề tài.
+- **Hiệu chỉnh ngưỡng có ý nghĩa cần một trong hai:**
+  1. nhiều người gán nhãn độc lập, chấp nhận nhiều mẫu `null`, và yêu cầu `min_labels ≥ 2`;
+  2. camera có biển lớn hơn (gần hơn hoặc zoom).
+- Hoặc hiệu chỉnh offline trên bộ dữ liệu có nhãn sẵn (ví dụ dữ liệu ICPR dùng để huấn luyện model) bằng `scripts.calibrate_threshold`.
+- Nếu một lúc nào đó dùng nhãn AI, phải ghi rõ nguồn nhãn khi công bố kết quả (BR30), và không trình bày như nhãn của người.
