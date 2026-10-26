@@ -158,7 +158,7 @@ test('cameras and sessions are owner scoped, validated and limited to one active
   assert.equal(queued.pipeline_id, 'joint');
   assert.equal(queued.pipeline_snapshot, undefined);
   assert.deepEqual(queued.settings, {
-    min_confidence: 0.85,
+    min_confidence: 0.96,
     max_track_seconds: 30,
     max_height: 1080,
     exclude_zones: [[0.6, 0.1, 0.9, 0.2]],

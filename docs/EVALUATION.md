@@ -164,7 +164,75 @@ Kiểm thử riêng bộ chấm:
 
 ## Hiệu chỉnh ngưỡng tin cậy live
 
-`min_confidence` (mặc định 0.85) quyết định track live nào được đánh dấu `readable`. Ngưỡng chỉ được hiệu chỉnh bằng **nhãn độc lập**; review trong ứng dụng không phải nhãn và không được dùng làm ground truth.
+`min_confidence` (mặc định **0.96**) quyết định track live nào được đánh dấu `readable`. Ngưỡng chỉ được hiệu chỉnh bằng **nhãn độc lập**; review trong ứng dụng không phải nhãn và không được dùng làm ground truth.
+
+`readable` là nhãn tham khảo: nó chỉ đổi trạng thái hiển thị và bộ lọc `confidence_status`. Cảnh báo watchlist và việc gom lượt xuất hiện vẫn chạy với mọi track đọc ra chữ; mỗi cảnh báo kèm `confidence_status` để người xem biết mức tin cậy.
+
+### Kết quả hiệu chỉnh offline trên ICPR (26/10/2026)
+
+**Dữ liệu:** bộ ICPR 2026 LRLPR mà nhóm dùng để train model (Kaggle `trnvnhun/icpr-2026-low-resolution-plate-dataset`). Mỗi track có 5 ảnh độ phân giải thấp và biển số do người gán.
+- **Tập test**, 3000 track: chỉ dùng để chấm, không dùng để train hay chọn checkpoint.
+- **Tập validation**, 1000 track: danh sách `trnvnhun/split-data/val_tracks.txt`, tách khỏi train nhưng được dùng để chọn checkpoint.
+- Crop ICPR rộng 39–56 px, **cùng cỡ với crop live** (Camboriú: trung vị 42,5 px).
+
+**Cách chạy:** `scripts/calibrate_icpr.py` dùng đúng recognizer của pipeline live (`pbl6-resnet34c-joint5-v1`: checkpoint `single_model_best.pt` sha256 `e934a864…`, `beam_filter`, beam 8, không TTA) và đúng confidence của live (`beam_confidence_proxy`).
+- **Kiểm tra tái lập:** đọc đúng toàn biển 77,1% trên test, khớp với 77,3% trong notebook của nhóm (`docs/OCR_KAGGLE.md`).
+- Validation đạt 78,0%. Hai tập gần nhau, nên không thấy dấu hiệu rò rỉ.
+
+**Precision của nhãn `readable` theo ngưỡng** (precision = tỷ lệ track `readable` đọc đúng toàn biển; khoảng tin cậy Wilson 95%; coverage = tỷ lệ track được gắn `readable`):
+
+| Ngưỡng | Test: precision | Test: coverage | Validation: precision | Validation: coverage |
+|---|---|---|---|---|
+| 0.70 | 81,2% (79,7–82,6) | 94,8% | 82,0% (79,4–84,3) | 94,9% |
+| 0.80 | 84,3% (82,9–85,6) | 90,7% | 84,7% (82,2–86,9) | 90,9% |
+| **0.85** (cũ) | 87,0% (85,6–88,2) | 87,0% | 86,2% (83,7–88,3) | 88,1% |
+| 0.90 | 90,2% (89,0–91,3) | 81,9% | 89,1% (86,8–91,0) | 83,2% |
+| 0.95 | 95,6% (94,6–96,4) | 71,5% | 94,9% (93,1–96,3) | 72,6% |
+| **0.96** (mới) | 96,9% (96,1–97,6) | 68,5% | 95,7% (94,0–97,0) | 70,1% |
+| 0.97 | 97,8% (97,1–98,4) | 64,9% | 97,1% (95,6–98,2) | 66,4% |
+| 0.98 | 98,4% (97,7–98,9) | 59,1% | 98,4% (97,0–99,1) | 60,9% |
+
+**Kết luận:**
+- Ở ngưỡng cũ 0.85, cứ khoảng **8 track `readable` thì có 1 track đọc sai**. Mục tiêu của dự án là 95%: trong các track gắn `readable`, ít nhất 95% phải đọc đúng.
+- Ngưỡng nhỏ nhất đạt mục tiêu là 0.95 (test) hoặc 0.96 (validation).
+- Khi gộp hai tập (4000 track), ngưỡng nhỏ nhất mà **cận dưới** khoảng tin cậy vẫn ≥ 95% là **0.96**, và đó là mặc định mới.
+- `scripts.calibrate_threshold` chạy trên cùng file cũng cho 0.95/0.96, khớp với kết quả trên.
+
+**Ảnh hưởng trên live:** cùng các track live đã có trong DB, đổi ngưỡng từ 0.85 sang 0.96:
+
+| Phiên | Track có chữ | `readable` ở 0.85 | `readable` ở 0.96 |
+|---|---|---|---|
+| Camboriú YouTube 1080p, 45 phút | 486 | 158 | 51 |
+| Camera demo `camboriu-day.mp4`, 3 phút | 38 | 10 | 3 |
+
+Track live mất nhãn `readable` nhiều hơn trên ICPR. Lý do: confidence trên live thấp hơn (nén YouTube, crop YOLO có đệm, xe chạy). Có thể precision trên live ở cùng ngưỡng cũng thấp hơn ICPR, nên **không nên hạ ngưỡng chỉ để có nhiều `readable` hơn**.
+
+**Giới hạn:**
+1. ICPR là dữ liệu cắt sẵn từ camera giao thông Brazil, chưa phải luồng YouTube của ứng dụng. Kết quả nên xem là **cận trên** của precision trên live.
+2. Checkpoint được chọn theo điểm trên validation, nên số đo của tập validation hơi lạc quan; tập test thì không bị ảnh hưởng.
+3. Chưa xác nhận trên live bằng nhãn người. Cách xác nhận: tạo bộ mẫu trong tab **Gán nhãn** từ camera có biển lớn (crop từ 50 px trở lên), mỗi mẫu cần ít nhất 2 người gán, rồi xem precision ở ngưỡng 0.96 trong **Báo cáo ngưỡng**.
+
+**Camera đã tạo trước thay đổi** vẫn giữ `min_confidence` đã lưu trong `auto_settings` (thường là 0.85). Muốn dùng ngưỡng mới cho camera đó thì sửa bằng `PATCH /api/v2/stream-sources/{id}`. Phiên bật tay không truyền `min_confidence` sẽ dùng 0.96.
+
+**Chạy lại** (cần `kaggle` CLI đã đăng nhập; dữ liệu khoảng 690 MB, nằm trong `data/`, không commit):
+
+```powershell
+kaggle datasets download trnvnhun/icpr-2026-low-resolution-plate-dataset -p data/evaluation/icpr
+kaggle datasets download trnvnhun/split-data -p data/evaluation/icpr --unzip
+Expand-Archive data/evaluation/icpr/icpr-2026-low-resolution-plate-dataset.zip data/evaluation/icpr/dataset
+.\.venv\Scripts\python.exe -m scripts.calibrate_icpr --dataset data/evaluation/icpr/dataset `
+  --split test --payload data/live/SESSION_ID/payload.json --out data/evaluation/icpr/test
+.\.venv\Scripts\python.exe -m scripts.calibrate_icpr --dataset data/evaluation/icpr/dataset `
+  --split validation --val-list data/evaluation/icpr/val_tracks.txt `
+  --payload data/live/SESSION_ID/payload.json --out data/evaluation/icpr/validation
+```
+
+- `--payload` là `payload.json` của một phiên live bất kỳ (trong `data/live/`), nên script chạy đúng pipeline đang dùng.
+- Trên RTX 4060 Laptop, cả hai tập mất khoảng 10 phút, phần lớn là thời gian duyệt thư mục.
+- Thư mục `--out` chứa:
+  - `readings.json`: kết quả đọc của máy cho từng track. Có thể chấm lại bằng `--readings` mà không cần chạy model.
+  - `ground_truth.json` và `predictions.json`, đúng định dạng của `scripts.calibrate_threshold`.
+  - `report.json`: bảng đầy đủ các ngưỡng 0.50–0.99 và độ chính xác theo cỡ crop.
 
 ### Cách 1: trang gán nhãn trong ứng dụng (khuyên dùng)
 

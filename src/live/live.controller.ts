@@ -50,6 +50,7 @@ import { Storage } from '../media/storage';
 import { LiveEventsHub } from './events.hub';
 import { removeFolder } from './files';
 import {
+  DEFAULT_MIN_CONFIDENCE,
   DEMO_VIDEO_DIR,
   DEMO_VIDEO_EXTENSIONS,
   demoVideoFile,
@@ -107,7 +108,7 @@ const createSource = z.union([
     .strict(),
 ]);
 const runSettings = {
-  min_confidence: z.number().min(0).max(1).default(0.85),
+  min_confidence: z.number().min(0).max(1).default(DEFAULT_MIN_CONFIDENCE),
   max_track_seconds: z.number().min(5).max(300).default(30),
   max_height: z
     .number()
@@ -133,7 +134,7 @@ const updateSource = z
   .refine((value) => Object.keys(value).length > 0, { message: 'Nothing to update.' });
 const startSession = z.object({ pipeline_id: z.string().min(1).max(100), ...runSettings }).strict();
 const runSettingsSchema = {
-  min_confidence: { type: 'number', minimum: 0, maximum: 1, default: 0.85 },
+  min_confidence: { type: 'number', minimum: 0, maximum: 1, default: DEFAULT_MIN_CONFIDENCE },
   max_track_seconds: { type: 'number', minimum: 5, maximum: 300, default: 30 },
   max_height: {
     type: 'integer',
@@ -483,7 +484,7 @@ export class LiveController {
           type: 'number',
           minimum: 0,
           maximum: 1,
-          default: 0.85,
+          default: DEFAULT_MIN_CONFIDENCE,
           description: 'OCR confidence from which a track is marked readable (advisory).',
         },
         max_track_seconds: {

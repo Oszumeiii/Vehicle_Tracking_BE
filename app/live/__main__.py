@@ -19,6 +19,8 @@ import sys
 import threading
 import traceback
 
+from app.live import DEFAULT_MIN_CONFIDENCE
+
 STARTUP_CODES = {"ENVIRONMENT_ERROR", "CUDA_UNAVAILABLE", "CUDA_ERROR", "CHECKPOINT_MISSING", "PIPELINE_FAILED"}
 
 
@@ -87,11 +89,9 @@ def source_factory(source):
     raise ValueError("Source type must be youtube or file")
 
 
-def load_models(snapshot):
-    """Detector and joint OCR model, validated exactly like the upload pipeline (runner.execute)."""
+def load_recognizer(snapshot):
+    """Joint OCR model of a pipeline snapshot, validated exactly like the upload pipeline (runner.execute)."""
     from app.recognition.registry import validate_snapshot
-    from app.recognition.video_tracking import DETECTOR_CLASSES
-    import ultralytics
 
     validate_snapshot(snapshot)
     sys.path.insert(0, snapshot["recognizer"]["module_root"])
@@ -99,6 +99,15 @@ def load_models(snapshot):
     recognizer = getattr(importlib.import_module(module), factory)({**snapshot["recognizer"], "device": snapshot["device"]})
     if not callable(recognizer):
         raise ValueError("Recognizer factory must return a callable")
+    return recognizer
+
+
+def load_models(snapshot):
+    """Detector and joint OCR model, validated exactly like the upload pipeline (runner.execute)."""
+    from app.recognition.video_tracking import DETECTOR_CLASSES
+    import ultralytics
+
+    recognizer = load_recognizer(snapshot)
     model = ultralytics.YOLO(snapshot["detector"]["checkpoint"])
     if getattr(model, "names", DETECTOR_CLASSES) != DETECTOR_CLASSES:
         raise ValueError("Detector checkpoint is not a license-plate model")
@@ -114,7 +123,7 @@ def main(argv=None):
     parser.add_argument("--sampling-scale", type=float, default=1.,
                         help="Host only: scale the detector sampling rates so several streams fit one GPU")
     parser.add_argument("--data-dir", type=Path, help="Root that evidence storage keys are relative to (default: --out)")
-    parser.add_argument("--min-confidence", type=float, default=.85)
+    parser.add_argument("--min-confidence", type=float, default=DEFAULT_MIN_CONFIDENCE)
     parser.add_argument("--max-track-seconds", type=float, default=30.)
     parser.add_argument("--max-reconnects", type=int, default=10)
     parser.add_argument("--buffer-seconds", type=float, default=1.5,

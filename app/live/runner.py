@@ -12,6 +12,7 @@ import time
 import numpy as np
 from PIL import Image
 
+from app.live import DEFAULT_MIN_CONFIDENCE
 from app.live.source import TIMEOUT, LiveReader, SourceError, StreamEnded
 from app.recognition.fusion import levenshtein
 from app.recognition.runner import _predict_joint, build_appearance, write_json
@@ -93,7 +94,7 @@ class DuplicateLinker:
 
 class LiveRunner:
     def __init__(self, snapshot, out, open_source, emit, model, recognizer, *, data_dir=None,
-                 min_confidence=.85, max_track_seconds=30., max_reconnects=10, read_timeout=15.,
+                 min_confidence=DEFAULT_MIN_CONFIDENCE, max_track_seconds=30., max_reconnects=10, read_timeout=15.,
                  stats_interval=1., buffer_seconds=1.5, reader_capacity=None, backoff_max=30., exclude_zones=(),
                  sampling_scale=1.):
         if snapshot.get("recognizer", {}).get("input_mode") != "five_frame_joint":

@@ -66,7 +66,7 @@ Action `confirm` chấp nhận text máy; `correct` bắt buộc text mới; `un
 - `GET /api/v2/stream-sources`, `GET /api/v2/stream-sources/{id}`: camera của mình (admin thấy tất cả), kèm `active_session`.
 - `PATCH /api/v2/stream-sources/{id}`: `name`, `exclude_zones`, `always_on`, `auto_settings` (`{pipeline_id, min_confidence?, max_track_seconds?, max_height?}`; `always_on` cần `pipeline_id` của profile joint), `keyframe_retention_hours`, `track_retention_days` (`null` là giữ mãi). Áp dụng từ phiên kế tiếp.
 - `DELETE /api/v2/stream-sources/{id}`: `204`; camera đã có phiên trả `409`.
-- `POST /api/v2/stream-sources/{id}/sessions`: `{pipeline_id,min_confidence?,max_track_seconds?,max_height?}` → `202`, phiên `queued`. `max_height` là 480, 720 hoặc 1080 (mặc định).
+- `POST /api/v2/stream-sources/{id}/sessions`: `{pipeline_id,min_confidence?,max_track_seconds?,max_height?}` → `202`, phiên `queued`. `min_confidence` mặc định 0.96 (hiệu chỉnh trên ICPR, xem [EVALUATION.md](EVALUATION.md#kết-quả-hiệu-chỉnh-offline-trên-icpr-26102026)). `max_height` là 480, 720 hoặc 1080 (mặc định).
   - Chỉ profile `five_frame_joint`, nếu không thì trả `422`.
   - Camera đang có phiên hoạt động trả `409`; pipeline chưa sẵn sàng trả `503`.
 - `GET /api/v2/live-sessions`: lọc `stream_source_id`, `status`, phân trang.

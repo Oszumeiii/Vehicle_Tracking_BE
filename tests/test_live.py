@@ -20,7 +20,7 @@ def recognizer(images):
     assert len(images) == 5
     return {"raw_text": "ABC-1234", "decoding": {"decoder": "beam_filter", "beam_width": 8, "use_tta": False,
             "plate_text": "ABC-1234", "greedy_text": "ABC1234", "format_valid": True,
-            "greedy_symbol_confidence": .7, "beam_log_score": -1., "beam_confidence_proxy": .9}}
+            "greedy_symbol_confidence": .7, "beam_log_score": -1., "beam_confidence_proxy": .97}}
 
 
 class Frames:
