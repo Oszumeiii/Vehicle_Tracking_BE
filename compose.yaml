@@ -14,5 +14,71 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # The whole stack in containers (docs/DOCKER.md): docker compose --profile app up --build
+  # Without the profile only PostgreSQL starts, as start-all.cmd expects.
+  api:
+    profiles: [app]
+    build: { context: ., target: api }
+    image: vehicle-tracking-api
+    env_file: .env
+    environment: &app-env
+      DATABASE_URL: postgresql://plate:${POSTGRES_PASSWORD}@postgres:5432/plate
+      PLATE_DATA_DIR: /app/data
+      PLATE_CACHE_DIR: /app/data/model-cache
+      PLATE_PIPELINE_PYTHON: /opt/venv/bin/python
+      PLATE_PIPELINES_CONFIG: config/pipelines.kaggle.json
+      HOST: 0.0.0.0
+      PORT: 3000
+    volumes: &app-volumes
+      - ./data:/app/data
+      - ./models:/app/models:ro
+    ports:
+      - "127.0.0.1:${API_PORT:-3000}:3000"
+    healthcheck:
+      # Ready means the database is reachable and fully migrated.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health/ready').then(r => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: unless-stopped
+
+  worker:
+    profiles: [app]
+    build: { context: ., target: worker }
+    image: vehicle-tracking-worker
+    env_file: .env
+    environment:
+      <<: *app-env
+      # Each job loads its own models (~3 GB RAM). Docker Desktop gives WSL 2 half the
+      # host RAM by default, and two jobs at once ran out of memory on a 16 GB laptop.
+      PLATE_WORKER_CONCURRENCY: 1
+    volumes: *app-volumes
+    depends_on:
+      # The API migrates the database before it reports healthy.
+      api: { condition: service_healthy }
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  web:
+    profiles: [app]
+    # Vehicle_Tracking_FE checked out next to this repository.
+    build: { context: ../Vehicle_Tracking_FE }
+    image: vehicle-tracking-web
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8080}:80"
+    depends_on:
+      api: { condition: service_healthy }
+    restart: unless-stopped
+
 volumes:
   plate-postgres:
