@@ -137,9 +137,11 @@ def test_startup_errors_and_another_pipeline_are_reported_per_session(tmp_path):
     assert events.of("a", "status")[0]["reason"] == "startup"
 
     host, _, _ = make_host(tmp_path)
-    start(host, tmp_path, "a", "camboriu")
-    start(host, tmp_path, "b", "other", {**SNAPSHOT, "id": "other"})
     events = host.emit
+    start(host, tmp_path, "a", "camboriu")
+    # Wait until a has loaded its pipeline; otherwise b may load first and a gets the error.
+    wait(lambda: events.of("a", "status"))
+    start(host, tmp_path, "b", "other", {**SNAPSHOT, "id": "other"})
     wait(lambda: events.of("b", "exit"))
     assert "another pipeline" in events.of("b", "error")[0]["message"]
     # Outside the data directory is refused before any model work.
