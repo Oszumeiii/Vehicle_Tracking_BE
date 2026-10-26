@@ -37,6 +37,13 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # API uploads probe media in Python; the supervisor test uses Pillow.
+      # Both test suites default to .venv/bin/python on Linux.
+      - run: python -m venv .venv
+      - run: .venv/bin/python -m pip install Pillow opencv-python-headless
       - run: npm ci
       - run: npm run format:check
       - run: npm test
