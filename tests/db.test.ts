@@ -266,6 +266,31 @@ test('Administrative CLI creates a usable normalized account and rejects duplica
   );
 });
 
+test('threshold migration moves cameras saved with the old 0.85 default to 0.96 only', async () => {
+  const db = fixture.database;
+  const owner = await seedUser(db);
+  const cameras = { old: newId(), custom: newId(), none: newId() };
+  const settings = {
+    old: { pipeline_id: 'p', min_confidence: 0.85, max_track_seconds: 30 },
+    custom: { pipeline_id: 'p', min_confidence: 0.9 },
+    none: {},
+  };
+  for (const [key, id] of Object.entries(cameras))
+    await db.query(
+      `INSERT INTO stream_sources (id,owner_id,name,url,auto_settings) VALUES ($1,$2,$3,'u',$4)`,
+      [id, owner.id, key, settings[key as keyof typeof settings]],
+    );
+  await db.query(
+    await readFile(resolve('src/database/migrations/0009_live_threshold.sql'), 'utf8'),
+  );
+  const saved = async (id: string) =>
+    (await db.query('SELECT auto_settings FROM stream_sources WHERE id=$1', [id])).rows[0]
+      .auto_settings;
+  assert.deepEqual(await saved(cameras.old), { ...settings.old, min_confidence: 0.96 });
+  assert.deepEqual(await saved(cameras.custom), settings.custom);
+  assert.deepEqual(await saved(cameras.none), {});
+});
+
 test('SQL migration is idempotent and rejects changes to an applied migration', async () => {
   assert.deepEqual(await migrate(fixture.database), []);
   const destination = join(fixture.root, 'changed-migrations');

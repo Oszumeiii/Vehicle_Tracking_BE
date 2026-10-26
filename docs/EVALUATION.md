@@ -212,7 +212,7 @@ Track live mất nhãn `readable` nhiều hơn trên ICPR. Lý do: confidence tr
 2. Checkpoint được chọn theo điểm trên validation, nên số đo của tập validation hơi lạc quan; tập test thì không bị ảnh hưởng.
 3. Chưa xác nhận trên live bằng nhãn người. Cách xác nhận: tạo bộ mẫu trong tab **Gán nhãn** từ camera có biển lớn (crop từ 50 px trở lên), mỗi mẫu cần ít nhất 2 người gán, rồi xem precision ở ngưỡng 0.96 trong **Báo cáo ngưỡng**.
 
-**Camera đã tạo trước thay đổi** vẫn giữ `min_confidence` đã lưu trong `auto_settings` (thường là 0.85). Muốn dùng ngưỡng mới cho camera đó thì sửa bằng `PATCH /api/v2/stream-sources/{id}`. Phiên bật tay không truyền `min_confidence` sẽ dùng 0.96.
+**Camera đã tạo trước thay đổi:** migration `0009_live_threshold.sql` đổi `auto_settings.min_confidence` từ đúng 0.85 (mặc định cũ) sang 0.96. Camera đặt giá trị khác giữ nguyên. Camera cố ý chọn đúng 0.85 không phân biệt được nên cũng bị đổi; muốn giữ thì đặt lại bằng `PATCH /api/v2/stream-sources/{id}`. Phiên bật tay không truyền `min_confidence` sẽ dùng 0.96.
 
 **Chạy lại** (cần `kaggle` CLI đã đăng nhập; dữ liệu khoảng 690 MB, nằm trong `data/`, không commit):
 
