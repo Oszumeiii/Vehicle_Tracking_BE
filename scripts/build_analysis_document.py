@@ -28,7 +28,7 @@ OUT = BASE / 'output'
 OUT.mkdir(exist_ok=True)
 TITLE = 'Phân tích nghiệp vụ và thiết kế hệ thống'
 SUBTITLE = 'Nhận diện biển số độ phân giải thấp'
-DATE = '25/10/2026'
+DATE = '26/10/2026'
 
 
 def chapters():
@@ -124,7 +124,7 @@ def blocks(markdown):
 
 def generate():
     content = chapters()
-    compiled = f'# {TITLE}\n\n{SUBTITLE}\n\nPhiên bản 1.3 · {DATE}\n\n'
+    compiled = f'# {TITLE}\n\n{SUBTITLE}\n\nPhiên bản 1.4 · {DATE}\n\n'
     compiled += '\n\n'.join(content[k] for k in sorted(content)) + '\n'
     (BASE / 'PHAN_TICH_NGHIEP_VU_VA_THIET_KE.md').write_text(compiled, encoding='utf-8')
     for name, filename in [('Arial','arial.ttf'),('Arial-Bold','arialbd.ttf'),('Arial-Italic','ariali.ttf'),('Arial-BoldItalic','arialbi.ttf')]:
@@ -156,7 +156,7 @@ def generate():
         canvas.setFont('Arial',8)
         canvas.setFillColor(colors.HexColor('#555555'))
         if doc.page > 1:
-            canvas.drawString(margin,24,'LR LPR | Phân tích nghiệp vụ và thiết kế | 1.3')
+            canvas.drawString(margin,24,'LR LPR | Phân tích nghiệp vụ và thiết kế | 1.4')
             canvas.drawRightString(width-margin,24,str(doc.page))
     pdf=OUT/'PHAN_TICH_NGHIEP_VU_VA_THIET_KE.pdf'
     doc=Report(str(pdf),pagesize=A4,title=TITLE+' '+SUBTITLE,author='Tài liệu dự án Low-resolution License Plate Recognition')
@@ -166,8 +166,8 @@ def generate():
         templates.append(PageTemplate(id=name,pagesize=size,frames=[Frame(margin,40,w-2*margin,h-82,leftPadding=0,rightPadding=0,topPadding=0,bottomPadding=0)],onPage=footer))
     doc.addPageTemplates(templates)
     story=[Spacer(1,55),Paragraph(TITLE,ParagraphStyle('cover',fontName='Arial-Bold',fontSize=23,leading=31,spaceAfter=18)),Paragraph(SUBTITLE,ParagraphStyle('sub',fontName='Arial',fontSize=19,leading=26,spaceAfter=34))]
-    story.extend([Paragraph('Tài liệu nghiệp vụ và thiết kế kỹ thuật',styles['h2']),Paragraph(f'Phiên bản 1.3 | Ngày hoàn thiện {DATE}',styles['body']),Paragraph('Dành cho nhóm phát triển, người kiểm thử và người đánh giá đồ án.',styles['body']),Spacer(1,20),Paragraph('Phạm vi',styles['h2']),Paragraph('Ứng dụng nhận diện, kiểm duyệt và tra cứu biển số từ ảnh/video tải lên và từ camera YouTube Live. Backend NestJS, PostgreSQL và worker Node điều phối inference Python. Tài liệu bao gồm yêu cầu, use case, activity, sequence, mô hình trạng thái, API, kiến trúc và từ điển dữ liệu.',styles['body']),Paragraph('Hiện trạng',styles['h2']),Paragraph('Pipeline theo notebook PBL6: sampling, gate, YOLO11l, BoT-SORT, OCR SE-ResNet34-C nhận đồng thời năm crop từ video, decoder beam_filter. Ảnh đơn có detection/crop và nhập thủ công; OCR ảnh đơn cần model riêng. Camera live: mỗi track là một job, sự kiện real-time qua SSE, watchlist, camera 24/7, camera demo, tối đa hai camera trên một GPU 8 GB nhờ host dùng chung model. Ngưỡng tin cậy được hiệu chỉnh bằng trang gán nhãn mù. Một job thành công không chứng minh biển số được đọc đúng.',styles['body']),PageBreak(),Paragraph('Mục lục',styles['h1']),toc,PageBreak()])
-    html_parts=[f'<!doctype html><html lang="vi"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{TITLE}</title><style>body{{font:16px/1.65 Arial,sans-serif;color:#17212b;max-width:1120px;margin:auto;padding:36px;background:white}}h1,h2,h3,h4{{color:#000;line-height:1.3}}h2{{margin-top:56px}}table{{border-collapse:collapse;width:100%;margin:18px 0;font-size:14px}}td,th{{border:1px solid #d9d9d9;padding:9px;vertical-align:top}}th{{background:#234e70;color:white;text-align:left}}tr:nth-child(even){{background:#f5f7f8}}code,pre{{font:13px/1.5 Consolas,monospace}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;background:#f4f6f8;padding:18px}}figure{{margin:30px 0;border:1px solid #ddd;padding:18px;break-inside:avoid}}figure img{{display:block;width:100%;max-height:1100px;object-fit:contain}}figcaption{{font-weight:bold;margin-top:15px}}a{{color:#225878}}nav a{{display:block}}@media print{{body{{max-width:none;padding:0}}figure{{break-before:page}}}}</style><h1>{TITLE}</h1><p>{SUBTITLE} · 1.1 · {DATE}</p><nav>']
+    story.extend([Paragraph('Tài liệu nghiệp vụ và thiết kế kỹ thuật',styles['h2']),Paragraph(f'Phiên bản 1.4 | Ngày hoàn thiện {DATE}',styles['body']),Paragraph('Dành cho nhóm phát triển, người kiểm thử và người đánh giá đồ án.',styles['body']),Spacer(1,20),Paragraph('Phạm vi',styles['h2']),Paragraph('Ứng dụng nhận diện, kiểm duyệt và tra cứu biển số từ ảnh/video tải lên và từ camera YouTube Live. Backend NestJS, PostgreSQL và worker Node điều phối inference Python. Tài liệu bao gồm yêu cầu, use case, activity, sequence, mô hình trạng thái, API, kiến trúc và từ điển dữ liệu.',styles['body']),Paragraph('Hiện trạng',styles['h2']),Paragraph('Pipeline theo notebook PBL6: sampling, gate, YOLO11l, BoT-SORT, OCR SE-ResNet34-C nhận đồng thời năm crop từ video, decoder beam_filter. Ảnh đơn có detection/crop và nhập thủ công; OCR ảnh đơn cần model riêng. Camera live: mỗi track là một job, sự kiện real-time qua SSE, watchlist, camera 24/7, camera demo, tối đa hai camera trên một GPU 8 GB nhờ host dùng chung model. Ngưỡng readable 0,96 được hiệu chỉnh offline trên tập ICPR có nhãn người; trang gán nhãn mù dùng để xác nhận trên camera thật. Toàn hệ thống chạy được bằng Docker Compose. Một job thành công không chứng minh biển số được đọc đúng.',styles['body']),PageBreak(),Paragraph('Mục lục',styles['h1']),toc,PageBreak()])
+    html_parts=[f'<!doctype html><html lang="vi"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{TITLE}</title><style>body{{font:16px/1.65 Arial,sans-serif;color:#17212b;max-width:1120px;margin:auto;padding:36px;background:white}}h1,h2,h3,h4{{color:#000;line-height:1.3}}h2{{margin-top:56px}}table{{border-collapse:collapse;width:100%;margin:18px 0;font-size:14px}}td,th{{border:1px solid #d9d9d9;padding:9px;vertical-align:top}}th{{background:#234e70;color:white;text-align:left}}tr:nth-child(even){{background:#f5f7f8}}code,pre{{font:13px/1.5 Consolas,monospace}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;background:#f4f6f8;padding:18px}}figure{{margin:30px 0;border:1px solid #ddd;padding:18px;break-inside:avoid}}figure img{{display:block;width:100%;max-height:1100px;object-fit:contain}}figcaption{{font-weight:bold;margin-top:15px}}a{{color:#225878}}nav a{{display:block}}@media print{{body{{max-width:none;padding:0}}figure{{break-before:page}}}}</style><h1>{TITLE}</h1><p>{SUBTITLE} · 1.4 · {DATE}</p><nav>']
     for n, chapter in content.items():
         heading=chapter.splitlines()[0].lstrip('# ')
         html_parts.append(f'<a href="#chapter{n}">{html.escape(heading)}</a>')

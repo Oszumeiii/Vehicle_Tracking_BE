@@ -54,7 +54,7 @@ Worker nhận từng track qua stdout, chuyển thư mục bằng chứng sang `
 
 Định kỳ, worker dọn bằng chứng theo cấu hình camera: sau một số giờ mỗi track chỉ giữ một keyframe (crop luôn còn), sau một số ngày track bị xóa; track đã kiểm duyệt, có cảnh báo hoặc nằm trong bộ mẫu gán nhãn được giữ.
 
-**Nhiều camera.** Khi `PLATE_LIVE_MAX_SESSIONS` lớn hơn 1, worker không chạy mỗi phiên một tiến trình mà gửi lệnh `start`/`stop` (JSON) tới một host `python -m app.live --host`. Host nạp detector và OCR một lần; mỗi phiên là một `LiveRunner` trên thread riêng. Lời gọi model đi qua một lock, còn giải mã, tracking và ghi bằng chứng chạy song song. Event của host mang `session` và được tách lại cho từng phiên, nên phần quản lý trạng thái phiên không đổi. Host bật cùng phiên đầu tiên và thoát sau phiên cuối để nhả GPU cho job upload.
+**Nhiều camera.** Khi `PLATE_LIVE_MAX_SESSIONS` lớn hơn 1, worker không chạy mỗi phiên một tiến trình mà gửi lệnh `start`/`stop` (JSON) tới một host `python -m app.live --host`. Host nạp detector và OCR một lần; mỗi phiên là một `LiveRunner` trên thread riêng. Mọi lời gọi model chạy lần lượt trên một luồng GPU duy nhất, còn giải mã, tracking và ghi bằng chứng chạy song song. Lý do: detector fp16 mất khoảng 1,8 s mỗi khi gặp cỡ batch mới, tính riêng cho từng luồng. Vì vậy batch được đệm về 1, 4 hoặc 16 frame và warm-up một lần cho cả host; phiên sau dùng lại warm-up đó. Event của host mang `session` và được tách lại cho từng phiên, nên phần quản lý trạng thái phiên không đổi. Host bật cùng phiên đầu tiên và thoát sau phiên cuối để nhả GPU cho job upload.
 
 **Camera demo.** Admin có thể tạo camera nguồn `file` trỏ tới video trong `demo-videos`. Tiến trình live đọc file bằng OpenCV theo nhịp thật và lặp lại khi hết, PTS tăng liên tục qua các vòng; phần còn lại của luồng giống camera YouTube.
 
@@ -63,6 +63,20 @@ Worker nhận từng track qua stdout, chuyển thư mục bằng chứng sang `
 Admin tạo bộ mẫu từ một camera hoặc phiên: hệ thống lấy ngẫu nhiên tối đa N track có confidence ở mỗi khoảng 0–0,5, 0,5–0,7, 0,7–0,8, 0,8–0,85, 0,85–0,9, 0,9–0,95, 0,95–1, để đo được precision gần mọi ngưỡng ứng viên. Người gán nhận mẫu kế tiếp theo thứ tự xáo trộn ổn định riêng cho từng người (băm id người gán với id mẫu), chỉ thấy 5 crop và một keyframe, rồi gõ biển, chọn không đọc được hoặc bỏ qua. Nhãn được lưu riêng, không đụng review.
 
 Báo cáo lấy nhãn đồng thuận của mỗi mẫu (mẫu bất đồng bị loại), rồi với từng ngưỡng 0,50–0,99 tính số track máy đánh dấu `readable`, số đúng (khớp chính xác sau chuẩn hóa), precision và coverage. Ngưỡng đề xuất là ngưỡng nhỏ nhất đạt precision mục tiêu. Cách tính giống `app/evaluation.calibrate_threshold`, và báo cáo xuất được file để đối chiếu bằng script.
+
+**Hiệu chỉnh offline trên ICPR (26/10/2026).**
+- **Vì sao không dùng nhãn từ camera:** crop trên camera thật quá nhỏ để gán nhãn chắc chắn (trung vị 42 px).
+- **Cách làm:** `scripts/calibrate_icpr.py` chạy đúng recognizer và cách tính confidence của live trên bộ ICPR 2026 LRLPR có nhãn người:
+  - tập test 3000 track, không dùng để train;
+  - tập validation 1000 track.
+  - Crop ICPR rộng 39–56 px, cùng cỡ với crop live.
+  - Độ chính xác toàn biển trên test đạt 77,1%, khớp 77,3% của notebook.
+- **Kết quả:**
+  - ở ngưỡng cũ 0,85, precision chỉ 87,0%;
+  - ở 0,96, precision 96,9% (khoảng tin cậy 96,1–97,6%) với 68,5% track được gắn `readable`.
+- **Ngưỡng chọn:** 0,96 là ngưỡng nhỏ nhất mà cận dưới khoảng tin cậy trên hai tập gộp vẫn từ 95% trở lên. Đây là mặc định mới; migration 0009 đổi các camera đang lưu 0,85.
+- **Giới hạn:** ICPR là cận trên cho camera thật, nên vẫn cần xác nhận bằng nhãn live.
+- **Phạm vi ảnh hưởng:** ngưỡng chỉ đổi nhãn `readable` và bộ lọc; cảnh báo watchlist và lượt xuất hiện vẫn xét mọi track đọc ra chữ.
 
 ## 9 Mô hình trạng thái
 
@@ -106,6 +120,14 @@ API và worker có thể chạy hai terminal trên một host ở bản đầu, 
 
 ![Triển khai bản đầu](diagrams/16-deployment.png)
 
+**Docker Compose** (`docs/DOCKER.md`): `docker compose --profile app up` chạy bốn container:
+- `postgres`;
+- `api`: migrate rồi mới phục vụ, báo healthy theo `/health/ready`;
+- `worker`: PyTorch CUDA, nhận GPU qua NVIDIA Container Toolkit / WSL 2;
+- `web`: bản build FE trên nginx, chuyển `/api` và SSE sang `api`.
+
+Không có profile thì chỉ PostgreSQL chạy, như `start-all`. `data/` và `models/` được mount, không đóng vào image. Code nằm ở `/app` trong cả hai image vì snapshot ghim đường dẫn code. Worker trong Docker chạy một job một lúc, vì VM WSL 2 mặc định (7,4 GB) không đủ RAM cho hai job nạp model song song.
+
 Khi đóng gói hoặc chuyển host, phải đưa theo migration SQL, mã `app/recognition`, checkpoint detector/OCR đúng checksum, đồng thời cấu hình storage dùng chung giữa API/worker. Đường dẫn local trong snapshot phục vụ tái lập trên môi trường đã cấu hình; không trả ra API. `ready=true` của profile chỉ xác nhận file/cấu hình/checksum, không thay thế một job smoke test để kiểm chứng Python/CUDA và model load.
 
 ### 12.3 An toàn dữ liệu và vận hành
@@ -133,5 +155,9 @@ Khi đóng gói hoặc chuyển host, phải đưa theo migration SQL, mã `app/
 | LISTEN/NOTIFY + SSE | Không thêm message broker; NOTIFY chỉ gửi id, client đọc lại dòng đã commit nên nối lại theo `Last-Event-ID` không mất sự kiện. |
 | Chia GPU giữa upload và live | Đo được hai tiến trình cùng nạp model làm tràn VRAM 8 GB và cả hai gần như đứng; đánh đổi: upload chờ khi camera chạy. |
 | Nhiều phiên trong một host dùng chung model | Đo được VRAM mỗi tiến trình chủ yếu là CUDA context và bộ đệm allocator; dùng chung thì hai camera tốn như một. GPU chỉ bận 31–38% nên giữ nguyên tần suất lấy mẫu. Đánh đổi: phiên treo làm cả host bị kill; mọi phiên phải cùng pipeline. |
+| Một luồng GPU, batch 1/4/16 | Đo được mỗi cỡ batch mới tốn khoảng 1,8 s cho mỗi luồng; hai camera bật cùng lúc trước đây bỏ 17 và 73 frame, nay 0. Đánh đổi: frame đệm làm kết quả fp16 dao động rất nhỏ. |
+| Giữ lấy mẫu 8/12/15 fps | Thử 15/20/25 fps: số track gần gấp đôi nhưng không thêm biển đọc được, hai camera bỏ 12–17% frame; profile này chỉ để thử nghiệm. |
+| Ngưỡng 0,96 từ dữ liệu ICPR có nhãn | Precision mục tiêu 95% với cận dưới khoảng tin cậy; đánh đổi: ít track `readable` hơn (Camboriú 158 → 51 trong 45 phút). |
+| Docker Compose theo profile | Máy khác chạy được không cần cài Node/Python/CUDA; `start-all` không đổi. Đánh đổi: image worker khoảng 13 GB, job chậm hơn native. |
 | Nhãn đánh giá tách khỏi review | Review là kết luận vận hành, có thể bị ảnh hưởng bởi kết quả máy; nhãn mù mới đo được độ chính xác. |
 | Giờ chụp theo PROGRAM-DATE-TIME | PTS gốc của segment (`-copyts`) ứng với PDT theo độ lệch không đổi; giờ nhận frame chỉ là phương án dự phòng. |
