@@ -25,7 +25,7 @@ import type { Response } from 'express';
 import { z } from 'zod';
 import { Database } from '../database/database';
 import { Actor, checkDates, instant, newId, normalizePlate, pagination } from '../common/http';
-import { JOB_OWNER, JOB_SOURCES, Ownership } from '../common/ownership';
+import { APPEARANCE_MEDIA_FIELDS, JOB_OWNER, JOB_SOURCES, Ownership } from '../common/ownership';
 import {
   ApiFailures,
   ApiFileResponse,
@@ -40,6 +40,7 @@ import { AuthGuard } from '../auth/auth.guard';
 const search = pagination
   .extend({
     plate: z.string().max(128).optional(),
+    match: z.enum(['exact', 'contains']).default('exact'),
     origin: z.enum(['upload', 'live']).optional(),
     media_id: z.string().optional(),
     stream_source_id: z.string().optional(),
@@ -61,7 +62,7 @@ const search = pagination
   .strict();
 // A live sighting groups the tracks of one vehicle passage; every upload result stands alone.
 const SIGHTING = 'coalesce(j.sighting_id, a.id)';
-const RESULT_FIELDS = `a.*,j.media_id,m.uploaded_at,
+const RESULT_FIELDS = `a.*,${APPEARANCE_MEDIA_FIELDS},m.uploaded_at,
   CASE WHEN j.live_session_id IS NULL THEN 'upload' ELSE 'live' END AS origin,
   s.stream_source_id,j.live_session_id,j.captured_from,j.captured_to,j.confidence_status,
   j.duplicate_of_job_id,j.sighting_id`;
@@ -97,6 +98,12 @@ export class ResultsController {
     required: false,
     type: String,
     description: 'Exact normalized plate text; uppercase without spaces/hyphens',
+  })
+  @ApiQuery({
+    name: 'match',
+    required: false,
+    enum: ['exact', 'contains'],
+    description: 'Plate matching; exact by default.',
   })
   @ApiQuery({ name: 'origin', required: false, enum: ['upload', 'live'] })
   @ApiQuery({ name: 'media_id', required: false, type: String })
@@ -141,8 +148,12 @@ export class ResultsController {
         f.origin === 'live' ? 'j.live_session_id IS NOT NULL' : 'j.media_id IS NOT NULL',
       );
     if (f.exclude_duplicates) clauses.push('j.duplicate_of_job_id IS NULL');
+    if (f.plate !== undefined) {
+      const plate = normalizePlate(f.plate);
+      values.push(f.match === 'contains' ? `%${plate}%` : plate);
+      clauses.push(`a.effective_text ${f.match === 'contains' ? 'LIKE' : '='} $${values.length}`);
+    }
     for (const [value, sql] of [
-      [f.plate === undefined ? undefined : normalizePlate(f.plate), 'a.effective_text='],
       [f.media_id, 'm.id='],
       [f.stream_source_id, 's.stream_source_id='],
       [f.live_session_id, 'j.live_session_id='],

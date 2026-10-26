@@ -342,6 +342,21 @@ test('live manager runs a session, ingests tracks as jobs and stops on request',
   assert.equal(first.origin, 'live');
   assert.equal(first.stream_source_id, source.id);
   assert.equal(first.media_id, null);
+  assert.equal(first.media_type, null);
+  assert.ok(first.primary_detection_id);
+  const liveJob = await api
+    .get(`/api/v2/recognition-jobs/${jobs[0].id}`)
+    .set(as('owner'))
+    .expect(200);
+  assert.equal(liveJob.body.media_type, null);
+  const liveResults = await api
+    .get(`/api/v2/recognition-jobs/${jobs[0].id}/results`)
+    .set(as('owner'))
+    .expect(200);
+  assert.equal(liveResults.body.total, 1);
+  assert.equal(liveResults.body.items[0].id, first.id);
+  assert.ok(liveResults.body.items[0].primary_detection_id);
+  await api.get(`/api/v2/recognition-jobs/${jobs[0].id}/results`).set(as('stranger')).expect(404);
   assert.equal(first.confidence_status, 'readable');
   assert.equal(
     (

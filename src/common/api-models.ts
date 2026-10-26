@@ -101,6 +101,9 @@ class LiveTrackFields {
 }
 
 export class JobResponse extends LiveTrackFields {
+  @ApiProperty(nullableText) media_type!: string | null;
+  @ApiProperty(nullableNumber) media_duration_seconds!: number | null;
+  @ApiProperty(nullableText) media_original_name!: string | null;
   @ApiProperty() id!: string;
   @ApiProperty({ ...nullableText, description: 'Uploaded source; null for live tracks.' })
   media_id!: string | null;
@@ -154,6 +157,12 @@ export class PipelineResponse {
 }
 
 export class AppearanceResponse {
+  @ApiProperty({ ...nullableText, required: false }) media_type?: string | null;
+  @ApiProperty({ ...nullableNumber, required: false }) media_duration_seconds?: number | null;
+  @ApiProperty({ ...nullableText, required: false }) media_original_name?: string | null;
+  @ApiProperty({ ...nullableText, required: false }) primary_detection_id?: string | null;
+  @ApiProperty({ ...boundingBox, required: false }) primary_bbox?: number[] | null;
+  @ApiProperty({ ...boundingBox, required: false }) primary_crop_bbox?: number[] | null;
   @ApiProperty() id!: string;
   @ApiProperty() job_id!: string;
   @ApiProperty({
