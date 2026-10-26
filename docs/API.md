@@ -153,3 +153,9 @@ List trả `{total,limit,offset,items}`. `limit=1..200`, mặc định 50; `offs
 Lỗi: `401` thiếu/hết phiên, `403` thiếu vai trò, `404` không có/không thuộc quyền, `409` xung đột nghiệp vụ, `413` quá dung lượng, `415` loại file không hỗ trợ, `422` tham số/nội dung không hợp lệ, `503` pipeline chưa sẵn sàng. Body lỗi `{detail:...}`.
 
 `GET /health` kiểm tra API còn hoạt động. `GET /health/ready` kiểm tra kết nối PostgreSQL và toàn bộ version/checksum migration; thiếu migration OCR mới trả `503`. Health không chứng minh worker đang chạy hoặc model đã load thành công. Tương tự, `pipelines.ready` kiểm tra cấu hình, file và checksum; chạy job thực kiểm chứng runtime inference.
+
+## FinalV1 integration
+
+- Result search accepts `match=exact|contains`; the default remains `exact`. Partial matching uses the reviewed effective plate text, so rejected plates do not reappear through machine predictions.
+- Job and result responses include upload media metadata (`media_type`, `media_duration_seconds`, `media_original_name`). Live sources have null upload metadata. Result summaries also expose the primary detection ID and bounding boxes for evidence previews.
+- Browser media elements may send `?token=<access_token>` only on GET/HEAD requests to `/api/v2/media/{id}/content` and `/api/v2/detections/{id}/artifacts/{crop|frame|enhanced}`. Session expiry and ownership checks still apply. An Authorization header takes precedence; other endpoints require the header.

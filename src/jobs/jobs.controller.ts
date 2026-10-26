@@ -17,7 +17,7 @@ import { ApiBearerAuth, ApiBody, ApiTags, ApiQuery, ApiResponse } from '@nestjs/
 import { z } from 'zod';
 import { Database } from '../database/database';
 import { Actor, checkDates, instant, newId, pagination } from '../common/http';
-import { JOB_OWNER, JOB_SOURCES, Ownership } from '../common/ownership';
+import { APPEARANCE_MEDIA_FIELDS, JOB_OWNER, JOB_SOURCES, Ownership } from '../common/ownership';
 import {
   ApiCollectionResponse,
   ApiFailures,
@@ -196,7 +196,7 @@ export class JobsController {
     const from = `FROM ${JOB_SOURCES} WHERE ${clauses.join(' AND ')}`;
     const count = await this.db.query(`SELECT count(*) ${from}`, values);
     const items = await this.db.query(
-      `SELECT j.* ${from} ORDER BY j.created_at DESC,j.id DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+      `SELECT j.*, m.media_type, m.duration_seconds AS media_duration_seconds, m.original_name AS media_original_name ${from} ORDER BY j.created_at DESC,j.id DESC LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
       [...values, f.limit, f.offset],
     );
     return {
@@ -210,7 +210,14 @@ export class JobsController {
   @ApiResponse({ status: 200, type: JobResponse })
   @ApiFailures(404)
   async get(@Req() req: { user: Actor }, @Param('id') id: string) {
-    return jobView(await this.owner.job(req.user, id));
+    const job = await this.owner.job(req.user, id);
+    const media = job.media_id ? await this.owner.media(req.user, job.media_id) : null;
+    return {
+      ...jobView(job),
+      media_type: media?.media_type ?? null,
+      media_duration_seconds: media?.duration_seconds ?? null,
+      media_original_name: media?.original_name ?? null,
+    };
   }
 
   @Get('recognition-jobs/:id/results')
@@ -224,7 +231,9 @@ export class JobsController {
       id,
     ]);
     const items = await this.db.query(
-      'SELECT * FROM plate_appearances WHERE job_id=$1 ORDER BY first_frame,id LIMIT $2 OFFSET $3',
+      `SELECT a.*, ${APPEARANCE_MEDIA_FIELDS}
+       FROM plate_appearances a JOIN ${JOB_SOURCES} ON j.id=a.job_id
+       WHERE a.job_id=$1 ORDER BY a.first_frame, a.id LIMIT $2 OFFSET $3`,
       [id, limit, offset],
     );
     return { total: Number(count.rows[0].count), limit, offset, items: items.rows };

@@ -16,6 +16,11 @@ export const JOB_SOURCES = `recognition_jobs j
   LEFT JOIN stream_sources c ON c.id=s.stream_source_id`;
 export const JOB_OWNER = '($1::boolean OR coalesce(m.owner_id,c.owner_id)=$2)';
 
+export const APPEARANCE_MEDIA_FIELDS = `j.media_id, m.media_type, m.duration_seconds AS media_duration_seconds, m.original_name AS media_original_name,
+  (SELECT d.id FROM plate_detections d WHERE d.appearance_id=a.id ORDER BY d.selected_order,d.id LIMIT 1) AS primary_detection_id,
+  (SELECT d.bbox FROM plate_detections d WHERE d.appearance_id=a.id ORDER BY d.selected_order,d.id LIMIT 1) AS primary_bbox,
+  (SELECT d.crop_bbox FROM plate_detections d WHERE d.appearance_id=a.id ORDER BY d.selected_order,d.id LIMIT 1) AS primary_crop_bbox`;
+
 @Injectable()
 export class Ownership {
   constructor(private db: Database) {}
@@ -45,7 +50,7 @@ export class Ownership {
   async result(actor: Actor, id: string, c: Queryable = this.db, lock = false) {
     const row = (
       await c.query(
-        `SELECT a.* FROM plate_appearances a JOIN ${JOB_SOURCES} ON j.id=a.job_id
+        `SELECT a.*, ${APPEARANCE_MEDIA_FIELDS} FROM plate_appearances a JOIN ${JOB_SOURCES} ON j.id=a.job_id
       WHERE a.id=$3 AND j.status='succeeded' AND ${JOB_OWNER} ${lock ? 'FOR UPDATE OF a' : ''}`,
         [actor.role === 'admin', actor.id, id],
       )
