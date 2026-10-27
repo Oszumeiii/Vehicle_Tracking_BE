@@ -9,6 +9,7 @@ Commands are JSON lines on stdin:
   {"cmd": "start", "session": ID, "payload": PATH, "out": DIR,
    "min_confidence": 0.96, "max_track_seconds": 30}
   {"cmd": "stop", "session": ID}
+  {"cmd": "clip", "session": ID, "track": KEY}   clip a track outside the clip policy
   {"cmd": "job", "job": ID, "payload": PATH}   an upload job (recognition-input.json)
   {"cmd": "stop_job", "job": ID}
 EOF (or {"cmd": "shutdown"}) stops every session; open tracks are finished first.
@@ -178,6 +179,7 @@ class Host:
         self.data_dir, self.models, self.sampling_scale = absolute(data_dir), models, sampling_scale
         self.buffer_seconds = buffer_seconds
         self.sessions, self.jobs, self.lock = {}, {}, threading.Lock()
+        self.runners = {}
         self.emit = emit_factory(self.stop_all)
         if source_factory is None:
             from app.live.__main__ import source_factory
@@ -215,6 +217,11 @@ class Host:
                 entry = self.sessions.get(session)
             if entry:
                 entry[0].set()
+        elif cmd == "clip":
+            with self.lock:
+                runner = self.runners.get(session)
+            if runner is not None and hasattr(runner, "request_clip"):
+                runner.request_clip(str(message.get("track", "")))
         else:
             self.emit(dict(type="host", status="error", message=f"Unknown command: {cmd}"))
         return True
@@ -244,12 +251,15 @@ class Host:
                 out.mkdir(parents=True, exist_ok=True)
                 snapshot = payload["pipeline_snapshot"]
                 model, recognizer = self.models.get(snapshot)
+                from app.live.__main__ import recording_options
                 runner = self.runner_factory(
                     snapshot, out, self.source_factory(payload["source"]), emit, model, recognizer,
                     data_dir=self.data_dir, min_confidence=float(message.get("min_confidence", DEFAULT_MIN_CONFIDENCE)),
                     max_track_seconds=float(message.get("max_track_seconds", 30.)),
                     buffer_seconds=self.buffer_seconds, exclude_zones=payload["source"].get("exclude_zones") or (),
-                    sampling_scale=self.sampling_scale)
+                    sampling_scale=self.sampling_scale, recording=recording_options())
+                with self.lock:
+                    self.runners[session] = runner
             except Exception as exc:  # noqa: BLE001 - reported to this session only
                 traceback.print_exc()
                 error_code = getattr(exc, "code", "PIPELINE_FAILED")
@@ -267,6 +277,7 @@ class Host:
         finally:
             with self.lock:
                 self.sessions.pop(session, None)
+                self.runners.pop(session, None)
             emit(dict(type="exit", code=code))
 
     def start_job(self, job, message):

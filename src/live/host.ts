@@ -170,6 +170,10 @@ export class SharedLiveHost {
     let input = '';
     stdin.on('data', (chunk) => {
       input += String(chunk);
+      // "clip TRACK" lines ask the session for a track's clip (a watchlist hit).
+      for (const match of input.matchAll(/^clip (\S+)\n/gm))
+        this.write({ cmd: 'clip', session, track: match[1] });
+      input = input.replace(/^clip \S+\n/gm, '');
       if (input.includes('stop\n')) {
         input = '';
         this.write({ cmd: 'stop', session });

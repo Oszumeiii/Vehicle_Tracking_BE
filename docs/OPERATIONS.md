@@ -113,6 +113,13 @@ Worker dọn bằng chứng live mỗi `PLATE_RETENTION_INTERVAL_MINUTES` theo t
 
 Phiên live khi worker dừng bằng Ctrl+C sẽ chốt track đang mở (tối đa `PLATE_LIVE_STOP_SECONDS`, mặc định 120 s) rồi chuyển `interrupted`. Nếu worker bị tắt đột ngột, lần khởi động sau sẽ chuyển phiên sang `interrupted` và nhập các track đã ghi xuống đĩa.
 
+**Bản ghi và clip:**
+- Bản ghi đệm nằm ở `data/live/<phiên>/record/eNNN/`, gồm `seg_*.mp4` và `index.jsonl`.
+- Tiến trình live tự xóa đoạn cũ hơn `PLATE_LIVE_RECORD_MINUTES`; worker dọn bản ghi của phiên đã dừng và video cắt tạm (`cache/`, `live/recording-cache/`) sau 1 giờ.
+- Clip lưu lâu dài nằm cùng bằng chứng của job: `recognition/<job>/clip.mp4`.
+- Tắt ghi bằng `PLATE_LIVE_RECORD=false`.
+- Ước tính dung lượng: 4 giờ × 1080p ≈ 7 GB mỗi camera.
+
 Một phiên live chiếm GPU liên tục. Với `PLATE_LIVE_MAX_SESSIONS` ≥ 2, job video dùng pipeline joint chạy trong host live (dùng chung model, giữ ở tốc độ thời gian thực khi có camera). Job quá `PLATE_JOB_TIMEOUT_SECONDS` được yêu cầu dừng; nếu 30 s sau vẫn chưa dừng thì host bị kill, kéo theo các phiên live trong đó. Các job khác vẫn theo quy tắc cũ: mặc định (`PLATE_LIVE_EXCLUSIVE_GPU=true`) chúng chờ trong lúc phiên live chạy và ngược lại. Muốn xử lý video upload thì dừng phiên live, hoặc chạy worker trên máy có GPU đủ lớn rồi đặt `false`. Số đo nằm trong `TESTING.md`. Các job `queued` tiếp tục được lấy; job `failed` không tự chạy lại.
 
 Sau khi sao lưu, cập nhật code/dependency, chạy `npm ci`, `npm run build`, `npm run db:migrate`, rồi khởi động API và worker. Migration đã áp dụng có checksum; không sửa nội dung migration cũ để cập nhật schema, hãy thêm migration mới. Cập nhật source hoặc checkpoint có thể làm job đang queued không còn khớp snapshot; giữ bộ model/source cũ cho đến khi hàng đợi hoàn tất hoặc tạo job mới sau cập nhật.

@@ -13,6 +13,7 @@ import {
   WorkerOptions,
 } from '../recognition/engine';
 import { PipelineRegistry } from '../recognition/registry';
+import { attachClip } from './clips';
 import { ingestTrack } from './ingest';
 import {
   DEFAULT_MIN_CONFIDENCE,
@@ -504,13 +505,42 @@ export class LiveManager {
       const { type: _type, time: _time, ...payload } = event;
       await recordEvent(this.database, id, 'error', payload);
     } else if (event.type === 'track') {
-      await this.ingest(run.session, String(event.track));
+      const job = await this.ingest(run.session, String(event.track));
+      // A watchlist hit gets its clip even when the clip policy would skip the track.
+      if (job && event.status !== 'readable') {
+        const { rows } = await this.database.query(
+          'SELECT alerted FROM recognition_jobs WHERE id=$1',
+          [job],
+        );
+        if (rows[0]?.alerted) run.child.stdin?.write(`clip ${event.track}\n`);
+      }
+    } else if (event.type === 'clip_failed') {
+      // A missing clip is noted but never fails the session.
+      await recordEvent(this.database, id, 'error', {
+        code: 'CLIP_FAILED',
+        track: event.track,
+        message: String(event.message ?? ''),
+      });
+    } else if (event.type === 'clip') {
+      await attachClip(
+        this.database,
+        this.options,
+        run.session,
+        String(event.track),
+        String(event.path),
+        Number(event.first_seen_offset),
+      ).catch((error) =>
+        recordEvent(this.database, run.session.id, 'error', {
+          code: 'CLIP_FAILED',
+          message: error instanceof Error ? error.message : String(error),
+        }),
+      );
     }
   }
 
   private async ingest(session: Row, key: string) {
     try {
-      await ingestTrack(this.database, this.options, session, key);
+      return await ingestTrack(this.database, this.options, session, key);
     } catch (error) {
       await recordEvent(this.database, session.id, 'track_rejected', {
         track: key,

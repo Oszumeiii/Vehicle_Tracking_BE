@@ -49,8 +49,9 @@ class Emitter:
             self.stop.set()
 
 
-def watch_stdin(stop):
-    """Set stop on a "stop" line or EOF (the parent closed the pipe or died).
+def watch_stdin(stop, on_clip=None):
+    """Set stop on a "stop" line or EOF (the parent closed the pipe or died);
+    "clip TRACK" lines ask for that track's clip (on_clip).
 
     Reads the raw descriptor: a thread blocked in sys.stdin holds its buffer lock,
     and any other thread touching sys.stdin (libraries do at import) would hang.
@@ -61,9 +62,30 @@ def watch_stdin(stop):
         if not chunk:
             break
         *lines, pending = (pending + chunk).split(b"\n")
+        for line in lines:
+            if line.startswith(b"clip ") and on_clip:
+                on_clip(line[5:].strip().decode(errors="replace"))
         if any(line.strip() == b"stop" for line in lines):
             break
     stop.set()
+
+
+def recording_options(environ=os.environ):
+    """Rolling recording and track clips from the worker's environment; None when disabled.
+
+    PLATE_LIVE_RECORD (true), PLATE_LIVE_RECORD_MINUTES (240), PLATE_LIVE_CLIP_POLICY
+    (readable|all|none), PLATE_LIVE_CLIP_PAD_SECONDS (3).
+    """
+    if environ.get("PLATE_LIVE_RECORD", "true").strip().lower() not in ("true", "1", "yes"):
+        return None
+    policy = environ.get("PLATE_LIVE_CLIP_POLICY", "readable").strip().lower()
+    if policy not in ("readable", "all", "none"):
+        raise ValueError("PLATE_LIVE_CLIP_POLICY must be readable, all or none")
+    minutes = float(environ.get("PLATE_LIVE_RECORD_MINUTES") or 240)
+    pad = float(environ.get("PLATE_LIVE_CLIP_PAD_SECONDS") or 3)
+    if not 1 <= minutes <= 7 * 24 * 60 or not 0 <= pad <= 30:
+        raise ValueError("PLATE_LIVE_RECORD_MINUTES must be 1-10080 and PLATE_LIVE_CLIP_PAD_SECONDS 0-30")
+    return dict(minutes=minutes, clip_policy=policy, pad=pad)
 
 
 def decode_options(environ=os.environ):
@@ -82,29 +104,35 @@ def decode_options(environ=os.environ):
 
 
 def source_factory(source):
+    """open_source(record_dir=None) -> (info, connection). With record_dir, network sources
+    also record the stream there (recorder.py); a demo video is its own recording."""
     from app.live.source import FfmpegFrames, FileFrames, RtspFrames, resolve_youtube
 
     if source.get("type") == "youtube":
-        def open_youtube():
+        def open_youtube(record_dir=None):
             info = resolve_youtube(source["url"], max_height=int(source.get("max_height") or 1080))
-            return info, FfmpegFrames(info["url"], info["width"], info["height"], **decode_options())
+            return info, FfmpegFrames(info["url"], info["width"], info["height"], record_dir=record_dir,
+                                      **decode_options())
         return open_youtube
     if source.get("type") == "file":
         path = Path(source["path"])
 
-        def open_file():
+        def open_file(record_dir=None):
             import cv2
             cap = cv2.VideoCapture(str(path))
             try:
+                fps = float(cap.get(cv2.CAP_PROP_FPS))
                 info = dict(width=int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), height=int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)),
-                            fps=float(cap.get(cv2.CAP_PROP_FPS)), video_id=path.stem)
+                            fps=fps, video_id=path.stem,
+                            duration=float(cap.get(cv2.CAP_PROP_FRAME_COUNT)) / fps if fps > 0 else 0.)
             finally:
                 cap.release()
             return info, FileFrames(path, realtime=bool(source.get("realtime")), loop=bool(source.get("loop")))
         return open_file
     if source.get("type") == "rtsp":
-        def open_rtsp():
-            frames = RtspFrames(source["url"], max_height=int(source.get("max_height") or 1080), **decode_options())
+        def open_rtsp(record_dir=None):
+            frames = RtspFrames(source["url"], max_height=int(source.get("max_height") or 1080),
+                                record_dir=record_dir, **decode_options())
             return frames.probe(), frames
         return open_rtsp
     raise ValueError("Source type must be youtube, file or rtsp")
@@ -181,7 +209,8 @@ def main(argv=None):
         runner = LiveRunner(snapshot, out, open_source, emit, model, recognizer, data_dir=data_dir,
                             min_confidence=args.min_confidence, max_track_seconds=args.max_track_seconds,
                             max_reconnects=args.max_reconnects, buffer_seconds=args.buffer_seconds,
-                            exclude_zones=payload["source"].get("exclude_zones") or ())
+                            exclude_zones=payload["source"].get("exclude_zones") or (),
+                            recording=recording_options())
     except Exception as exc:  # noqa: BLE001
         traceback.print_exc()
         code = getattr(exc, "code", "PIPELINE_FAILED")
@@ -189,7 +218,8 @@ def main(argv=None):
         emit(dict(type="status", status="failed", reason="startup"))
         return 1
     if not args.ignore_stdin:  # after the heavy imports, see watch_stdin
-        threading.Thread(target=watch_stdin, args=(stop,), name="stdin-control", daemon=True).start()
+        threading.Thread(target=watch_stdin, args=(stop, runner.request_clip), name="stdin-control",
+                         daemon=True).start()
     status = runner.run(stop)
     return 0 if status in ("ended", "stopped") else 1
 

@@ -146,6 +146,11 @@ Lưu ý khi vận hành:
   - thư mục mồ côi và thùng rác cũng được dọn.
 - **Xóa phiên:** `DELETE /api/v2/live-sessions/{id}` cho phiên đã kết thúc (xóa track, bằng chứng và lịch sử). Xóa hết phiên thì xóa được camera. `GET /live-sessions/{id}` có `evidence_bytes`.
 - **Lượt xuất hiện:** các track cùng biển (hoặc lệch 1 ký tự) trên một camera trong vòng `PLATE_LIVE_SIGHTING_MINUTES` (mặc định 5) có chung `sighting_id`. `GET /recognition-results?group_by=sighting` trả mỗi lượt một dòng, kèm `sighting_count`, `first_seen`, `last_seen`; `GET /api/v2/sightings/{id}/results` liệt kê các track của lượt đó.
+- **Xem lại video:**
+  - Camera YouTube/RTSP được ghi đệm liên tục thành các đoạn MP4 10 s bằng stream copy (không mã hóa lại, CPU gần như không đổi). Mặc định giữ 4 giờ; 720p khoảng 0,8 GB/giờ, 1080p khoảng 1,8 GB/giờ mỗi camera.
+  - Track `readable` (`PLATE_LIVE_CLIP_POLICY`) và track có cảnh báo watchlist được lưu clip lâu dài (±3 s), xóa cùng track.
+  - Tra một biển số → `GET /recognition-results/{id}/video` phát đúng đoạn xe đó và cho biết giây biển xuất hiện. Track khác được cắt từ bản ghi khi còn trong thời gian giữ.
+  - Xem rộng hơn theo giờ: `GET /stream-sources/{id}/recording?from&to`. Camera demo cắt thẳng từ file video.
 - **Camera IP (RTSP):** tạo camera với `{ "source_type": "rtsp", "url": "rtsp://user:mật-khẩu@192.168.1.10:554/stream" }`.
   - Worker mở luồng bằng ffmpeg qua TCP và thu nhỏ theo `max_height`. Giờ chụp là giờ nhận frame.
   - Sai mật khẩu (401/403): phiên dừng ngay với lý do rõ ràng. Mất kết nối hoặc 404 (camera đang khởi động lại): tự kết nối lại như YouTube.

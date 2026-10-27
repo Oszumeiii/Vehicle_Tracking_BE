@@ -65,6 +65,16 @@ Action `confirm` chấp nhận text máy; `correct` bắt buộc text mới; `un
   - `exclude_zones` gồm tối đa 16 hình chữ nhật `[x1,y1,x2,y2]` chuẩn hóa 0..1; detection có tâm nằm trong vùng bị bỏ.
 - `GET /api/v2/demo-videos` (admin): `{items:[{path,size_bytes}]}`, các video dùng được cho camera demo.
 - `GET /api/v2/stream-sources`, `GET /api/v2/stream-sources/{id}`: camera của mình (admin thấy tất cả), kèm `active_session`.
+- **Video của kết quả:**
+  - `GET /api/v2/recognition-results/{id}/video-info` → `{available, kind, url, first_seen_offset, captured_from, captured_to}`. `kind`:
+    - `clip`: clip lưu cùng track;
+    - `recording`: cắt từ bản ghi đệm của camera, còn trong `PLATE_LIVE_RECORD_MINUTES`;
+    - `media`: video upload, `url` là `/media/{id}/content`;
+    - `none`: không còn video.
+  - `GET /api/v2/recognition-results/{id}/video` → `video/mp4` (hỗ trợ Range). Header `X-Plate-First-Seen-Seconds` cho biết giây biển xuất hiện trong video. Hết thời gian giữ thì `404`. Nhận cả `?token=` để dùng trực tiếp trong `<video src>`.
+- **Bản ghi camera:**
+  - `GET /api/v2/stream-sources/{id}/recording/coverage` → `{items:[{from,to}]}`, các khoảng còn bản ghi.
+  - `GET /api/v2/stream-sources/{id}/recording?from=ISO&to=ISO` (tối đa 600 s) → `video/mp4`. Sai khoảng thời gian trả `400`, không còn bản ghi trả `404`.
 - `PATCH /api/v2/stream-sources/{id}`: `url` (chỉ camera RTSP, để đổi mật khẩu; loại khác trả `422`), `name`, `exclude_zones`, `always_on`, `auto_settings` (`{pipeline_id, min_confidence?, max_track_seconds?, max_height?}`; `always_on` cần `pipeline_id` của profile joint), `keyframe_retention_hours`, `track_retention_days` (`null` là giữ mãi). Áp dụng từ phiên kế tiếp.
 - `DELETE /api/v2/stream-sources/{id}`: `204`; camera đã có phiên trả `409`.
 - `POST /api/v2/stream-sources/{id}/sessions`: `{pipeline_id,min_confidence?,max_track_seconds?,max_height?}` → `202`, phiên `queued`. `min_confidence` mặc định 0.96 (hiệu chỉnh trên ICPR, xem [EVALUATION.md](EVALUATION.md#kết-quả-hiệu-chỉnh-offline-trên-icpr-26102026)). `max_height` là 480, 720 hoặc 1080 (mặc định).

@@ -1,3 +1,4 @@
+import { recordMinutes } from './clips';
 import { readdir, rm, stat } from 'node:fs/promises';
 import * as path from 'node:path';
 import { Database } from '../database/database';
@@ -57,6 +58,7 @@ export class Retention {
       pruned: await this.pruneKeyframes(),
       deleted: await this.deleteTracks(),
       orphans: await this.sweepOrphans(),
+      recordings: await this.sweepRecordings(),
     };
   }
 
@@ -131,6 +133,38 @@ export class Retention {
     for (const { id } of deleted)
       await removeFolder(safeStorage(this.options.dataDir, `recognition/${id}`));
     return deleted.length;
+  }
+
+  /**
+   * Rolling recordings (live/{session}/record/eNNN) whose index has not changed for the
+   * kept time: the live process prunes its running epoch itself. Cut videos are a cache
+   * kept for an hour (live/recording-cache is not a session, so sweepOrphans removes it).
+   */
+  private async sweepRecordings() {
+    let removed = 0;
+    const keepMs = recordMinutes() * 60_000;
+    const live = safeStorage(this.options.dataDir, 'live');
+    for (const session of await readdir(live).catch(() => [] as string[])) {
+      const record = path.join(live, session, 'record');
+      for (const epoch of await readdir(record).catch(() => [] as string[])) {
+        const index = await stat(path.join(record, epoch, 'index.jsonl')).catch(() => null);
+        const folder = await stat(path.join(record, epoch)).catch(() => null);
+        const changed = index?.mtimeMs ?? folder?.mtimeMs ?? Date.now();
+        if (Date.now() - changed > keepMs) {
+          await removeFolder(path.join(record, epoch));
+          removed++;
+        }
+      }
+      const cache = path.join(live, session, 'cache');
+      for (const name of await readdir(cache).catch(() => [] as string[])) {
+        const info = await stat(path.join(cache, name)).catch(() => null);
+        if (info && Date.now() - info.mtimeMs > HOUR) {
+          await rm(path.join(cache, name), { force: true });
+          removed++;
+        }
+      }
+    }
+    return removed;
   }
 
   private async sweepOrphans() {
