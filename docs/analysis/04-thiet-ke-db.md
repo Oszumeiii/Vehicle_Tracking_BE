@@ -1,6 +1,6 @@
 # 10. Thiết kế cơ sở dữ liệu PostgreSQL
 
-**Ngày đối chiếu:** 27/10/2026. Đây là thiết kế vật lý đang được mã nguồn sử dụng sau mười migration, không phải một schema đề xuất chưa triển khai: 0004–0006 bổ sung YouTube Live, 0007 camera demo, 0008 gán nhãn, 0009 chỉ cập nhật dữ liệu, 0010 thêm camera RTSP. Có **15 bảng nghiệp vụ và 1 bảng kỹ thuật**. Các bảng dùng tên tiếng Anh; ý nghĩa và quy tắc được giải thích bằng tiếng Việt.
+**Ngày đối chiếu:** 27/10/2026. Đây là thiết kế vật lý đang được mã nguồn sử dụng sau mười một migration, không phải một schema đề xuất chưa triển khai: 0004–0006 bổ sung YouTube Live, 0007 camera demo, 0008 gán nhãn, 0009 chỉ cập nhật dữ liệu, 0010 thêm camera RTSP, 0011 thêm clip video của track live. Có **15 bảng nghiệp vụ và 1 bảng kỹ thuật**. Các bảng dùng tên tiếng Anh; ý nghĩa và quy tắc được giải thích bằng tiếng Việt.
 
 ## 10.1. Nguyên tắc mô hình hóa
 
@@ -443,6 +443,7 @@ ORDER BY r.revision;
 - [Migration 0008](../../src/database/migrations/0008_evaluation.sql): bộ mẫu, mẫu và nhãn độc lập.
 - [Migration 0009](../../src/database/migrations/0009_live_threshold.sql): chỉ cập nhật dữ liệu, đổi `auto_settings.min_confidence` 0.85 thành 0.96; camera đặt giá trị khác giữ nguyên.
 - [Migration 0010](../../src/database/migrations/0010_rtsp_sources.sql): `source_type = rtsp` cho camera IP.
+- [Migration 0011](../../src/database/migrations/0011_live_clips.sql): `recognition_jobs.clip_storage_key` (clip MP4 của track live; CHECK chỉ job live). Bản ghi đệm nằm trên filesystem, không có bảng riêng.
 - [Migration runner](../../src/database/migrate.ts): bảng schema_migrations, checksum và readiness.
 - [Worker engine](../../src/recognition/engine.ts): claim, validation năm crop, lưu kết quả trong transaction.
 - [Results controller](../../src/results/results.controller.ts): review, effective_text, tìm kiếm mới nhất, CSV và lọc storage key.

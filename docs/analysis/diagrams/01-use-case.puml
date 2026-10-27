@@ -42,6 +42,7 @@ rectangle "HỆ THỐNG NHẬN DIỆN BIỂN SỐ" {
   usecase "UC18\nCamera demo" as UC18
   usecase "UC19\nGán nhãn độc lập" as UC19
   usecase "UC20\nBáo cáo hiệu chỉnh ngưỡng" as UC20
+  usecase "UC21\nXem lại video" as UC21
 }
 actor "Worker\n(tự động)" as W
 
@@ -67,6 +68,8 @@ A -- UC18
 U -- UC19
 A -- UC20
 UC20 ..> UC19 : <<include>>\n[nhãn đồng thuận]
+U -- UC21
+UC21 ..> UC08 : <<extend>>\n[từ kết quả tra cứu]
 W -- UC14
 UC15 ..> UC16 : <<include>>\n[alert]
 
@@ -81,5 +84,6 @@ Worker tự bật lại phiên của camera 24/7 (UC14).
 UC18, UC20 và tạo bộ mẫu (UC19) chỉ dành cho Admin;
 mọi người dùng gán nhãn mù trên bộ mẫu.
 Nhập thủ công sau xử lý dùng UC07, do người dùng chọn.
+UC21: clip của track hoặc bản ghi camera (giữ vài giờ).
 endlegend
 @enduml
