@@ -525,3 +525,58 @@ def test_live_reader_reuses_a_gray_frame_the_source_already_made(tmp_path):
     assert first[3] is marker, "a provided small gray is used as is"
     assert second[3].shape == (180, 320) and second[3].mean() > 0, "otherwise it is computed"
     reader.stop()
+
+def test_rtsp_command_is_live_tcp_wallclock_and_scaled_before_showinfo():
+    from app.live.source import RtspFrames
+    command = RtspFrames("rtsp://cam/stream", max_height=720, ffmpeg="ffmpeg").command
+    assert "-re" not in command and "-rw_timeout" not in command
+    i = command.index("-i")
+    for flag, value in (("-rtsp_transport", "tcp"), ("-use_wallclock_as_timestamps", "1")):
+        assert command[command.index(flag) + 1] == value and command.index(flag) < i
+    assert command[command.index("-timeout") + 1] == str(15 * 10**6)
+    vf = command[command.index("-vf") + 1]
+    assert vf.startswith("scale=-2:'min(ih,720)',") and vf.split(",")[-1].startswith("showinfo"), "showinfo stays last"
+
+
+def test_rtsp_header_gives_the_scaled_frame_size_and_a_sane_fps():
+    from app.live.source import RtspFrames
+    frames = RtspFrames("rtsp://cam/stream", ffmpeg="ffmpeg")
+    frames._other_line(b"  Stream #0:0: Video: h264 (High), yuvj420p(pc, bt709, progressive), 1920x1080 [SAR 1:1 DAR 16:9], 90000 fps, 25 tbr")
+    frames._other_line(b"  Stream #0:0: Video: rawvideo (BGR[24] / 0x18524742), bgr24(pc, progressive), 1280x720, q=2-31")
+
+    class Running:
+        def poll(self):
+            return None
+
+    frames.process = Running()  # already "started": probe only reads the parsed header
+    info = frames.probe(timeout=1)
+    assert info == {"width": 1280, "height": 720, "fps": 25.0, "video_id": "rtsp"}
+    assert frames.shape == (720, 1280, 3) and frames.size == 1280 * 720 * 3
+
+
+def test_rtsp_refusal_ends_the_session_and_never_leaks_the_password():
+    import sys as _sys
+    from app.live.source import RtspFrames, redact_url
+    assert redact_url("rtsp://admin:s3cr%40t@10.0.0.5:554/h264 failed") == "rtsp://admin:***@10.0.0.5:554/h264 failed"
+    assert redact_url("rtsp://10.0.0.5/live") == "rtsp://10.0.0.5/live"
+    url = "rtsp://admin:hunter2@127.0.0.1:9/cam"
+    refused = RtspFrames(url, ffmpeg="ffmpeg")
+    refused.command = [_sys.executable, "-c", "import sys; sys.stderr.write("
+                       f"'[rtsp @ 0] method DESCRIBE failed: 401 Unauthorized {url}\n')"]
+    with pytest.raises(StreamEnded) as ended:
+        refused.probe(timeout=10)
+    assert "401" in str(ended.value) and "hunter2" not in str(ended.value)
+    down = RtspFrames(url, ffmpeg="ffmpeg")
+    down.command = [_sys.executable, "-c", f"import sys; sys.stderr.write('Connection to {url} failed: Error number -138\n')"]
+    with pytest.raises(SourceError) as error:
+        down.probe(timeout=10)
+    assert "hunter2" not in str(error.value) and "***" in str(error.value)
+
+
+def test_rtsp_not_found_is_retried_like_an_outage():
+    import sys as _sys
+    from app.live.source import RtspFrames
+    restarting = RtspFrames("rtsp://admin:hunter2@127.0.0.1:9/cam", ffmpeg="ffmpeg")
+    restarting.command = [_sys.executable, "-c", "import sys; sys.stderr.write('Server returned 404 Not Found\n')"]
+    with pytest.raises(SourceError):
+        restarting.probe(timeout=10)

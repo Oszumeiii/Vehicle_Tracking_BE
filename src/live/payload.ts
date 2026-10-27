@@ -14,6 +14,24 @@ export function isYoutubeUrl(url: string) {
   return z.url().safeParse(url).success && YOUTUBE_HOSTS.includes(new URL(url).hostname);
 }
 
+/** True for rtsp:// or rtsps:// with a host: an IP camera the live process opens with ffmpeg. */
+export function isRtspUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    return ['rtsp:', 'rtsps:'].includes(parsed.protocol) && parsed.hostname.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Hide the password of rtsp://user:password@host URLs. Camera URLs often carry
+ * credentials; they must not reach API responses, events or stored error messages.
+ */
+export function redactUrl(text: string) {
+  return text.replace(/(rtsps?:\/\/)([^/@\s:]*):[^/@\s]*@/gi, '$1$2:***@');
+}
+
 /** The video id of a watch, youtu.be, live, shorts or embed link; null for channel links. */
 export function youtubeVideoId(url: string): string | null {
   let id: string | null | undefined;
@@ -49,8 +67,9 @@ export const excludeZones = z
   )
   .max(16);
 
-/** Where a live process reads from: a YouTube link, or a demo video replayed in a loop. */
-export type LiveSource = { type: 'youtube'; url: string } | { type: 'file'; path: string };
+/** Where a live process reads from: a YouTube link, an IP camera, or a demo video replayed in a loop. */
+export type LiveSource =
+  { type: 'youtube'; url: string } | { type: 'rtsp'; url: string } | { type: 'file'; path: string };
 
 /** Payload for `python -m app.live`: the same pinned snapshot a job gets, plus the source. */
 export function livePayload(
@@ -65,7 +84,7 @@ export function livePayload(
       source.type === 'file'
         ? // Paced at its frame rate and looped, so it behaves like a camera that never ends.
           { type: 'file', path: source.path, realtime: true, loop: true, exclude_zones: zones }
-        : { type: 'youtube', url: source.url, exclude_zones: zones, max_height: maxHeight },
+        : { type: source.type, url: source.url, exclude_zones: zones, max_height: maxHeight },
   };
 }
 

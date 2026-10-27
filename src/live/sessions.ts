@@ -1,4 +1,5 @@
 import type { QueryResult } from 'pg';
+import { redactUrl } from './payload';
 
 interface Queryable {
   query(text: string, values?: any[]): Promise<QueryResult>;
@@ -30,6 +31,6 @@ export async function recordEvent(
   await c.query('INSERT INTO live_session_events(session_id,event_type,payload) VALUES($1,$2,$3)', [
     sessionId,
     type,
-    JSON.stringify(payload),
+    redactUrl(JSON.stringify(payload)), // e.g. ffmpeg errors quoting a camera URL
   ]);
 }

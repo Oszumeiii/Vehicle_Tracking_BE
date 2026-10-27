@@ -247,6 +247,89 @@ test('administrators add demo cameras that replay a video from demo-videos in a 
   );
 });
 
+test('IP cameras use their RTSP URL in the live process but never return its password', async () => {
+  const secret = 'rtsp://admin:hunter2@10.0.0.5:554/Streaming/Channels/101';
+  for (const url of ['http://10.0.0.5/live', 'rtsp://', 'not a url'])
+    await api
+      .post('/api/v2/stream-sources')
+      .set(as('owner'))
+      .send({ name: 'Gate', source_type: 'rtsp', url })
+      .expect(422);
+  const created = await api
+    .post('/api/v2/stream-sources')
+    .set(as('owner'))
+    .send({ name: 'Gate', source_type: 'rtsp', url: secret })
+    .expect(201);
+  const source = created.body;
+  assert.equal(source.source_type, 'rtsp');
+  assert.equal(source.url, 'rtsp://admin:***@10.0.0.5:554/Streaming/Channels/101');
+  assert.equal(source.embed_url, null);
+  for (const response of [
+    created,
+    await api.get('/api/v2/stream-sources').set(as('owner')).expect(200),
+    await api.get(`/api/v2/stream-sources/${source.id}`).set(as('owner')).expect(200),
+  ])
+    assert.ok(!JSON.stringify(response.body).includes('hunter2'));
+  // New credentials: only an RTSP camera's URL can change.
+  const rotated = 'rtsp://admin:n3w-pass@10.0.0.5:554/Streaming/Channels/101';
+  const patched = await api
+    .patch(`/api/v2/stream-sources/${source.id}`)
+    .set(as('owner'))
+    .send({ url: rotated })
+    .expect(200);
+  assert.ok(!JSON.stringify(patched.body).includes('n3w-pass'));
+  const youtube = await camera('YouTube');
+  await api
+    .patch(`/api/v2/stream-sources/${youtube.id}`)
+    .set(as('owner'))
+    .send({ url: rotated })
+    .expect(422);
+
+  const queued = (
+    await api
+      .post(`/api/v2/stream-sources/${source.id}/sessions`)
+      .set(as('owner'))
+      .send({ pipeline_id: 'joint', max_height: 720 })
+      .expect(202)
+  ).body;
+  const spawned: { args: string[]; child: Fake }[] = [];
+  const live = manager(spawned);
+  await live.tick();
+  const payload = JSON.parse(
+    await readFile(join(dataDir, 'live', queued.id, 'payload.json'), 'utf8'),
+  );
+  assert.deepEqual(payload.source, {
+    type: 'rtsp',
+    url: rotated,
+    exclude_zones: [],
+    max_height: 720,
+  });
+  // ffmpeg errors quote the URL: events and the stored error keep the password out.
+  spawned[0].child.line({
+    type: 'status',
+    status: 'reconnecting',
+    reason: `Connection to ${rotated} failed`,
+  });
+  spawned[0].child.line({
+    type: 'status',
+    status: 'failed',
+    reason: `Camera refused the stream: ${rotated}`,
+  });
+  spawned[0].child.exit(1);
+  const row = await until(
+    () => sessionRow(queued.id),
+    (value) => value.status === 'failed',
+    'rtsp session failed',
+  );
+  assert.ok(!row.error_message.includes('n3w-pass') && row.error_message.includes('admin:***@'));
+  const stored = await fixture.database.query(
+    'SELECT payload::text AS text FROM live_session_events WHERE session_id=$1',
+    [queued.id],
+  );
+  assert.ok(stored.rows.length > 0);
+  assert.ok(stored.rows.every((event) => !String(event.text).includes('n3w-pass')));
+});
+
 test('live manager runs a session, ingests tracks as jobs and stops on request', async () => {
   const source = await camera('Camboriú', [[0.1, 0.1, 0.3, 0.2]]);
   const queued = await session(source.id);

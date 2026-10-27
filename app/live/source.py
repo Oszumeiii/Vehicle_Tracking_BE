@@ -60,6 +60,14 @@ def resolve_youtube(url, ydl_class=None, max_height=1080):
 
 SHOWINFO = re.compile(rb"Parsed_showinfo.*?\bn:\s*(\d+).*?\bpts_time:\s*(-?[\d.]+)")
 OPENING = re.compile(rb"Opening '[^']*/sq/(\d+)/")
+# "Stream #0:0: Video: h264 (High), yuvj420p(pc), 1920x1080, 25 fps, ..." (input and output sections)
+STREAM_VIDEO = re.compile(rb"Stream #\d+:\d+.*?: Video: .*?, (\d{2,5})x(\d{2,5})\b(?:.*?, ([\d.]+) fps)?")
+CREDENTIALS = re.compile(r"(rtsps?://)([^/@\s:]*):[^/@\s]*@", re.IGNORECASE)
+
+
+def redact_url(text):
+    """Hide the password of rtsp://user:password@host URLs in messages, events and logs."""
+    return CREDENTIALS.sub(r"\1\2:***@", str(text))
 
 
 class Pacer:
@@ -176,7 +184,9 @@ class FfmpegFrames:
         except Exception:  # noqa: BLE001 - without an anchor captures fall back to receive time
             self._segment_time = None
 
-    def __iter__(self):
+    def _start(self):
+        if self.process is not None:
+            return
         import os
         from app.core.processes import WindowsJob
         self.job = WindowsJob() if os.name == "nt" else None
@@ -185,6 +195,12 @@ class FfmpegFrames:
         if self.job:
             self.job.assign(self.process)  # ffmpeg dies with this process
         threading.Thread(target=self._read_stderr, name="ffmpeg-stderr", daemon=True).start()
+
+    def _other_line(self, line):
+        """A stderr line that is not a frame's showinfo (subclasses read stream headers here)."""
+
+    def __iter__(self):
+        self._start()
         expected = 0
         while True:
             started = time.monotonic()
@@ -192,7 +208,7 @@ class FfmpegFrames:
             waited = time.monotonic() - started
             if frame is None:
                 code = self.process.wait()
-                raise SourceError(f"ffmpeg stopped (exit {code}): {' | '.join(self.errors) or 'no output'}")
+                self._stopped(code)
             with self._pts_ready:
                 self._pts_ready.wait_for(lambda: self.pts or self._stderr_done, timeout=5)
                 if not self.pts:
@@ -205,6 +221,9 @@ class FfmpegFrames:
                 self.first_pts = pts
             if self.pacer.admit(pts, waited):
                 yield pts, frame
+
+    def _stopped(self, code):
+        raise SourceError(f"ffmpeg stopped (exit {code}): {' | '.join(self.errors) or 'no output'}")
 
     def _read_frame(self):
         frame = np.empty(self.shape, np.uint8)  # not zero-filled: every byte is read below
@@ -233,8 +252,10 @@ class FfmpegFrames:
                 with self._pts_ready:
                     self.pts.append((int(match.group(1)), float(match.group(2))))
                     self._pts_ready.notify_all()
-            elif b"rror" in line or b"failed" in line.lower():
-                self.errors.append(line.decode(errors="replace").strip()[:300])
+            else:
+                self._other_line(line)
+                if b"rror" in line or b"failed" in line.lower():
+                    self.errors.append(redact_url(line.decode(errors="replace").strip())[:300])
         with self._pts_ready:
             self._stderr_done = True
             self._pts_ready.notify_all()
@@ -247,6 +268,73 @@ class FfmpegFrames:
         if self.job:
             self.job.close()
             self.job = None
+
+
+class NoPacer:
+    """An RTSP camera sends at its own rate; nothing builds up to pace."""
+    lag = skipped_seconds = 0.0
+    skipped = 0
+
+    def admit(self, pts, waited):
+        return True
+
+
+class RtspFrames(FfmpegFrames):
+    """An IP camera over RTSP, decoded by ffmpeg like a YouTube stream.
+
+    One connection only (many cameras accept a single client): probe() starts ffmpeg
+    and reads the frame size from its stream header (after scaling down to max_height),
+    then the same process delivers the frames. Timestamps are the arrival wall clock,
+    since camera PTS may repeat or reset; there is no broadcast clock to anchor.
+    """
+
+    def __init__(self, url, max_height=1080, ffmpeg=None, timeout_seconds=15, **options):
+        super().__init__(url, 0, 0, ffmpeg=ffmpeg, rw_timeout_seconds=timeout_seconds, pacer=NoPacer(), **options)
+        command = self.command
+        # Network options belong before -i; -re (HLS pacing) does not apply to a live camera.
+        command.remove("-re")
+        i = command.index("-rw_timeout")
+        command[i:i + 2] = ["-rtsp_transport", "tcp", "-timeout", str(int(timeout_seconds * 1e6)),
+                            "-use_wallclock_as_timestamps", "1"]
+        vf = command.index("-vf") + 1
+        command[vf] = f"scale=-2:'min(ih,{int(max_height)})'," + command[vf]
+        self.streams, self.final = [], None
+        self._header = threading.Event()
+
+    def _other_line(self, line):
+        match = STREAM_VIDEO.search(line)
+        if match:
+            self.streams.append((int(match.group(1)), int(match.group(2)),
+                                 float(match.group(3)) if match.group(3) else None))
+            if len(self.streams) >= 2:  # input, then the scaled rawvideo output
+                self._header.set()
+        lower = line.lower()
+        # Wrong credentials are final. 404 is not: a restarting camera or relay answers it
+        # until its stream is back (a wrong path still fails after the reconnect limit).
+        if b"401 unauthorized" in lower or b"403 forbidden" in lower:
+            self.final = redact_url(line.decode(errors="replace").strip())[:300]
+
+    def probe(self, timeout=20.0):
+        """Start ffmpeg and return the stream info the runner needs (width, height, fps)."""
+        self._start()
+        deadline = time.monotonic() + timeout
+        while not self._header.wait(.2):
+            if self.process.poll() is not None or time.monotonic() > deadline:
+                time.sleep(.2)  # let the stderr thread record the reason
+                self.close()
+                if self.final:
+                    raise StreamEnded(f"Camera refused the stream: {self.final}")
+                raise SourceError(f"Camera did not answer: {' | '.join(self.errors) or 'timeout'}")
+        (_, _, fps), (width, height, _) = self.streams[0], self.streams[1]
+        # Cameras report 0, 90000 (the clock rate) or nothing: fall back to 25.
+        fps = fps if fps and 1 <= fps <= 120 else 25.0
+        self.size, self.shape = width * height * 3, (height, width, 3)
+        return dict(width=width, height=height, fps=fps, video_id="rtsp")
+
+    def _stopped(self, code):
+        if self.final:
+            raise StreamEnded(f"Camera refused the stream: {self.final}")
+        super()._stopped(code)
 
 
 def _fetch_text(url):
