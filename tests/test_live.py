@@ -100,7 +100,7 @@ def test_looped_file_replays_with_increasing_timestamps(tmp_path):
     _plate_video(video, 10)
     frames = FileFrames(video, loop=True)
     assert not frames.finite
-    pts = [p for p, _ in itertools.islice(iter(frames), 25)]
+    pts = [p for p, *_ in itertools.islice(iter(frames), 25)]
     frames.close()
     steps = np.diff(pts)
     assert len(pts) == 25 and steps.min() > 0
@@ -500,3 +500,28 @@ def test_resolve_youtube_caps_the_video_height():
 
     assert resolve_youtube("https://youtu.be/x", Ydl, max_height=720)["height"] == 720
     assert Ydl.options["format"] == "bv*[height<=720]"
+
+
+def test_ffmpeg_decode_options_go_before_the_input_and_skip_showinfo_checksums():
+    from app.live.__main__ import decode_options
+    plain = FfmpegFrames("clip.mp4", 320, 180, ffmpeg="ffmpeg").command
+    assert "showinfo=checksum=0" in plain and "-hwaccel" not in plain and "-threads" not in plain
+    command = FfmpegFrames("clip.mp4", 320, 180, ffmpeg="ffmpeg", hwaccel="cuda", threads=2).command
+    i = command.index("-i")
+    assert command[command.index("-hwaccel") + 1] == "cuda" and command.index("-hwaccel") < i
+    assert command[command.index("-threads") + 1] == "2" and command.index("-threads") < i
+    assert decode_options({}) == {"hwaccel": None, "threads": None}
+    assert decode_options({"PLATE_LIVE_HWACCEL": "CUDA", "PLATE_LIVE_FFMPEG_THREADS": "4"}) == {"hwaccel": "cuda", "threads": 4}
+    for bad in ({"PLATE_LIVE_HWACCEL": "vaapi"}, {"PLATE_LIVE_FFMPEG_THREADS": "99"}):
+        with pytest.raises(ValueError):
+            decode_options(bad)
+
+
+def test_live_reader_reuses_a_gray_frame_the_source_already_made(tmp_path):
+    image = np.full((180, 320, 3), 90, np.uint8)
+    marker = np.zeros((180, 320), np.uint8)
+    reader = LiveReader(Frames([(0., image, marker), (.1, image)], finite=True), capacity=4).start()
+    first, second = reader.get(1), reader.get(1)
+    assert first[3] is marker, "a provided small gray is used as is"
+    assert second[3].shape == (180, 320) and second[3].mean() > 0, "otherwise it is computed"
+    reader.stop()

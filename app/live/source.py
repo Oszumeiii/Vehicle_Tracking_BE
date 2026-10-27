@@ -7,6 +7,7 @@ the newest ones when the consumer falls behind.
 from collections import deque
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
+import io
 import re
 import subprocess
 import threading
@@ -135,7 +136,8 @@ class FfmpegFrames:
 
     finite = False
 
-    def __init__(self, url, width, height, ffmpeg=None, rw_timeout_seconds=15, pacer=None, fetch=None):
+    def __init__(self, url, width, height, ffmpeg=None, rw_timeout_seconds=15, pacer=None, fetch=None,
+                 hwaccel=None, threads=None):
         if ffmpeg is None:
             import imageio_ffmpeg
             ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
@@ -145,8 +147,14 @@ class FfmpegFrames:
         # pipeline; Pacer caps that catch-up so the reader does not drop frames mid-track.
         # HLS starts at the newest segment instead of three behind the live edge.
         hls = ["-live_start_index", "-1"] if url.startswith(("http://", "https://")) else []
+        # Decoding is the main CPU cost per camera: ffmpeg's default (one decoder thread
+        # per core in every process) oversubscribes the CPU with several cameras, and
+        # -hwaccel cuda moves decoding to the GPU's NVDEC unit.
+        decode = (["-hwaccel", hwaccel] if hwaccel else []) + (["-threads", str(threads)] if threads else [])
+        # showinfo's default per-frame checksum and plane statistics are never used.
         self.command = [ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "info", "-re", "-copyts", *hls,
-                        "-rw_timeout", str(int(rw_timeout_seconds * 1e6)), "-i", url, "-an", "-vf", "showinfo", "-fps_mode", "passthrough", "-f", "rawvideo",
+                        "-rw_timeout", str(int(rw_timeout_seconds * 1e6)), *decode, "-i", url, "-an",
+                        "-vf", "showinfo=checksum=0", "-fps_mode", "passthrough", "-f", "rawvideo",
                         "-pix_fmt", "bgr24", "pipe:1"]
         self.pacer = pacer or Pacer()
         self.fetch = fetch or _fetch_text
@@ -199,17 +207,22 @@ class FfmpegFrames:
                 yield pts, frame
 
     def _read_frame(self):
-        buffer = bytearray(self.size)
-        view, got = memoryview(buffer), 0
+        frame = np.empty(self.shape, np.uint8)  # not zero-filled: every byte is read below
+        view, got = memoryview(frame.reshape(-1)), 0
         while got < self.size:
             count = self.process.stdout.readinto(view[got:])
             if not count:
                 return None
             got += count
-        return np.frombuffer(buffer, np.uint8).reshape(self.shape)
+        return frame
 
     def _read_stderr(self):
-        for line in self.process.stderr:
+        # The pipes are unbuffered for the frame reads; readline on a raw pipe reads one
+        # byte per system call, hundreds per showinfo line, all holding the GIL.
+        stderr = self.process.stderr
+        if isinstance(stderr, io.RawIOBase):
+            stderr = io.BufferedReader(stderr, 1 << 16)
+        for line in stderr:
             match = SHOWINFO.search(line)
             opening = None if match else OPENING.search(line)
             if opening and self.first_sequence is None:
@@ -262,7 +275,7 @@ class FileFrames:
         while True:
             last, step = None, 0.
             with closing(read_frames(self.path)) as frames:
-                for _, pts, image, _ in frames:
+                for _, pts, image, gray in frames:
                     if self._closed.is_set():
                         return
                     if last is not None:
@@ -274,7 +287,7 @@ class FileFrames:
                         delay = start + pts - self.clock()
                         if delay > 0 and self._closed.wait(delay):
                             return
-                    yield pts, image
+                    yield pts, image, gray  # the decoder thread already made the small gray
             if not self.loop or last is None:
                 return
             offset += last + (step or 1 / 30)
@@ -310,13 +323,16 @@ class LiveReader:
         previous = None
         frames = iter(self.connection)
         try:
-            for pts, image in frames:
+            for item in frames:
                 if self._stop.is_set():
                     break
+                # Connections yield (pts, image) or (pts, image, small gray) when already computed.
+                pts, image = item[0], item[1]
+                gray = item[2] if len(item) > 2 else small_gray(image)
                 if previous is not None and not pts > previous:
                     raise SourceError(f"Timestamps went backwards ({previous:.3f} -> {pts:.3f} s)")
                 previous = pts
-                frame = (self.read + 1, pts, image, small_gray(image), datetime.now(timezone.utc))
+                frame = (self.read + 1, pts, image, gray, datetime.now(timezone.utc))
                 with self._ready:
                     self.read += 1
                     if self.lossless:

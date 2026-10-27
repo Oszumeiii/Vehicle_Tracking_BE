@@ -127,6 +127,7 @@ Lưu ý khi vận hành:
   - Mọi phiên chạy đồng thời phải dùng cùng một pipeline.
   - Lỗi của một phiên không ảnh hưởng phiên kia. Nhưng phiên bị treo hoặc quá thời gian dừng thì cả host bị kill; các phiên trong đó kết thúc `failed`, và camera 24/7 tự bật lại.
   - `PLATE_LIVE_SHARED_SAMPLING_SCALE` (mặc định 1) giảm tần suất lấy mẫu của detector nếu GPU quá tải. Hệ số này được ghi ở `stats.sampling_scale` và `statistics.sampling_scale` của từng track.
+  - `PLATE_LIVE_HWACCEL` (`none` hoặc `cuda`) và `PLATE_LIVE_FFMPEG_THREADS` (0–16) chỉnh cách ffmpeg giải mã luồng YouTube. Trên RTX 4060 Laptop, 3 camera chạy được với mặc định; 4 camera bỏ 4–30% frame (xem `TESTING.md`).
   - Hai luồng 1080p tranh CPU trong cùng tiến trình nên có thể bỏ khoảng 2–3% frame; dùng `max_height: 720` cho camera YouTube thứ hai thì giảm còn 0,2–0,4%.
   - Log của host nằm ở `data/live/host.log`.
 - **Job upload và phiên live không chạy cùng lúc** (`PLATE_LIVE_EXCLUSIVE_GPU=true`, mặc định). Lý do: trên GPU 8 GB, hai tiến trình cùng nạp YOLO11l và OCR làm tràn VRAM, và cả hai gần như đứng hẳn (đo được: job 3 phút mất 19 phút thay vì 2 phút, phiên live ngừng xử lý). Khi một phiên live đang chạy, job upload chờ ở `queued`; khi job upload đang chạy, phiên mới chờ ở `queued`. Chỉ đặt `false` khi GPU đủ VRAM cho cả hai.
