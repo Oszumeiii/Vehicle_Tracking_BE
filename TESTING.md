@@ -413,3 +413,17 @@ Model đọc 5 crop cùng lúc, nên một crop hỏng kéo confidence của c�
 - **Track ngắn** (hiện bị loại: 29% ở live, 42% ở upload): 4 frame vẫn đạt precision khoảng 95% ở ngưỡng 0.96–0.97; 3 frame cần ngưỡng 0.97–0.98. Có thể đọc thay vì loại, nhưng phía Node và DB đang bắt buộc đúng 5 frame khác nhau, nên đây là thay đổi riêng, chưa làm.
 - ICPR không qua bước chọn crop (mỗi track đúng 5 frame), nên bảng ICPR của ngưỡng 0.96 không đổi.
 
+**Camera thật sau khi áp dụng** (Camboriú YouTube 1080p, ban ngày Brazil, cùng camera, khác giờ nên lượng xe khác):
+
+| Phiên | Thời gian | Track | `readable` | Confidence trung vị | Frame bỏ |
+|---|---|---|---|---|---|
+| Cách chọn cũ (27/10, 13:06 giờ Brazil) | 7,8 phút | 60 | 4 (6,7%) | 0,692 | 4/13.936 |
+| Cách chọn mới (27/10, 15:16 giờ Brazil) | 10,3 phút | 115 | **14 (12,2%)** | **0,777** | 16/18.422 |
+
+**Soát bằng mắt 14 track `readable` sau thay đổi:**
+- 12 khớp với biển nhìn thấy trên crop.
+- 1 có vẻ đọc sai: `QIW5655`, crop giống `QIW5665`.
+- 1 khó phân định (I/J).
+
+Precision trên camera thật ước khoảng 86–93%, thấp hơn 96,9% trên ICPR như đã dự báo (ICPR là cận trên). Cần nhãn người để đo chính xác và chỉnh lại ngưỡng cho camera.
+
