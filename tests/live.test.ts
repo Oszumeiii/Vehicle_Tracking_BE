@@ -702,3 +702,123 @@ test('an exclusive GPU runs upload jobs or live sessions, never both, and a sile
   assert.equal(gate.enter('jobs'), true, 'the GPU is free again');
   gate.leave('jobs');
 });
+
+test('a live track gets its clip, and a result shows where its video is', async () => {
+  const source = await camera('Clips');
+  const queued = await session(source.id);
+  const spawned: { args: string[]; child: Fake }[] = [];
+  const live = manager(spawned);
+  await live.tick();
+  const { child } = spawned[0];
+  const stdin: string[] = [];
+  child.stdin?.on('data', (chunk) => stdin.push(String(chunk)));
+  await api.post('/api/v2/watchlist').set(as('owner')).send({ plate: 'WAT1234' }).expect(201);
+  await writeTrack(queued.id, 'e000-t000001');
+  await writeTrack(queued.id, 'e000-t000002', { status: 'low_confidence', text: 'WAT1234' });
+  await writeTrack(queued.id, 'e000-t000003', { status: 'low_confidence', text: 'XYZ9876' });
+  child.line({ type: 'status', status: 'running', epoch: 0, width: 1920, height: 1080, fps: 30 });
+  child.line({ type: 'track', track: 'e000-t000001', status: 'readable', epoch: 0 });
+  child.line({ type: 'track', track: 'e000-t000002', status: 'low_confidence', epoch: 0 });
+  child.line({ type: 'track', track: 'e000-t000003', status: 'low_confidence', epoch: 0 });
+  const jobs = await until(
+    async () =>
+      (
+        await fixture.database.query(
+          `SELECT j.id, j.live_track_key, j.captured_from, j.captured_to, a.id AS result
+           FROM recognition_jobs j JOIN plate_appearances a ON a.job_id=j.id
+           WHERE j.live_session_id=$1 ORDER BY j.live_track_key`,
+          [queued.id],
+        )
+      ).rows,
+    (rows) => rows.length === 3,
+    'three jobs',
+  );
+  // A watchlist hit is clipped although the policy (readable) skipped it.
+  await until(
+    async () => stdin.join(''),
+    (text) => text.includes('clip e000-t000002\n'),
+    'clip request for the alert',
+  );
+  assert.ok(!stdin.join('').includes('e000-t000003'));
+
+  const clipFile = join(dataDir, 'live', queued.id, 'clips', 'e000-t000001.mp4');
+  await mkdir(join(dataDir, 'live', queued.id, 'clips'), { recursive: true });
+  await writeFile(clipFile, 'mp4-bytes');
+  child.line({
+    type: 'clip',
+    track: 'e000-t000001',
+    path: 'clips/e000-t000001.mp4',
+    first_seen_offset: 2.5,
+  });
+  const clipped = await until(
+    async () =>
+      (
+        await fixture.database.query(
+          'SELECT clip_storage_key, statistics FROM recognition_jobs WHERE id=$1',
+          [jobs[0].id],
+        )
+      ).rows[0],
+    (row) => row.clip_storage_key !== null,
+    'clip attached',
+  );
+  assert.equal(clipped.clip_storage_key, `recognition/${jobs[0].id}/clip.mp4`);
+  assert.equal(clipped.statistics.clip_first_seen_offset, 2.5);
+  assert.ok(!(await exists(clipFile)));
+
+  const info = await api
+    .get(`/api/v2/recognition-results/${jobs[0].result}/video-info`)
+    .set(as('owner'))
+    .expect(200);
+  assert.equal(info.body.kind, 'clip');
+  assert.equal(info.body.first_seen_offset, 2.5);
+  assert.equal(info.body.url, `/api/v2/recognition-results/${jobs[0].result}/video`);
+  const video = await api.get(info.body.url).set(as('owner')).expect(200);
+  assert.equal(video.headers['x-plate-first-seen-seconds'], '2.5');
+  assert.equal(video.headers['content-type'], 'video/mp4');
+  await api.get(info.body.url).set(as('owner')).set('Range', 'bytes=0-2').expect(206);
+  await api.get(`${info.body.url}?token=${tokens.owner}`).expect(200); // <video src> cannot send headers
+  await api.get(info.body.url).set(as('stranger')).expect(404);
+
+  // No clip: the camera's recording, while it still covers the track, then nothing.
+  const third = `/api/v2/recognition-results/${jobs[2].result}/video-info`;
+  assert.equal((await api.get(third).set(as('owner')).expect(200)).body.kind, 'none');
+  const record = join(dataDir, 'live', queued.id, 'record', 'e000');
+  await mkdir(record, { recursive: true });
+  const iso = (value: Date | string, delta: number) =>
+    new Date(new Date(value).getTime() + delta * 1000).toISOString();
+  await writeFile(
+    join(record, 'index.jsonl'),
+    [
+      {
+        file: 'seg_000000.mp4',
+        utc_start: iso(jobs[2].captured_from, -20),
+        utc_end: iso(jobs[2].captured_from, -10),
+      },
+      {
+        file: 'seg_000001.mp4',
+        utc_start: iso(jobs[2].captured_from, -10),
+        utc_end: iso(jobs[2].captured_to, 30),
+      },
+    ]
+      .map((entry) => JSON.stringify({ ...entry, pts_start: 0, pts_end: 10, keyframes: [0] }))
+      .join('\n') + '\n',
+  );
+  assert.equal((await api.get(third).set(as('owner')).expect(200)).body.kind, 'recording');
+  const covered = await api
+    .get(`/api/v2/stream-sources/${source.id}/recording/coverage`)
+    .set(as('owner'))
+    .expect(200);
+  assert.deepEqual(covered.body.items, [
+    { from: iso(jobs[2].captured_from, -20), to: iso(jobs[2].captured_to, 30) },
+  ]);
+  await api
+    .get(`/api/v2/stream-sources/${source.id}/recording`)
+    .query({ from: iso(jobs[2].captured_from, 0), to: iso(jobs[2].captured_from, 3600) })
+    .set(as('owner'))
+    .expect(400);
+  await api
+    .get(`/api/v2/stream-sources/${source.id}/recording/coverage`)
+    .set(as('stranger'))
+    .expect(404);
+  child.exit(0);
+});

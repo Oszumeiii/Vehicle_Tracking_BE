@@ -341,3 +341,25 @@ Chưa đo lại sau các thay đổi này: lượt đo bị dừng vì máy gầ
 - Ngay sau khi vào luồng, ffmpeg đôi khi thoát (mã 0, lỗi giải mã khi bắt đầu giữa GOP); phiên tự nối lại trong khoảng 1 s.
 - Chưa thử với camera IP thật của nhóm.
 
+## Ghi đệm liên tục và video của kết quả (2026-10-27)
+
+**Cách ghi:** ffmpeg thêm một output stream copy thành đoạn MP4 10 s. Đoạn MPEG-TS ban đầu không seek chính xác được, nên đã đổi sang MP4.
+
+**Index:** mỗi đoạn có PTS, giờ UTC (cùng cách tính giờ với track) và danh sách keyframe. Clip cắt bằng `inpoint`/`outpoint` của concat demuxer, bắt đầu tại keyframe ngay trước mốc cần xem. Không dùng `-ss` phía output vì với B-frame nó bỏ mất keyframe cần bắt đầu.
+
+**Đo:** hai camera (demo 1080p và YouTube Camboriú 720p) trong một host, bật ghi, 5 phút, RTX 4060 Laptop.
+
+| Chỉ số | Kết quả |
+|---|---|
+| Frame bỏ | 0 / 0 (2 camera không ghi trong 30 phút trước đó: 0,04–0,07%) |
+| Lag p95 | 1,0–1,1 s |
+| GPU / VRAM | 55% / 6,2 GB |
+| Dung lượng bản ghi YouTube 720p | 65 MB / 5 phút, khoảng 0,8 GB/giờ |
+| Clip của camera demo | 7/7 track `readable` có clip, 0,2–7,5 s sau khi có track; khoảng 7 MB/clip (GOP 5 s) |
+| Cắt theo yêu cầu từ bản ghi YouTube | 0,5 s cho clip 10,3 s (2,2 MB, 1280×720) |
+| Đúng thời điểm | Khung hình tại `first_seen_offset` trong clip trùng box của track: biển số nằm đúng trong khung |
+
+**Lỗi tìm ra khi đo:** với HLS, ffmpeg liệt kê đoạn đầu tiên từ PTS 0 thay vì PTS thật của luồng, nên giờ UTC của đoạn đó bị lùi gần 3 giờ. Recorder giờ lấy keyframe đầu của đoạn làm mốc bắt đầu; đã có test.
+
+Không có lượt đo tắt ghi cùng lúc vì máy chỉ còn khoảng 3,6 GB RAM trống. Số so sánh lấy từ lần đo 30 phút trước đó.
+

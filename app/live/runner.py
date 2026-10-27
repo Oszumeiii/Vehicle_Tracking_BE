@@ -12,6 +12,7 @@ import time
 from PIL import Image
 
 from app.live import DEFAULT_MIN_CONFIDENCE
+from app.live.recorder import ClipMaker, Recorder
 from app.live.source import TIMEOUT, LiveReader, SourceError, StreamEnded
 from app.recognition.fusion import levenshtein
 from app.recognition.runner import _predict_joint, build_appearance, write_json
@@ -95,7 +96,7 @@ class LiveRunner:
     def __init__(self, snapshot, out, open_source, emit, model, recognizer, *, data_dir=None,
                  min_confidence=DEFAULT_MIN_CONFIDENCE, max_track_seconds=30., max_reconnects=10, read_timeout=15.,
                  stats_interval=1., buffer_seconds=1.5, reader_capacity=None, backoff_max=30., exclude_zones=(),
-                 sampling_scale=1.):
+                 sampling_scale=1., recording=None):
         if snapshot.get("recognizer", {}).get("input_mode") != "five_frame_joint":
             raise ValueError("Live recognition supports five_frame_joint pipelines only")
         self.exclude_zones = [list(map(float, zone)) for zone in exclude_zones]
@@ -119,6 +120,10 @@ class LiveRunner:
         self.stats_interval, self.backoff_max = stats_interval, backoff_max
         self.linker = DuplicateLinker()
         self.tracks, self.warmed = 0, set()
+        # recording: {"minutes", "clip_policy" (readable|all|none), "pad"} records the stream in
+        # rolling segments (OUT/record/eNNN) and cuts clips of tracks (OUT/clips); None: off.
+        self.recording = recording
+        self.clips, self.spans = None, {}
 
     def _warm_up(self, cfg):
         """First CUDA calls take seconds; make them before frames start to arrive.
@@ -140,7 +145,8 @@ class LiveRunner:
         while not stop.is_set():
             self.emit(dict(type="status", status="connecting", epoch=epoch))
             try:
-                info, connection = self.open_source()
+                info, connection = (self.open_source(record_dir=self.out / "record" / f"e{epoch:03d}")
+                                    if self.recording else self.open_source())
             except StreamEnded as exc:
                 return self._final("ended", str(exc))
             except Exception as exc:  # noqa: BLE001 - network/extractor failures are retried
@@ -173,6 +179,7 @@ class LiveRunner:
         reader = LiveReader(connection, capacity).start()
         self.linker.reset()
         clock = dict(started_at=None, first_pts=None, stream_time=getattr(connection, "stream_time", None))
+        recorder, self.clips = self._start_recording(info, connection, clock)
         outcome, reason, frames = "error", None, 0
         last_frame = last_stats = time.monotonic()
         processed_since = 0
@@ -228,7 +235,36 @@ class LiveRunner:
             # Tracks seen before a failure or stop are still finished and recognized.
             for candidate in session.close():
                 self._record(epoch, candidate, cfg, clock)
+        if recorder:
+            recorder.stop()
+        if self.clips:
+            self.clips.finish()
+            self.clips = None
         return outcome, reason, frames
+
+    def _start_recording(self, info, connection, clock):
+        """Recorder and clip maker of an epoch: a network stream records itself; a demo video is its own recording."""
+        if not self.recording:
+            return None, None
+        pad = float(self.recording.get("pad", 3.))
+        record_dir = getattr(connection, "record_dir", None)
+        if record_dir is not None:
+            def to_utc(start, end):
+                if clock["started_at"] is None:
+                    now = utc(datetime.now(timezone.utc))
+                    return now, now
+                return capture_times(clock, start, end)[1:]
+            recorder = Recorder(record_dir, to_utc, keep_minutes=float(self.recording.get("minutes", 240))).start()
+            return recorder, ClipMaker(self.out, self.emit, pad, recorder=recorder)
+        if getattr(connection, "path", None) is not None and info.get("duration"):
+            return None, ClipMaker(self.out, self.emit, pad, video=(connection.path, info["duration"]))
+        return None, None
+
+    def request_clip(self, key):
+        """Clip a track of the current epoch outside the clip policy (e.g. a watchlist alert)."""
+        clips, span = self.clips, self.spans.get(key)
+        if clips is not None and span is not None:
+            clips.request(key, *span)
 
     def _record(self, epoch, candidate, cfg, clock):
         """One failed track (evidence or OCR) is reported without stopping the stream."""
@@ -266,6 +302,13 @@ class LiveRunner:
                       appearance=appearance)
         write_json(folder / "track.json", record)
         self.tracks += 1
+        if self.recording:
+            self.spans[key] = (candidate["first_seconds"], candidate["last_seconds"])
+            if len(self.spans) > 5000:
+                self.spans.pop(next(iter(self.spans)))
+            policy = self.recording.get("clip_policy", "readable")
+            if self.clips is not None and (policy == "all" or (policy == "readable" and status == "readable")):
+                self.clips.request(key, candidate["first_seconds"], candidate["last_seconds"])
         self.emit(dict(type="track", track=key, epoch=epoch, text=text, status=status, confidence=confidence,
                        duplicate_of=duplicate_of, captured_from=record["captured_from"],
                        captured_to=record["captured_to"],

@@ -291,6 +291,24 @@ test('threshold migration moves cameras saved with the old 0.85 default to 0.96 
   assert.deepEqual(await saved(cameras.none), {});
 });
 
+test('only live jobs carry a clip', async () => {
+  const db = fixture.database;
+  const owner = await seedUser(db);
+  const media = newId();
+  await db.query(
+    `INSERT INTO media_assets (id,owner_id,original_name,media_type,storage_key,mime_type,size_bytes,sha256)
+     VALUES ($1,$2,'a.mp4','video',$3,'video/mp4',1,$4)`,
+    [media, owner.id, `media/${media}.mp4`, 'b'.repeat(64)],
+  );
+  await assert.rejects(
+    db.query(
+      `INSERT INTO recognition_jobs(id,media_id,input_mode,clip_storage_key) VALUES ($1,$2,'scene','x.mp4')`,
+      [newId(), media],
+    ),
+    { code: '23514' },
+  );
+});
+
 test('SQL migration is idempotent and rejects changes to an applied migration', async () => {
   assert.deepEqual(await migrate(fixture.database), []);
   const destination = join(fixture.root, 'changed-migrations');

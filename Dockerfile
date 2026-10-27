@@ -37,9 +37,9 @@ COPY config config
 COPY app app
 COPY scripts scripts
 
-# The API only probes uploads in Python (scripts/probe_media.py).
+# The API probes uploads (scripts/probe_media.py) and cuts recorded live video (app/live/clips.py).
 FROM runtime AS api
-RUN /opt/venv/bin/pip install --no-cache-dir Pillow opencv-python-headless
+RUN /opt/venv/bin/pip install --no-cache-dir Pillow opencv-python-headless imageio-ffmpeg==0.6.0
 EXPOSE 3000
 CMD ["sh", "-c", "node dist/src/cli.js migrate && exec node dist/src/main.js"]
 

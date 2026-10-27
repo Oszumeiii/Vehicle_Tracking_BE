@@ -373,3 +373,24 @@ test('live samples export stratified crops, predictions and a ground-truth templ
     /Use:/,
   );
 });
+
+test('old rolling recordings and cut videos are swept, a running epoch is kept', async () => {
+  const live = join(dataDir, 'live', 'a'.repeat(32));
+  const oldEpoch = join(live, 'record', 'e000');
+  const newEpoch = join(live, 'record', 'e001');
+  const cache = join(live, 'cache');
+  for (const folder of [oldEpoch, newEpoch, cache]) await mkdir(folder, { recursive: true });
+  const { writeFile } = await import('node:fs/promises');
+  await writeFile(join(oldEpoch, 'index.jsonl'), '');
+  await writeFile(join(newEpoch, 'index.jsonl'), '');
+  await writeFile(join(cache, 'old.mp4'), 'x');
+  await writeFile(join(cache, 'new.mp4'), 'x');
+  const past = new Date(Date.now() - 5 * 3600_000);
+  await utimes(join(oldEpoch, 'index.jsonl'), past, past);
+  await utimes(join(cache, 'old.mp4'), past, past);
+  const retention = new Retention(db(), workerOptions(), { intervalMs: 60_000, batch: 50 });
+  const swept = await retention.sweep();
+  assert.equal(swept.recordings, 2);
+  assert.ok(!(await exists(oldEpoch)) && (await exists(newEpoch)));
+  assert.ok(!(await exists(join(cache, 'old.mp4'))) && (await exists(join(cache, 'new.mp4'))));
+});

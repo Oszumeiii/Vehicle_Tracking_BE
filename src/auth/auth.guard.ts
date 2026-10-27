@@ -11,7 +11,7 @@ export class AuthGuard implements CanActivate {
     let token = /^Bearer ([A-Za-z0-9_-]+)$/i.exec(authHeader)?.[1];
     const assetRequest =
       ['GET', 'HEAD'].includes(request.method) &&
-      /^\/api\/v2\/(?:media\/[^/]+\/content|detections\/[^/]+\/artifacts\/(?:crop|frame|enhanced))\/?$/.test(
+      /^\/api\/v2\/(?:media\/[^/]+\/content|detections\/[^/]+\/artifacts\/(?:crop|frame|enhanced)|recognition-results\/[^/]+\/video|stream-sources\/[^/]+\/recording)\/?$/.test(
         request.path,
       );
     if (!authHeader && assetRequest && typeof request.query?.token === 'string') {

@@ -8,6 +8,7 @@ from collections import deque
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 import io
+from pathlib import Path
 import re
 import subprocess
 import threading
@@ -145,7 +146,7 @@ class FfmpegFrames:
     finite = False
 
     def __init__(self, url, width, height, ffmpeg=None, rw_timeout_seconds=15, pacer=None, fetch=None,
-                 hwaccel=None, threads=None):
+                 hwaccel=None, threads=None, record_dir=None):
         if ffmpeg is None:
             import imageio_ffmpeg
             ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
@@ -164,6 +165,16 @@ class FfmpegFrames:
                         "-rw_timeout", str(int(rw_timeout_seconds * 1e6)), *decode, "-i", url, "-an",
                         "-vf", "showinfo=checksum=0", "-fps_mode", "passthrough", "-f", "rawvideo",
                         "-pix_fmt", "bgr24", "pipe:1"]
+        if record_dir is not None:
+            # A second output copies the stream into 10 s segments (recorder.py); no re-encoding,
+            # and with -copyts their times are the frames' PTS.
+            record_dir = Path(record_dir)
+            record_dir.mkdir(parents=True, exist_ok=True)
+            self.command += ["-map", "0:v:0", "-c", "copy", "-f", "segment", "-segment_time", "10",
+                             "-segment_format", "mp4", "-reset_timestamps", "0",
+                             "-segment_list", str(record_dir / "segments.csv"), "-segment_list_type", "csv",
+                             str(record_dir / "seg_%06d.mp4")]
+        self.record_dir = record_dir
         self.pacer = pacer or Pacer()
         self.fetch = fetch or _fetch_text
         self.process = self.job = None

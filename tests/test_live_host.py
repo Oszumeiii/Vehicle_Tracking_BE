@@ -265,3 +265,18 @@ def test_jobs_keep_real_time_only_while_cameras_run():
     busy[0] = False
     pace(30.)
     assert slept == [.9], "no camera: full speed"
+
+
+def test_clip_commands_reach_the_session_runner(tmp_path):
+    requested = []
+    FakeRunner.request_clip = lambda self, key: requested.append((self.source, key))
+    try:
+        host, _, _ = make_host(tmp_path)
+        start(host, tmp_path, "a", "camboriu")
+        wait(lambda: host.emit.of("a", "stats"))
+        host.command(dict(cmd="clip", session="a", track="e000-t000007"))
+        host.command(dict(cmd="clip", session="missing", track="x"))
+        assert requested == [("camboriu", "e000-t000007")]
+        host.serve(iter([]))
+    finally:
+        del FakeRunner.request_clip
