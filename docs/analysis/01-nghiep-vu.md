@@ -89,7 +89,7 @@ Quyền kế thừa từ `media_assets.owner_id` sang job, appearance, detection
 
 ### 3.2. Ngoài phạm vi
 
-Camera CCTV/RTSP, hơn hai camera live đồng thời trên một GPU 8 GB, bãi xe, vé/thu phí, chủ phương tiện, xử phạt, nhận dạng danh tính xe, chia sẻ dữ liệu công khai, huấn luyện model và tự động sửa biển số theo luật quốc gia không thuộc bản đầu. Không có API hủy job đang chạy hoặc retry tại chỗ; chạy lại tạo job mới. Frontend hoàn chỉnh, OCR ảnh đơn và thẩm định accuracy trên tập nhãn của người gán độc lập là các hạng mục riêng cần tiếp tục khi triển khai sản phẩm/đánh giá.
+Hơn ba camera live đồng thời trên một GPU 8 GB, lưu video toàn thời gian (chỉ có ghi đệm vài giờ và clip cho track quan trọng), bãi xe, vé/thu phí, chủ phương tiện, xử phạt, nhận dạng danh tính xe, chia sẻ dữ liệu công khai, huấn luyện model và tự động sửa biển số theo luật quốc gia không thuộc bản đầu. Không có API hủy job đang chạy hoặc retry tại chỗ; chạy lại tạo job mới. Frontend hoàn chỉnh, OCR ảnh đơn và thẩm định accuracy trên tập nhãn của người gán độc lập là các hạng mục riêng cần tiếp tục khi triển khai sản phẩm/đánh giá.
 
 ## 4. Yêu cầu chức năng và phi chức năng
 
@@ -126,6 +126,7 @@ Camera CCTV/RTSP, hơn hai camera live đồng thời trên một GPU 8 GB, bãi
 | FR27 | Admin tạo bộ mẫu gán nhãn từ một camera hoặc phiên (lấy mẫu phân tầng theo 7 khoảng confidence); mọi người dùng gán nhãn mù, sửa được nhãn của mình. | UC19 |
 | FR28 | Báo cáo hiệu chỉnh ngưỡng: precision/coverage của trạng thái `readable` theo từng ngưỡng 0,50–0,99 trên các mẫu người gán đồng thuận, ngưỡng đề xuất theo precision mục tiêu, độ đồng thuận và độ chính xác theo khoảng; xuất file cho script đánh giá. | UC20 |
 | FR29 | Chạy nhiều phiên live cùng lúc trong một host dùng chung model khi cấu hình cho phép; lỗi một phiên không ảnh hưởng phiên khác. | UC14 |
+| FR30 | Ghi đệm liên tục camera live (giữ có hạn) và cho xem video của từng kết quả: clip lưu lâu dài cho track đọc rõ hoặc có cảnh báo, cắt theo yêu cầu từ bản ghi cho track khác khi còn giữ; xem bản ghi camera theo giờ. | UC21 |
 
 ### 4.2. Yêu cầu phi chức năng
 
@@ -182,6 +183,7 @@ Giới hạn upload có thể cấu hình; giới hạn 25 MP hiện được ki
 | BR30 | Nhãn lưu tách khỏi review; mỗi người một nhãn mỗi mẫu; `NULL` nghĩa là người gán cũng không đọc được. Báo cáo chỉ dùng mẫu mọi người gán đồng ý; mẫu bất đồng bị loại và có đếm riêng. Khi công bố kết quả phải ghi rõ nguồn nhãn (người hay AI). |
 | BR31 | Track nằm trong bộ mẫu không bị retention bỏ keyframe hay xóa; xóa bộ mẫu xóa nhãn nhưng giữ track. |
 | BR32 | Các phiên chạy đồng thời trong host dùng chung phải dùng cùng một pipeline. Phiên treo hoặc quá thời gian dừng làm cả host bị kill, vì không hủy riêng được một lời gọi model. |
+| BR33 | Bản ghi đệm giữ `PLATE_LIVE_RECORD_MINUTES` (mặc định 240 phút) rồi tự xóa; clip lâu dài theo vòng đời track (xóa track thì xóa clip, dọn keyframe không đụng clip). Video chỉ phục vụ người có quyền với camera/kết quả. |
 
 ## 6. Use case
 
@@ -374,6 +376,15 @@ Nguồn chỉnh sửa: [01-use-case.puml](diagrams/01-use-case.puml). Admin kế
 - **Hậu điều kiện:** Không thay đổi dữ liệu; `format=files` xuất dữ liệu cho `scripts.calibrate_threshold`.
 - **Truy vết:** FR28; BR28, BR30; `GET /evaluation-sets/{id}/report`.
 
+### UC21 — Xem lại video của biển số và bản ghi camera
+
+- **Actor:** User, Admin.
+- **Tiền điều kiện:** Có kết quả live (hoặc upload) thuộc quyền xem; camera đang/đã chạy với ghi đệm bật.
+- **Luồng chính:** (1) Tra biển số như UC08 hoặc mở một track trong feed/lịch sử. (2) Hệ thống cho biết video ở đâu: clip lưu cùng track, đoạn cắt từ bản ghi camera (nếu còn trong thời gian giữ), hoặc video upload. (3) Phát video, tua tới giây biển xuất hiện. (4) Tùy chọn mở bản ghi của camera quanh thời điểm đó và xem rộng hơn theo giờ.
+- **Thay thế/lỗi:** Hết thời gian giữ và không có clip: báo không còn video (404). Khoảng xem bản ghi quá 10 phút: 400. Không có quyền: 404.
+- **Hậu điều kiện:** Không đổi dữ liệu; đoạn cắt theo yêu cầu được giữ tạm 1 giờ.
+- **Truy vết:** FR30; BR33; API49–API52.
+
 ## 7. Tiêu chí nghiệm thu nghiệp vụ
 
 Các tình huống dưới đây là tiêu chí để nghiệm thu hệ thống. Chúng không thay thế báo cáo chạy test và không khẳng định đã đo chất lượng OCR trên tập nhãn chuẩn.
@@ -401,6 +412,7 @@ Các tình huống dưới đây là tiêu chí để nghiệm thu hệ thống.
 | AC19 | Camera demo | Admin tạo được, User thường bị 403, đường dẫn `../` bị 422; phiên phát lại liên tục qua nhiều vòng, watchlist cảnh báo khi clip lặp lại. | FR26; UC18 |
 | AC20 | Gán nhãn mù | Mẫu trả về không chứa biển máy đọc, confidence hay review; hai người gán song song; sửa được nhãn; track trong bộ mẫu không bị retention xóa. | FR27; UC19 |
 | AC21 | Báo cáo ngưỡng | Mẫu bất đồng bị loại; số liệu khớp `scripts.calibrate_threshold` trên cùng dữ liệu; User thường bị 403. | FR28; UC20 |
+| AC23 | Xem video của kết quả | Kết quả có clip phát được và tua đúng lúc biển xuất hiện; kết quả không clip phát được đoạn cắt khi còn bản ghi, hết hạn thì báo không còn video; người khác bị 404. | FR30; UC21 |
 | AC22 | Hai camera cùng lúc | Một host cho cả hai phiên; dừng một phiên không ảnh hưởng phiên kia; host crash thì các phiên `failed`; kill worker thì camera 24/7 tự bật lại. | FR29; UC14 |
 
 Với nghiệm thu low-resolution, cần thêm tập ground truth độc lập, danh sách split và cấu hình thiết bị. Báo cáo riêng chất lượng OCR trên crop và chất lượng toàn pipeline; checkpoint đã chạy được không đồng nghĩa đã đạt accuracy mục tiêu. Các yêu cầu tương lai về OCR ảnh đơn, SR, client hoàn chỉnh hoặc vận hành đa worker cần được bổ sung thành phạm vi và tiêu chí riêng trước khi nghiệm thu.
@@ -409,6 +421,6 @@ Với nghiệm thu low-resolution, cần thêm tập ground truth độc lập, 
 
 - [Hợp đồng API](../API.md), [hướng dẫn OCR](../OCR_KAGGLE.md), [tích hợp model](../MODEL_INTEGRATION.md), [đánh giá offline](../EVALUATION.md).
 - Mã nguồn: `src/auth/auth.controller.ts`, `src/common/ownership.ts`, `src/media/media.controller.ts`, `src/jobs/jobs.controller.ts`, `src/results/results.controller.ts`, `src/worker.ts`.
-- Schema thực: `src/database/migrations/0001_business.sql` đến `0010_rtsp_sources.sql`; thiết kế DB chi tiết nằm ở phần DB của bộ tài liệu này.
+- Schema thực: `src/database/migrations/0001_business.sql` đến `0011_live_clips.sql`; thiết kế DB chi tiết nằm ở phần DB của bộ tài liệu này.
 - Live: `src/live/` (camera, phiên, manager, host dùng chung, ingest, SSE hub, watchlist, retention), `app/live/` (tiến trình live và host), kết quả đo trong [TESTING.md](../../TESTING.md).
 - Gán nhãn: `src/evaluation/` (lấy mẫu, controller, báo cáo), quy trình trong [EVALUATION.md](../EVALUATION.md).
