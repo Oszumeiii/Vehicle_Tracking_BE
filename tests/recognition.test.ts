@@ -461,6 +461,35 @@ test('PostgreSQL worker claims once, persists immutable evidence atomically, rej
       );
     });
     await t.test(
+      'jobs the shared live host can run are claimed apart from the others',
+      async () => {
+        const processJob = await enqueue();
+        const videoId = newId();
+        await database.query(
+          `INSERT INTO media_assets (id,owner_id,original_name,media_type,storage_key,mime_type,size_bytes,sha256)
+        VALUES ($1,$2,'clip.mp4','video','clip.mp4','video/mp4',1,$3)`,
+          [videoId, user.id, 'a'.repeat(64)],
+        );
+        const hostJob = newId();
+        await database.query(
+          `INSERT INTO recognition_jobs(id,media_id,input_mode,pipeline_snapshot) VALUES ($1,$2,'scene',$3)`,
+          [
+            hostJob,
+            videoId,
+            JSON.stringify({ task: 'recognize', recognizer: { input_mode: 'five_frame_joint' } }),
+          ],
+        );
+        assert.equal((await claim(database, 'host'))?.id, hostJob);
+        assert.equal(
+          await claim(database, 'host'),
+          undefined,
+          'a plate-crop job needs its own process',
+        );
+        assert.equal((await claim(database, 'process'))?.id, processJob);
+        await recover(database);
+      },
+    );
+    await t.test(
       'successful runner stores original prediction and pending machine result',
       async () => {
         const jobId = await enqueue();

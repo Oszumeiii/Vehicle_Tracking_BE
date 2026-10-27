@@ -121,3 +121,70 @@ test('sessions share one host process, get their own events and stop independent
   assert.equal(await cClosed, null);
   assert.equal(shared.size, 0);
 });
+
+/** Whether the shared host closed this host process's stdin (asked it to exit). */
+const ended = (child: Fake) => (child.stdin as unknown as { writableEnded: boolean }).writableEnded;
+const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const snapshot = (id: string) => ({ id, version: '1', device: 'cuda', detector: { sha256: 'a' } });
+
+test('upload jobs run in the session host and a warm host is reused, restarted or released', async () => {
+  const { hosts, spawn } = fakeHosts();
+  const shared = new SharedLiveHost(spawn, dataDir, 1, 0.05);
+  const session = shared.spawn('python', args('s1'));
+  await tick();
+  const job = shared.runJob('python', 'job1', join(dataDir, 'in.json'), snapshot('joint'));
+  await tick();
+  assert.equal(hosts.length, 1, 'the job joined the session host');
+  assert.deepEqual(hosts[0].commands.at(-1), {
+    cmd: 'job',
+    job: 'job1',
+    payload: join(dataDir, 'in.json'),
+  });
+  assert.equal(shared.members, 2);
+  job.stop();
+  await tick();
+  assert.deepEqual(hosts[0].commands.at(-1), { cmd: 'stop_job', job: 'job1' });
+  hosts[0].child.line({ type: 'exit', job: 'job1', code: 1 });
+  assert.equal(await job.exit, 1);
+  hosts[0].child.line({ type: 'exit', session: 's1', code: 0 });
+  assert.equal(await closed(session), 0);
+  // Warm: the host outlives its last member for idleSeconds and is reused meanwhile.
+  const second = shared.runJob('python', 'job2', join(dataDir, 'in.json'), snapshot('joint'));
+  await tick();
+  assert.equal(hosts.length, 1);
+  hosts[0].child.line({ type: 'exit', job: 'job2', code: 0 });
+  assert.equal(await second.exit, 0);
+  // Another pipeline while idle: the warm host is ended and a fresh one started.
+  assert.ok(shared.accepts(snapshot('other')), 'an idle host may be restarted');
+  const third = shared.runJob('python', 'job3', join(dataDir, 'in.json'), snapshot('other'));
+  assert.ok(ended(hosts[0].child));
+  hosts[0].child.exit(0);
+  await tick();
+  assert.equal(hosts.length, 2);
+  assert.equal(shared.accepts(snapshot('joint')), false, 'busy with other models');
+  hosts[1].child.line({ type: 'exit', job: 'job3', code: 0 });
+  assert.equal(await third.exit, 0);
+  // Idle timeout ends the host; stopIdle waits for it to exit.
+  assert.ok(!ended(hosts[1].child));
+  await wait(120);
+  assert.ok(ended(hosts[1].child), 'ended after idleSeconds');
+  hosts[1].child.exit(0);
+  await shared.stopIdle();
+});
+
+test('a job ends with null when the host dies, and stopIdle ends a warm host at once', async () => {
+  const { hosts, spawn } = fakeHosts();
+  const shared = new SharedLiveHost(spawn, dataDir, 1, 3600);
+  const job = shared.runJob('python', 'job1', join(dataDir, 'in.json'), snapshot('joint'));
+  await tick();
+  hosts[0].child.exit(1);
+  assert.equal(await job.exit, null);
+  const next = shared.runJob('python', 'job2', join(dataDir, 'in.json'), snapshot('joint'));
+  await tick();
+  hosts[1].child.line({ type: 'exit', job: 'job2', code: 0 });
+  assert.equal(await next.exit, 0);
+  const stopping = shared.stopIdle();
+  assert.ok(ended(hosts[1].child), 'a warm idle host is ended at once');
+  hosts[1].child.exit(0);
+  await stopping;
+});

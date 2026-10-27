@@ -305,3 +305,22 @@ RTX 4060 Laptop 8 GB, Ryzen 7 7735HS. Ứng dụng khác đã chiếm khoảng 1
 - camera file dùng lại ảnh xám nhỏ mà luồng giải mã đã tính.
 
 Chưa đo lại sau các thay đổi này: lượt đo bị dừng vì máy gần hết RAM (15 GB, host đo chiếm khoảng 4 GB). Vì vậy số camera khuyến nghị vẫn là 3. `PLATE_LIVE_HWACCEL=cuda` và `PLATE_LIVE_FFMPEG_THREADS` được thêm làm tùy chọn, mặc định không đổi.
+
+## Job upload chạy cùng camera live (2026-10-27)
+
+**Cách chạy:** job đi vào host live dùng chung (lệnh `job`), dùng model host đã nạp.
+- Trước đây job phải chờ đến khi mọi camera tắt; với camera 24/7 thì chờ mãi.
+- Mỗi job tiến trình riêng còn tốn khoảng 18 s đầu chỉ để nạp torch và model.
+
+**Đo:** hai camera (demo 1080p và YouTube Camboriú 720p) chạy trong host; sau 60 s gửi job video đêm 3 phút (`camboriu.mp4`). Số đo tính trong lúc job chạy.
+
+| Cách chạy job | Thời gian job | Frame bỏ demo / YouTube | Lag p95 |
+|---|---|---|---|
+| Hết tốc độ | 166 s | 2,30% / 0,04% | 1,31 s |
+| Hết tốc độ, live được ưu tiên trên luồng GPU | 181 s | 1,51% / 5,42% | 1,48 s |
+| **Thời gian thực khi có camera** (mặc định) | 195 s | **0% / 0,88%** | 1,10 s |
+
+- Job cho kết quả đúng (2 track, như khi chạy riêng).
+- **Nút thắt là CPU/GIL:** job giải mã và tracking hết tốc độ trong cùng tiến trình. Ưu tiên trên GPU không đủ, nên job được giữ ở tốc độ thời gian thực khi có camera (`RealTime` trong `app/live/host.py`).
+- Vẫn giữ ưu tiên live trên luồng GPU: mỗi batch của job khoảng 0,5 s không được chen trước camera.
+

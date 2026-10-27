@@ -575,6 +575,12 @@ test('an exclusive GPU runs upload jobs or live sessions, never both, and a sile
   assert.equal(gate.enter('live'), false);
   gate.leave('jobs');
   gate.leave('jobs');
+  // Jobs inside the shared live host run beside sessions; a job process still runs alone.
+  assert.equal(gate.enter('live') && gate.enter('host'), true);
+  assert.equal(gate.enter('jobs'), false);
+  gate.leave('live');
+  assert.equal(gate.enter('jobs'), false, 'a host job also keeps job processes out');
+  gate.leave('host');
   const shared = new GpuGate(false);
   assert.equal(shared.enter('jobs') && shared.enter('live'), true);
 

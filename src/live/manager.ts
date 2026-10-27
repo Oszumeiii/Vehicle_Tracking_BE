@@ -37,23 +37,28 @@ export interface LiveSettings {
   exclusiveGpu: boolean;
   /** Detector sampling scale for sessions sharing one host (PLATE_LIVE_MAX_SESSIONS > 1). */
   samplingScale?: number;
+  hostIdleSeconds?: number;
 }
 
 /**
  * Upload jobs and live sessions share the worker's GPU. Two processes each loading
  * YOLO11l and the OCR model overcommit an 8 GB card, and both then nearly freeze, so
- * with exclusive use only one kind runs at a time (the other waits in its queue).
- * Checks and counts are synchronous, so slots and the live manager never race.
+ * with exclusive use a job in its own process ('jobs') runs alone. Jobs inside the
+ * shared live host ('host') use the models the sessions already hold, so they run
+ * beside live sessions. Checks and counts are synchronous, so slots and the live
+ * manager never race.
  */
+export type GpuUse = 'jobs' | 'live' | 'host';
 export class GpuGate {
-  private running = { jobs: 0, live: 0 };
+  private running: Record<GpuUse, number> = { jobs: 0, live: 0, host: 0 };
   constructor(readonly exclusive: boolean) {}
-  enter(kind: 'jobs' | 'live') {
-    if (this.exclusive && this.running[kind === 'jobs' ? 'live' : 'jobs'] > 0) return false;
+  enter(kind: GpuUse) {
+    const { jobs, live, host } = this.running;
+    if (this.exclusive && (kind === 'jobs' ? live + host > 0 : jobs > 0)) return false;
     this.running[kind]++;
     return true;
   }
-  leave(kind: 'jobs' | 'live') {
+  leave(kind: GpuUse) {
     this.running[kind]--;
   }
 }
@@ -78,6 +83,8 @@ export function liveSettings(): LiveSettings {
     stallSeconds: read('PLATE_LIVE_STALL_SECONDS', 180, 10, 3600),
     exclusiveGpu: exclusive === 'true',
     samplingScale: read('PLATE_LIVE_SHARED_SAMPLING_SCALE', 1, 0.1, 1),
+    // A shared host stays this long after its last session or job, keeping the models loaded.
+    hostIdleSeconds: read('PLATE_LIVE_HOST_IDLE_SECONDS', 300, 0, 86400),
   };
 }
 

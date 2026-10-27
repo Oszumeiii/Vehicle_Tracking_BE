@@ -9,12 +9,19 @@ Commands are JSON lines on stdin:
   {"cmd": "start", "session": ID, "payload": PATH, "out": DIR,
    "min_confidence": 0.96, "max_track_seconds": 30}
   {"cmd": "stop", "session": ID}
+  {"cmd": "job", "job": ID, "payload": PATH}   an upload job (recognition-input.json)
+  {"cmd": "stop_job", "job": ID}
 EOF (or {"cmd": "shutdown"}) stops every session; open tracks are finished first.
+A job runs app.recognition.runner.execute with the shared models and writes
+progress.json / recognition-result.json next to its payload, like the job subprocess;
+its end is {"type": "exit", "job": ID, "code": 0|1}.
 Events are the single-session JSON lines plus "session": ID, and a final
 {"type": "exit", "session": ID, "code": 0|1} once a session's thread is done.
 Host-level events have no session: {"type": "host", "status": "ready"|"stopped"}.
 """
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future
+import itertools
+import queue
 from datetime import datetime, timezone
 import json
 import os
@@ -22,6 +29,7 @@ from pathlib import Path
 import signal
 import sys
 import threading
+import time
 import traceback
 
 from app.live import DEFAULT_MIN_CONFIDENCE
@@ -59,6 +67,61 @@ class HostEmitter:
                 self.stop_all()
 
 
+class GpuThread:
+    """One thread that runs every model call; live sessions go before upload jobs.
+
+    A job's detector batch (~0.5 s) queued ahead of a camera's would stall that camera
+    past its frame buffer. Calls from job threads (named job-*) wait behind any call
+    from a live session; calls of the same kind keep their order.
+    """
+
+    def __init__(self, name="live-gpu"):
+        self.queue, self.order = queue.PriorityQueue(), itertools.count()
+        threading.Thread(target=self._run, name=name, daemon=True).start()
+
+    def submit(self, fn, *args, **kwargs):
+        future = Future()
+        rank = 1 if threading.current_thread().name.startswith("job-") else 0
+        self.queue.put((rank, next(self.order), future, fn, args, kwargs))
+        return future
+
+    def _run(self):
+        while True:
+            _, _, future, fn, args, kwargs = self.queue.get()
+            if not future.set_running_or_notify_cancel():
+                continue
+            try:
+                future.set_result(fn(*args, **kwargs))
+            except BaseException as exc:  # noqa: BLE001 - handed to the caller
+                future.set_exception(exc)
+
+
+class RealTime:
+    """Hold a job to the video's own pace while live sessions run in the host.
+
+    A job decodes and tracks as fast as it can, and in the same process that competes
+    with the cameras for CPU and the GIL (measured: 2-5% of camera frames dropped
+    during a job). At real time the job adds about one more camera's load. Without
+    sessions the job runs at full speed.
+    """
+
+    def __init__(self, busy, clock=time.monotonic, sleep=time.sleep):
+        self.busy, self.clock, self.sleep = busy, clock, sleep
+        self.anchor = None  # (wall, video timestamp)
+
+    def __call__(self, timestamp):
+        if not self.busy():
+            self.anchor = None
+            return
+        now = self.clock()
+        if self.anchor is None:
+            self.anchor = (now, timestamp)
+            return
+        ahead = (timestamp - self.anchor[1]) - (now - self.anchor[0])
+        if ahead > 0:
+            self.sleep(ahead)
+
+
 class SharedModels:
     """One detector and recognizer for every session; model calls run on one thread.
 
@@ -70,7 +133,7 @@ class SharedModels:
 
     def __init__(self, load):
         self.load, self.lock, self.loaded = load, threading.Lock(), None
-        self.gpu = ThreadPoolExecutor(max_workers=1, thread_name_prefix="live-gpu")
+        self.gpu = GpuThread()
 
     @staticmethod
     def key(snapshot):
@@ -114,7 +177,7 @@ class Host:
             raise ValueError("sampling_scale must be in (0, 1]")
         self.data_dir, self.models, self.sampling_scale = absolute(data_dir), models, sampling_scale
         self.buffer_seconds = buffer_seconds
-        self.sessions, self.lock = {}, threading.Lock()
+        self.sessions, self.jobs, self.lock = {}, {}, threading.Lock()
         self.emit = emit_factory(self.stop_all)
         if source_factory is None:
             from app.live.__main__ import source_factory
@@ -124,13 +187,25 @@ class Host:
 
     def stop_all(self):
         with self.lock:
-            for stop, _ in self.sessions.values():
+            for stop, _ in [*self.sessions.values(), *self.jobs.values()]:
                 stop.set()
 
     def command(self, message):
         cmd, session = message.get("cmd"), message.get("session")
         if cmd == "shutdown":
             return False
+        if cmd in ("job", "stop_job"):
+            job = message.get("job")
+            if not isinstance(job, str) or not job:
+                self.emit(dict(type="host", status="error", message=f"Command without job: {message}"))
+            elif cmd == "job":
+                self.start_job(job, message)
+            else:
+                with self.lock:
+                    entry = self.jobs.get(job)
+                if entry:
+                    entry[0].set()
+            return True
         if not isinstance(session, str) or not session:
             self.emit(dict(type="host", status="error", message=f"Command without session: {message}"))
         elif cmd == "start":
@@ -194,6 +269,46 @@ class Host:
                 self.sessions.pop(session, None)
             emit(dict(type="exit", code=code))
 
+    def start_job(self, job, message):
+        emit = lambda event: self.emit({**event, "job": job})  # noqa: E731
+        with self.lock:
+            if job in self.jobs:
+                emit(dict(type="exit", code=1))
+                return
+            stop = threading.Event()
+            thread = threading.Thread(target=self.run_job, args=(job, message, stop, emit), daemon=True,
+                                      name=f"job-{job[:8]}")
+            self.jobs[job] = (stop, thread)
+        thread.start()
+
+    def run_job(self, job, message, stop, emit):
+        """One upload job on the shared models; results go to files exactly as the job subprocess writes them."""
+        from app.recognition.runner import error_result, execute, write_json
+        code, folder = 1, None
+        try:
+            payload_file = absolute(message["payload"])
+            if self.data_dir not in payload_file.parents:
+                raise ValueError("payload must be inside the host data directory")
+            folder = payload_file.parent
+            payload = json.loads(payload_file.read_text(encoding="utf-8"))
+            if absolute(payload["output_dir"]) != folder:
+                raise ValueError("output_dir must be the payload's folder")
+            models = self.models.get(payload["pipeline_snapshot"])
+            result = execute(payload, models=models, stop=stop, throttle=RealTime(lambda: bool(self.sessions)))
+            write_json(folder / "recognition-result.json", {"ok": True, **result})
+            code = 0
+        except Exception as exc:  # noqa: BLE001 - reported through the job's result file
+            traceback.print_exc()
+            if folder is not None:
+                try:
+                    write_json(folder / "recognition-result.json", error_result(exc))
+                except OSError:
+                    traceback.print_exc()
+        finally:
+            with self.lock:
+                self.jobs.pop(job, None)
+            emit(dict(type="exit", code=code))
+
     def serve(self, lines):
         """Handle commands until EOF or shutdown, then stop and wait for every session."""
         self.emit(dict(type="host", status="ready", sampling_scale=self.sampling_scale))
@@ -210,7 +325,7 @@ class Host:
                 break
         self.stop_all()
         with self.lock:
-            threads = [thread for _, thread in self.sessions.values()]
+            threads = [thread for _, thread in [*self.sessions.values(), *self.jobs.values()]]
         for thread in threads:
             thread.join()
         self.emit(dict(type="host", status="stopped"))

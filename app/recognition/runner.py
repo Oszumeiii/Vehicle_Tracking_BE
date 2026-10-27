@@ -150,14 +150,14 @@ def build_appearance(candidate, manifest_rows, out, data_dir, start_seconds, end
                 detections=detections)
 
 
-def _video_detections(payload, model, folder, data_dir):
+def _video_detections(payload, model, folder, data_dir, stop=None, throttle=None):
     from app.recognition.video_tracking import export_crops, track_video, video_config, write_json as dump
     video = Path(payload["input_path"])
     cfg = video_config(video, payload["pipeline_snapshot"])
     out = folder / "tracking"
     out.mkdir(exist_ok=False)
     dump(out / "config.json", cfg)
-    pts, frames, candidates, summary = track_video(video, model, cfg, out)
+    pts, frames, candidates, summary = track_video(video, model, cfg, out, stop=stop, throttle=throttle)
     manifest = export_crops(video, cfg, out, pts, frames, candidates)
     grouped = defaultdict(list)
     for row in manifest:
@@ -175,28 +175,11 @@ def _video_detections(payload, model, folder, data_dir):
                          "frame_gate": summary["frame_gate"]}
 
 
-def execute(payload):
-    prepare = payload["pipeline_snapshot"].get("task") == "prepare"
+def load_models(payload):
+    """Detector (None for plate crops) and recognizer (None for prepare) of a job's pinned snapshot."""
     snapshot = payload["pipeline_snapshot"]
-    validate_snapshot(snapshot)
-    joint = not prepare and snapshot["recognizer"].get("input_mode", "single_crop") == "five_frame_joint"
-    if joint and (payload["media_type"] != "video" or payload["input_mode"] != "scene"):
-        raise ValueError("Joint five-frame OCR supports scene video only")
-    if not prepare:
-        sys.path.insert(0, snapshot["recognizer"]["module_root"])
-    folder, data_dir = Path(payload["output_dir"]), Path(payload["data_dir"])
-    def stage(name):
-        write_json(folder / "progress.json", {"stage": name})
-    stage("validating")
-    # Runtime versions are evidence; they are not replaced with claimed config versions.
-    versions = {}
-    for package in ("torch", "ultralytics", "Pillow", "numpy", "opencv-python"):
-        try:
-            versions[package] = importlib.metadata.version(package)
-        except importlib.metadata.PackageNotFoundError:
-            versions[package] = None
     recognizer = None
-    if not prepare:
+    if snapshot.get("task") != "prepare":
         module, factory = snapshot["recognizer"]["factory"].split(":")
         recognizer = getattr(importlib.import_module(module), factory)({**snapshot["recognizer"], "device": snapshot["device"]})
         if not callable(recognizer):
@@ -209,14 +192,51 @@ def execute(payload):
         names = getattr(model, "names", DETECTOR_CLASSES)
         if names != DETECTOR_CLASSES:
             raise ValueError(f"Detector checkpoint is not a license-plate model: {names}")
+    return model, recognizer
+
+
+def error_result(exc):
+    """recognition-result.json for a failed job: only codes the worker knows are passed on."""
+    code = getattr(exc, "code", "PIPELINE_FAILED")
+    allowed = {"ENVIRONMENT_ERROR", "CUDA_UNAVAILABLE", "CUDA_ERROR", "CHECKPOINT_MISSING",
+               "INVALID_VIDEO", "PIPELINE_FAILED", "RESULT_INVALID", "JOB_TIMEOUT", "WORKER_INTERRUPTED"}
+    return {"ok": False, "error_code": code if code in allowed else "PIPELINE_FAILED"}
+
+
+def execute(payload, models=None, stop=None, throttle=None):
+    """Run one job. models=(detector, recognizer) already loaded (the shared live host passes
+    its own); stop is an Event checked between frames and OCR calls; throttle(timestamp)
+    is called before each video frame and may sleep."""
+    from app.recognition.video_tracking import check_stop
+    prepare = payload["pipeline_snapshot"].get("task") == "prepare"
+    snapshot = payload["pipeline_snapshot"]
+    validate_snapshot(snapshot)
+    joint = not prepare and snapshot["recognizer"].get("input_mode", "single_crop") == "five_frame_joint"
+    if joint and (payload["media_type"] != "video" or payload["input_mode"] != "scene"):
+        raise ValueError("Joint five-frame OCR supports scene video only")
+    if not prepare and snapshot["recognizer"]["module_root"] not in sys.path:
+        sys.path.insert(0, snapshot["recognizer"]["module_root"])
+    folder, data_dir = Path(payload["output_dir"]), Path(payload["data_dir"])
+    def stage(name):
+        write_json(folder / "progress.json", {"stage": name})
+    stage("validating")
+    # Runtime versions are evidence; they are not replaced with claimed config versions.
+    versions = {}
+    for package in ("torch", "ultralytics", "Pillow", "numpy", "opencv-python"):
+        try:
+            versions[package] = importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError:
+            versions[package] = None
+    model, recognizer = models if models is not None else load_models(payload)
     stage("detection_tracking")
     if payload["media_type"] == "image":
         appearances, statistics = _image_detections(payload, model, folder, data_dir)
     else:
-        appearances, statistics = _video_detections(payload, model, folder, data_dir)
+        appearances, statistics = _video_detections(payload, model, folder, data_dir, stop=stop, throttle=throttle)
     if not prepare:
         stage("recognition")
     for appearance in appearances:
+        check_stop(stop)
         appearance["predictions"] = []
         if joint:
             detections = appearance["detections"]
@@ -276,10 +296,7 @@ def main():
         return 0
     except Exception as exc:
         traceback.print_exc()
-        code = getattr(exc, "code", "PIPELINE_FAILED")
-        allowed = {"ENVIRONMENT_ERROR", "CUDA_UNAVAILABLE", "CUDA_ERROR", "CHECKPOINT_MISSING",
-                   "INVALID_VIDEO", "PIPELINE_FAILED", "RESULT_INVALID", "JOB_TIMEOUT"}
-        write_json(args.payload.parent / "recognition-result.json", {"ok": False, "error_code": code if code in allowed else "PIPELINE_FAILED"})
+        write_json(args.payload.parent / "recognition-result.json", error_result(exc))
         return 1
 
 
