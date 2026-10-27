@@ -65,13 +65,28 @@ def watch_stdin(stop):
     stop.set()
 
 
+def decode_options(environ=os.environ):
+    """ffmpeg decoding settings for network streams from the worker's environment.
+
+    PLATE_LIVE_HWACCEL: "cuda" decodes on the GPU (NVDEC); "none" (default) on the CPU.
+    PLATE_LIVE_FFMPEG_THREADS: decoder threads per camera; 0 (default) lets ffmpeg decide.
+    """
+    hwaccel = environ.get("PLATE_LIVE_HWACCEL", "none").strip().lower()
+    if hwaccel not in ("none", "cuda", ""):
+        raise ValueError("PLATE_LIVE_HWACCEL must be none or cuda")
+    threads = int(environ.get("PLATE_LIVE_FFMPEG_THREADS") or 0)
+    if not 0 <= threads <= 16:
+        raise ValueError("PLATE_LIVE_FFMPEG_THREADS must be 0-16")
+    return dict(hwaccel=hwaccel if hwaccel == "cuda" else None, threads=threads or None)
+
+
 def source_factory(source):
     from app.live.source import FfmpegFrames, FileFrames, resolve_youtube
 
     if source.get("type") == "youtube":
         def open_youtube():
             info = resolve_youtube(source["url"], max_height=int(source.get("max_height") or 1080))
-            return info, FfmpegFrames(info["url"], info["width"], info["height"])
+            return info, FfmpegFrames(info["url"], info["width"], info["height"], **decode_options())
         return open_youtube
     if source.get("type") == "file":
         path = Path(source["path"])

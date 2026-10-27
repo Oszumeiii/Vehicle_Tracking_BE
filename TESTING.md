@@ -279,3 +279,29 @@ RTX 4060 Laptop 8 GB, Ryzen 7 7735HS. Ứng dụng khác đã chiếm khoảng 1
   - frame bị bỏ thật (`frames_dropped`) với 8/12/15 hiện gần 0.
 - **Hai camera với hfps thì CPU/GPU không theo kịp:** bỏ 12–17% frame, vượt xa mục tiêu dưới 1%.
 - **Pipeline hfps chỉ để thử nghiệm** cho job upload hoặc một camera. Không dùng hfps cho hai camera cùng lúc: mọi phiên trong host dùng chung pipeline đầu tiên được nạp.
+
+## Nhiều camera trên một GPU và tải CPU (2026-10-27)
+
+**Đo trên môi trường thật** (stack khởi động lại theo `main`, migration 0009 đã áp dụng): YouTube Camboriú 720p và camera demo ban ngày chạy chung một host trong 30 phút.
+- Bỏ frame: 0,04% (YouTube) và 0,07% (demo). Lag p95 khoảng 1,05 s. VRAM tối đa 6,0 GB, GPU trung bình 45%.
+- **Chất lượng:** ở ngưỡng 0.96, YouTube **720p** chỉ có 2/318 track `readable`, trong khi demo 1080p có 37/373. Camera thật nên để `max_height` 1080 nếu băng thông cho phép.
+
+**Mốc trên `main`** (5 phút mỗi cấu hình; nguồn: YouTube 720p cùng các clip demo 1080p30):
+
+| Số camera | Frame bỏ theo từng camera | Lag p95 | GPU | VRAM |
+|---|---|---|---|---|
+| 2 (30 phút) | 0,04% / 0,07% | khoảng 1,05 s | 45% | 6,0 GB |
+| 3 | 0,36% / 0,06% / 0,11% | 0,8–1,2 s | 54% | 5,6 GB |
+| 4 | 7,9% / 7,6% / 4,0% / 30% | 1,5–2,3 s | 62% | 5,6 GB |
+
+**Kết luận:**
+- 3 camera đạt mục tiêu bỏ frame dưới 1%, nhưng lag p95 đã chạm 1,2 s. 4 camera thì không chạy kịp.
+- GPU vẫn còn dư, nên nút thắt là CPU và GIL trong host Python dùng chung.
+
+**Giảm tải CPU trong cùng PR** (mỗi frame của luồng ffmpeg):
+- đọc stderr của ffmpeg qua buffer (trước đây đọc từng byte, mỗi dòng `showinfo` tốn hàng trăm lần gọi hệ thống khi đang giữ GIL);
+- `showinfo=checksum=0` (bỏ checksum và thống kê cho cả frame);
+- cấp phát frame bằng `np.empty` thay cho `bytearray` được điền số 0;
+- camera file dùng lại ảnh xám nhỏ mà luồng giải mã đã tính.
+
+Chưa đo lại sau các thay đổi này: lượt đo bị dừng vì máy gần hết RAM (15 GB, host đo chiếm khoảng 4 GB). Vì vậy số camera khuyến nghị vẫn là 3. `PLATE_LIVE_HWACCEL=cuda` và `PLATE_LIVE_FFMPEG_THREADS` được thêm làm tùy chọn, mặc định không đổi.
