@@ -1,6 +1,6 @@
 # Tương tác hệ thống, hợp đồng API và nghiệm thu
 
-**Ngày đối chiếu:** 26/10/2026. Phần này tiếp nối [nghiệp vụ và use case](01-nghiep-vu.md), dùng cùng các mã FR01–FR25, NFR01–NFR11, BR01–BR28, UC01–UC17. Nguồn quyết định hành vi hiện tại là controller, worker và migration trong repository; không coi mọi yêu cầu ban đầu là chức năng đã có.
+**Ngày đối chiếu:** 27/10/2026. Phần này tiếp nối [nghiệp vụ và use case](01-nghiep-vu.md), dùng cùng các mã FR01–FR25, NFR01–NFR11, BR01–BR28, UC01–UC17. Nguồn quyết định hành vi hiện tại là controller, worker và migration trong repository; không coi mọi yêu cầu ban đầu là chức năng đã có.
 
 ## 8. Sơ đồ sequence và ranh giới transaction
 
@@ -156,10 +156,10 @@ Quyền đi theo chủ camera; Admin xem tất cả. Track live là job nên API
 
 | Mã | Method và đường dẫn | Input chính | Kết quả thành công | Use case |
 |---|---|---|---|---|
-| API22 | `POST /stream-sources` | `name`, `url` YouTube, `exclude_zones?` | `201` camera kèm `embed_url` | UC13 |
+| API22 | `POST /stream-sources` | `name`, `url` YouTube, `exclude_zones?`; hoặc `source_type: rtsp` + `url` RTSP | `201` camera kèm `embed_url` (YouTube) hoặc URL đã che mật khẩu | UC13 |
 | API23 | `GET /stream-sources` | Phân trang | `200` camera kèm phiên hoạt động | UC13 |
 | API24 | `GET /stream-sources/{id}` | ID | `200` camera | UC13 |
-| API25 | `PATCH /stream-sources/{id}` | `name`, `exclude_zones`, `always_on`, `auto_settings`, thời hạn lưu | `200` camera sau cập nhật | UC13, UC14 |
+| API25 | `PATCH /stream-sources/{id}` | `name`, `exclude_zones`, `always_on`, `auto_settings`, thời hạn lưu, `url` (chỉ camera RTSP) | `200` camera sau cập nhật | UC13, UC14 |
 | API26 | `DELETE /stream-sources/{id}` | ID | `204` khi không còn phiên | UC13 |
 | API27 | `GET /stream-sources/{id}/snapshot` | ID | `200` keyframe mới nhất (JPEG) | UC13 |
 | API28 | `POST /stream-sources/{id}/sessions` | `pipeline_id`, `min_confidence?`, `max_track_seconds?`, `max_height?` | `202` phiên `queued` | UC14 |
@@ -252,7 +252,7 @@ Các tình huống dưới đây là tiêu chí có thể thực hiện lại; m
 | AT23 | Track live: xem, review, tra cứu theo biển, CSV, xóa job | Hành vi như kết quả upload; giờ chụp theo luồng | UC06–UC09; FR22 |
 | AT24 | SSE: mở, nối lại `Last-Event-ID`, cắt kết nối LISTEN | Không thiếu/trùng sự kiện; cảnh báo chỉ tới người đặt | UC15–UC16; FR23–FR24 |
 | AT25 | Camera 24/7, kill worker, dừng qua API | Tự bật lại; dừng thì tắt 24/7; không còn tiến trình con | UC14; FR21 |
-| AT26 | Kẹt mạng 12 s; chạy job upload khi camera chạy | Đuổi kịp không bỏ frame; job upload chờ đến khi GPU rảnh | NFR09, NFR11; BR27 |
+| AT26 | Kẹt mạng 12 s; chạy job upload khi camera chạy | Đuổi kịp không bỏ frame; job video joint chạy trong host cùng camera, job khác chờ GPU rảnh | NFR09, NFR11; BR27 |
 | AT27 | Dọn dữ liệu, xóa phiên | Còn 1 keyframe/track, crop còn; track review/cảnh báo được giữ; phiên đang chạy 409 | UC17; FR25 |
 | AT28 | Camera demo: Admin, User, đường dẫn `../`, file không tồn tại; chạy qua nhiều vòng | 201/403/422/422; PTS liên tục, watchlist cảnh báo khi clip lặp | UC18; FR26; BR29 |
 | AT29 | Bộ mẫu: lấy mẫu phân tầng, `next` không lộ kết quả máy, sửa nhãn, retention | Mỗi khoảng tối đa N mẫu; key trả về chỉ gồm evidence; nhãn ghi đè; track trong bộ mẫu không bị xóa | UC19; FR27; BR30–BR31 |
@@ -260,6 +260,9 @@ Các tình huống dưới đây là tiêu chí có thể thực hiện lại; m
 | AT31 | Hai camera 24/7 trong 30 phút; kill worker; dừng cả hai | Một host; bỏ frame dưới 1%; tự bật lại; host thoát và nhả GPU | UC14; FR29; NFR12 |
 | AT32 | Bật hai camera cùng lúc, và bật camera thứ hai khi camera đầu đang chạy | 60 s đầu không bỏ frame; phiên sau không warm-up lại; không phiên nào bị từ chối nhầm | UC14; FR29; NFR12 |
 | AT33 | `docker compose --profile app up` trên DB riêng | `api` healthy; job upload chạy trên GPU trong container; camera demo gửi track qua SSE đi qua nginx | NFR07; vận hành |
+| AT34 | Camera RTSP: sai mật khẩu, đúng mật khẩu, tắt camera 20 s rồi bật lại | Sai mật khẩu kết thúc ngay (401); chạy và có track; tự kết nối lại; không file sự kiện/log nào chứa mật khẩu; API trả URL đã che | UC13–UC14; FR19 |
+| AT35 | Hai camera chạy, gửi job video 3 phút | Job chạy trong host, kết quả như chạy riêng; camera bỏ dưới 1% frame | UC14; BR27; NFR12 |
+| AT36 | 2, 3, 4 camera trong một host | 3 camera bỏ dưới 1% frame; 4 camera vượt mức (khuyến nghị tối đa 3) | NFR12 |
 
 ### 13.2. Ma trận liên kết yêu cầu với thành phần thực hiện
 
@@ -288,7 +291,7 @@ Baseline đã ghi nhận trong các lượt triển khai là **48 test Node và 
 
 Test Node dùng NestJS/HTTP và PostgreSQL thật trong DB/cluster tạm; nhiều kết quả ML hoàn tất được tạo bằng fixture để kiểm quyền, transaction và hợp đồng. Test adapter/runner kiểm số frame, preprocessing, output và lỗi nhưng không đo accuracy. Đã ghi nhận smoke inference checkpoint/video thực trong quá trình tích hợp; smoke chứng minh đường chạy thực hiện được trên mẫu đó, không chứng minh chất lượng toàn tập hoặc khả năng tổng quát sang biển số Việt Nam.
 
-Sau khi bổ sung live (giai đoạn 1–5a), lượt chạy ghi nhận **64 test Node và 112 test Python đạt** cùng format check. Sau giai đoạn 6 (camera demo, gán nhãn, nhiều camera), lượt chạy ngày 25/10/2026 ghi nhận **69 test Node và 118 test Python đạt**. Sau giai đoạn 8 (26/10/2026): **72 test Node và 123 test Python đạt** (1 test bỏ qua). CI GitHub chạy test Node/Python cho backend, và lint/test/build cho FE ở mỗi pull request; các phép đo trên luồng YouTube thật (60 phút, kẹt mạng, 24/7, dọn dữ liệu, giờ luồng) được ghi trong [TESTING.md](../../TESTING.md) kèm ngày và phần cứng.
+Sau khi bổ sung live (giai đoạn 1–5a), lượt chạy ghi nhận **64 test Node và 112 test Python đạt** cùng format check. Sau giai đoạn 6 (camera demo, gán nhãn, nhiều camera), lượt chạy ngày 25/10/2026 ghi nhận **69 test Node và 118 test Python đạt**. Sau giai đoạn 8 (26/10/2026): **72 test Node và 123 test Python đạt** (1 test bỏ qua). Sau giai đoạn 9 (27/10/2026): **76 test Node và 134 test Python đạt**. CI GitHub chạy test Node/Python cho backend, và lint/test/build cho FE ở mỗi pull request; các phép đo trên luồng YouTube thật (60 phút, kẹt mạng, 24/7, dọn dữ liệu, giờ luồng) được ghi trong [TESTING.md](../../TESTING.md) kèm ngày và phần cứng.
 
 Để tái lập xác minh kỹ thuật, dùng [TESTING_NEST.md](../TESTING_NEST.md) và lệnh trong [README](../../README.md). Cần lưu commit, dependency, cấu hình, phần cứng, ngày chạy và log từng đợt nếu dùng các con số này trong báo cáo nghiệm thu. Sau một thay đổi runtime mới, chỉ báo test là hiện hành khi đã chạy lại phạm vi chịu ảnh hưởng.
 
@@ -323,7 +326,7 @@ Model đang phục vụ biển số Brazil. Dữ liệu Việt Nam cần tập �
 | [runner.py](../../app/recognition/runner.py), [icpr_adapter.py](../../app/recognition/icpr_adapter.py), [icpr_model.py](../../app/recognition/icpr_model.py) | Tích hợp ML, preprocessing và inference joint-five hiện hành. |
 | [results.controller.ts](../../src/results/results.controller.ts) | Prediction detail, thứ tự detection_ids, review/revision, latest succeeded search và CSV. |
 | [video_tracking.py](../../app/recognition/video_tracking.py), [icpr_adapter.py](../../app/recognition/icpr_adapter.py), [ctc_decoders.py](../../app/recognition/ctc_decoders.py) | Tracking, chọn 5 crop, model OCR và decoder port từ notebook. |
-| [0001_business.sql](../../src/database/migrations/0001_business.sql), [0002_joint_ocr.sql](../../src/database/migrations/0002_joint_ocr.sql), [0003_ocr_decoding.sql](../../src/database/migrations/0003_ocr_decoding.sql) đến [0009_live_threshold.sql](../../src/database/migrations/0009_live_threshold.sql) | Schema và ràng buộc vật lý; nguồn chính cho phần thiết kế DB. |
+| [0001_business.sql](../../src/database/migrations/0001_business.sql), [0002_joint_ocr.sql](../../src/database/migrations/0002_joint_ocr.sql), [0003_ocr_decoding.sql](../../src/database/migrations/0003_ocr_decoding.sql) đến [0010_rtsp_sources.sql](../../src/database/migrations/0010_rtsp_sources.sql) | Schema và ràng buộc vật lý; nguồn chính cho phần thiết kế DB. |
 | [src/live](../../src/live), [app/live](../../app/live) | Camera, phiên, live manager, host dùng chung, nhập track, SSE hub, watchlist, dọn dữ liệu; tiến trình live và host (yt-dlp, ffmpeg, Pacer, giờ luồng). |
 | [src/evaluation](../../src/evaluation), [EVALUATION.md](../EVALUATION.md) | Lấy mẫu phân tầng, gán nhãn mù, báo cáo hiệu chỉnh ngưỡng. |
 | [main.ts](../../src/main.ts), [app.module.ts](../../src/app.module.ts), [http.ts](../../src/common/http.ts) | Bootstrap, Swagger, response headers, health và ánh xạ lỗi. |
@@ -339,7 +342,7 @@ Các sơ đồ PlantUML và SVG đi kèm là sản phẩm mô hình hóa mã ngu
 3. **Một worker và filesystem riêng.** Advisory lock chủ động giới hạn một worker trên DB. Chưa có hàng đợi phân tán, object storage, scale nhiều worker hoặc cơ chế tự reconcile mọi crash giữa DB/file.
 4. **Readiness có phạm vi.** Health kiểm DB/schema, pipelines.ready kiểm file/config/checksum; chỉ job thực mới kiểm được toàn runtime/model/thiết bị. Chưa có endpoint xác nhận heartbeat worker đang sống.
 5. **Đánh giá chất lượng còn tách riêng.** Test và smoke không thay ground truth độc lập; chưa xác nhận accuracy Việt Nam, SLA hoặc tải đồng thời production.
-6. **Live trên một GPU.** Host dùng chung cho phép hai camera trên GPU 8 GB (đo được); chưa thử ba camera trở lên. Job upload phải chờ khi có camera chạy. Hai luồng 1080p tranh CPU trong cùng tiến trình có thể bỏ khoảng 2–3% frame. Chất lượng phụ thuộc băng thông (1080p cần khoảng 4 Mbit/s). Nhãn `readable` dựa trên ngưỡng 0,96, hiệu chỉnh offline trên ICPR (precision 96,9% trên test). Kết quả này là cận trên; trên camera thật chưa xác nhận bằng nhãn người gán độc lập. Lượt xuất hiện là gợi ý theo chuỗi đọc được.
+6. **Live trên một GPU.** Host dùng chung chạy được ba camera trên GPU 8 GB (đo được); bốn camera bỏ 4–30% frame vì CPU/GIL. Job video joint chạy cùng camera nhưng bị giữ ở tốc độ thời gian thực; job khác phải chờ khi có camera chạy. Camera YouTube 720p cho confidence thấp hơn hẳn 1080p (2/318 track `readable` ở ngưỡng 0,96). Camera RTSP mới thử với camera giả lập (mediamtx), chưa thử camera thật. Chất lượng phụ thuộc băng thông (1080p cần khoảng 4 Mbit/s). Nhãn `readable` dựa trên ngưỡng 0,96, hiệu chỉnh offline trên ICPR (precision 96,9% trên test). Kết quả này là cận trên; trên camera thật chưa xác nhận bằng nhãn người gán độc lập. Lượt xuất hiện là gợi ý theo chuỗi đọc được.
 7. **Phạm vi nghiệp vụ giới hạn.** Chưa có camera CCTV/RTSP, bãi xe, chủ phương tiện, xử phạt, hủy job, chia sẻ dữ liệu, public signup, email reset, giao diện đầy đủ hoặc SR. Đây không phải các API bị bỏ sót trong 48 endpoint hiện có.
 
 ### 14.3. Thứ tự mở rộng đề xuất

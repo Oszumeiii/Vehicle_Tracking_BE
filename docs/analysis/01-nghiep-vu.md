@@ -115,7 +115,7 @@ Camera CCTV/RTSP, hơn hai camera live đồng thời trên một GPU 8 GB, bãi
 | FR16 | Xuất CSV job thành công, có kết quả máy, hiệu lực, trạng thái và vị trí xuất hiện. | UC09 |
 | FR17 | Xóa job kết thúc, giữ nguồn; xóa nguồn chỉ khi hết tham chiếu job. | UC10, UC11 |
 | FR18 | Quản lý phiên bản schema bằng migration có checksum; dữ liệu lịch sử (job `detect_only` cũ) vẫn đọc được qua API hiện hành, không suy diễn OCR. | UC05, UC06; vận hành |
-| FR19 | Tạo/sửa/xóa camera YouTube Live theo chủ sở hữu; vùng loại trừ tối đa 16 hình chữ nhật; cung cấp `embed_url` và ảnh khung hình mới nhất để vẽ vùng. | UC13 |
+| FR19 | Tạo/sửa/xóa camera YouTube Live hoặc camera IP (RTSP) theo chủ sở hữu; mật khẩu trong URL RTSP không bao giờ được trả ra API, sự kiện hay lỗi; vùng loại trừ tối đa 16 hình chữ nhật; cung cấp `embed_url` và ảnh khung hình mới nhất để vẽ vùng. | UC13 |
 | FR20 | Bật phiên live với profile joint; mỗi camera chỉ một phiên hoạt động; dừng phiên chốt và OCR các track đang mở. | UC14 |
 | FR21 | Camera 24/7: worker tự bật phiên mới khi không có phiên, kể cả sau khi khởi động lại; lùi dần khi phiên liên tục lỗi. | UC14 |
 | FR22 | Mỗi track live đủ 5 frame thành một job succeeded có bằng chứng, giờ chụp, mức tin cậy và gợi ý trùng; dùng chung xem, kiểm duyệt, tra cứu, CSV. | UC06–UC09, UC14 |
@@ -142,7 +142,7 @@ Camera CCTV/RTSP, hơn hai camera live đồng thời trên một GPU 8 GB, bãi
 | NFR09 | Live gần thời gian thực | Bài chạy 60 phút: bỏ 0,6% frame, lag xử lý p95 0,86 s; track đến client sau khoảng 3,5–4,2 s khi luồng ổn định; đuổi kịp sau khi kẹt tối đa 1,3× mà không bỏ frame. |
 | NFR10 | Live bền và tự phục hồi | Kết nối lại khi mất luồng; watchdog `LIVE_STALLED`; worker khởi động lại thì phiên `interrupted` và track trên đĩa vẫn được nhập; camera 24/7 tự bật lại. |
 | NFR11 | Tài nguyên live có giới hạn | Mỗi tiến trình live riêng giữ khoảng 4,4 GB VRAM (phần lớn là CUDA context và bộ đệm allocator; PyTorch thực dùng khoảng 1,9 GB); job upload và live không chạy cùng lúc trên GPU 8 GB; bằng chứng khoảng 2,6 GB/giờ, giảm khoảng 80% sau khi bỏ bớt keyframe. |
-| NFR12 | Nhiều camera trên một GPU | RTX 4060 8 GB, host dùng chung: hai camera tốn VRAM như một (tối đa 6,9 GB toàn GPU), GPU bận 31–38%; 30 phút hai camera 24/7 bỏ 0,12–0,13% frame, lag p95 dưới 0,75 s; host tự thoát khi hết phiên. Bật hai camera cùng lúc: không bỏ frame nào trong 60 s đầu. |
+| NFR12 | Nhiều camera trên một GPU | RTX 4060 8 GB, host dùng chung: hai camera tốn VRAM như một (tối đa 6,9 GB toàn GPU), GPU bận 31–38%; 30 phút hai camera 24/7 bỏ 0,12–0,13% frame, lag p95 dưới 0,75 s; host tự thoát khi hết phiên. Bật hai camera cùng lúc: không bỏ frame nào trong 60 s đầu. Môi trường thật 27/10: 2 camera bỏ 0,04–0,07% (30 phút), 3 camera 0,06–0,36% (lag p95 tới 1,2 s), 4 camera 4–30% nên khuyến nghị tối đa 3. |
 
 Giới hạn upload có thể cấu hình; giới hạn 25 MP hiện được kiểm tra trong mã probe ảnh. Đây là các giới hạn đầu vào, không phải kết quả benchmark. Mục tiêu concurrency, p95 latency, thời gian phục hồi và accuracy cần chốt sau khi xác định phần cứng, dữ liệu và quy mô vận hành. Bản đầu vận hành một worker xử lý hàng đợi tuần tự; không diễn giải kiến trúc này là đã hỗ trợ nhiều worker đồng thời.
 
@@ -176,7 +176,7 @@ Giới hạn upload có thể cấu hình; giới hạn 25 MP hiện được ki
 | BR24 | Cảnh báo watchlist chỉ gửi người đặt mục watchlist, kể cả Admin; watchlist không quét lại lịch sử khi thêm mục mới. |
 | BR25 | Giờ chụp live lấy theo giờ của luồng (`#EXT-X-PROGRAM-DATE-TIME`) khi xác định được, nếu không theo giờ nhận frame; job ghi rõ nguồn giờ. |
 | BR26 | Dọn bằng chứng không đụng track đã kiểm duyệt hoặc đã có cảnh báo; crop luôn được giữ khi bỏ bớt keyframe. |
-| BR27 | Mặc định job upload và phiên live không chạy cùng lúc trên một GPU; camera 24/7 làm job upload chờ đến khi tắt camera. |
+| BR27 | Job video dùng pipeline joint chạy trong host live cùng camera (giữ ở tốc độ thời gian thực khi có camera); các job khác chạy bằng tiến trình riêng và mặc định không chạy cùng phiên live trên một GPU. |
 | BR28 | Ngưỡng `min_confidence` chỉ được hiệu chỉnh bằng nhãn độc lập; review trong ứng dụng không phải ground truth. |
 | BR29 | Chỉ Admin tạo camera demo; đường dẫn video phải nằm trong `PLATE_DATA_DIR/demo-videos` (resolve rồi so thư mục gốc), đúng đuôi video và tồn tại. |
 | BR30 | Nhãn lưu tách khỏi review; mỗi người một nhãn mỗi mẫu; `NULL` nghĩa là người gán cũng không đọc được. Báo cáo chỉ dùng mẫu mọi người gán đồng ý; mẫu bất đồng bị loại và có đếm riêng. Khi công bố kết quả phải ghi rõ nguồn nhãn (người hay AI). |
@@ -305,9 +305,9 @@ Nguồn chỉnh sửa: [01-use-case.puml](diagrams/01-use-case.puml). Admin kế
 ### UC13 — Quản lý camera live
 
 - **Actor:** User, Admin.
-- **Tiền điều kiện:** Đã đăng nhập; có URL YouTube Live.
-- **Luồng chính:** (1) Tạo camera với tên, URL và vùng loại trừ. (2) Hệ thống kiểm URL YouTube và vùng hợp lệ, trả camera kèm `embed_url`. (3) Người dùng xem ảnh khung hình mới nhất (`snapshot`) để vẽ vùng loại trừ, bật chế độ 24/7 và chỉnh thời hạn lưu qua `PATCH`.
-- **Thay thế/lỗi:** URL không phải YouTube hoặc vùng sai: 422. Bật 24/7 không kèm profile joint: 422. Camera ngoài quyền: 404. Xóa camera còn phiên: 409.
+- **Tiền điều kiện:** Đã đăng nhập; có URL YouTube Live hoặc URL `rtsp://` của camera IP.
+- **Luồng chính:** (1) Tạo camera với tên, URL (YouTube, hoặc `source_type = rtsp` kèm URL RTSP) và vùng loại trừ. (2) Hệ thống kiểm URL và vùng hợp lệ, trả camera kèm `embed_url` (YouTube) hoặc URL đã che mật khẩu (RTSP); camera RTSP đổi được URL qua `PATCH` khi thay mật khẩu. (3) Người dùng xem ảnh khung hình mới nhất (`snapshot`) để vẽ vùng loại trừ, bật chế độ 24/7 và chỉnh thời hạn lưu qua `PATCH`.
+- **Thay thế/lỗi:** URL không phải YouTube/RTSP hoặc vùng sai: 422; đổi URL của camera không phải RTSP: 422; camera RTSP sai mật khẩu: phiên kết thúc với lý do 401. Bật 24/7 không kèm profile joint: 422. Camera ngoài quyền: 404. Xóa camera còn phiên: 409.
 - **Hậu điều kiện:** Cấu hình áp dụng từ phiên kế tiếp; phiên đang chạy giữ cấu hình lúc bật.
 - **Truy vết:** FR19, FR21; BR21; `/stream-sources`.
 
@@ -409,6 +409,6 @@ Với nghiệm thu low-resolution, cần thêm tập ground truth độc lập, 
 
 - [Hợp đồng API](../API.md), [hướng dẫn OCR](../OCR_KAGGLE.md), [tích hợp model](../MODEL_INTEGRATION.md), [đánh giá offline](../EVALUATION.md).
 - Mã nguồn: `src/auth/auth.controller.ts`, `src/common/ownership.ts`, `src/media/media.controller.ts`, `src/jobs/jobs.controller.ts`, `src/results/results.controller.ts`, `src/worker.ts`.
-- Schema thực: `src/database/migrations/0001_business.sql` đến `0009_live_threshold.sql`; thiết kế DB chi tiết nằm ở phần DB của bộ tài liệu này.
+- Schema thực: `src/database/migrations/0001_business.sql` đến `0010_rtsp_sources.sql`; thiết kế DB chi tiết nằm ở phần DB của bộ tài liệu này.
 - Live: `src/live/` (camera, phiên, manager, host dùng chung, ingest, SSE hub, watchlist, retention), `app/live/` (tiến trình live và host), kết quả đo trong [TESTING.md](../../TESTING.md).
 - Gán nhãn: `src/evaluation/` (lấy mẫu, controller, báo cáo), quy trình trong [EVALUATION.md](../EVALUATION.md).
