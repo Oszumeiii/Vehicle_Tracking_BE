@@ -238,20 +238,60 @@ def _minmax(values):
 QUALITY_WEIGHTS = dict(sharp=0.35, height=0.30, conf=0.25, edge=0.10)
 TOP_FRACTION = 0.5
 MIN_POOL = 8
+# "robust" selection: drop hidden or cut plates first and favour larger crops.
+ROBUST_WEIGHTS = dict(sharp=0.30, height=0.40, conf=0.20, edge=0.10)
+ROBUST_TOP_FRACTION = 0.4
+SHRUNK = 0.8  # narrower than this share of a neighbour: something hides part of the plate
+NARROW = 0.75  # width/height below this share of the track's median: the plate is cut
+SELECTION = "robust"
 
 
-def score_rows(rows):
+def _width(row):
+    return row["box"][2] - row["box"][0]
+
+
+def _aspect(row):
+    return _width(row) / max(row["box"][3] - row["box"][1], 1e-9)
+
+
+def hidden_or_cut(rows):
+    """Indices of observations whose plate looks partly hidden (a pole, another car) or cut.
+
+    A plate seen through the scene grows or shrinks smoothly, so a box clearly narrower
+    than the observation before or after it, a width/height ratio well below the track's
+    median, or a box touching the frame edge marks an incomplete plate.
+    """
+    if any("box" not in r for r in rows):
+        return set()  # nothing to compare without boxes
+    widths, aspects = [_width(r) for r in rows], [_aspect(r) for r in rows]
+    median_aspect = float(np.median(aspects)) if aspects else 0.
+    flagged = set()
+    for i, row in enumerate(rows):
+        neighbours = [widths[j] for j in (i - 1, i + 1) if 0 <= j < len(rows)]
+        if neighbours and widths[i] < SHRUNK * max(neighbours):
+            flagged.add(i)
+        if aspects[i] < NARROW * median_aspect or not row.get("edge_ok", 1):
+            flagged.add(i)
+    return flagged
+
+
+def score_rows(rows, weights=QUALITY_WEIGHTS):
     """Quality score 0..1 per observation, normalized within the track."""
     sharp = _minmax([math.log1p(r.get("sharpness", 0.0)) for r in rows])
     height = _minmax([r.get("box_height", 0.0) for r in rows])
     conf = _minmax([r["confidence"] for r in rows])
-    w = QUALITY_WEIGHTS
+    w = weights
     return [w["sharp"] * s + w["height"] * h + w["conf"] * c + w["edge"] * r.get("edge_ok", 1)
             for r, s, h, c in zip(rows, sharp, height, conf)]
 
 
 def select_five(rows, cfg):
-    """Keep the better-quality pool, then spread five picks over time inside it."""
+    """Keep the better-quality pool, then spread five picks over time inside it.
+
+    cfg["crop_selection"] (default SELECTION): "current" scores every observation;
+    "robust" first sets aside hidden or cut plates (taking back the best of them only
+    when fewer than five remain) and weighs crop size more.
+    """
     unique = {}
     for r in rows:
         if r["confidence"] >= cfg["crop_confidence"]:
@@ -263,8 +303,19 @@ def select_five(rows, cfg):
         return None, "fewer_than_five_valid_frames"
     if any(b["timestamp_seconds"] <= a["timestamp_seconds"] for a, b in zip(eligible, eligible[1:])):
         raise ValueError("Track timestamps must be strictly increasing")
-    scores = score_rows(eligible)
-    pool_size = min(len(eligible), max(5, MIN_POOL, math.ceil(TOP_FRACTION * len(eligible))))
+    weights, fraction = QUALITY_WEIGHTS, TOP_FRACTION
+    if cfg.get("crop_selection", SELECTION) == "robust":
+        weights, fraction = ROBUST_WEIGHTS, ROBUST_TOP_FRACTION
+        flagged = hidden_or_cut(eligible)
+        if flagged:
+            kept = [r for i, r in enumerate(eligible) if i not in flagged]
+            if len(kept) < 5:
+                scores = score_rows(eligible, weights)
+                best = sorted(flagged, key=lambda i: scores[i], reverse=True)[:5 - len(kept)]
+                kept = sorted(kept + [eligible[i] for i in best], key=lambda r: r["frame_index"])
+            eligible = kept
+    scores = score_rows(eligible, weights)
+    pool_size = min(len(eligible), max(5, MIN_POOL, math.ceil(fraction * len(eligible))))
     top = sorted(range(len(eligible)), key=lambda i: scores[i], reverse=True)[:pool_size]
     pool = sorted(top)
     picks = np.rint(np.linspace(0, len(pool) - 1, 5)).astype(int)

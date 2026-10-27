@@ -52,8 +52,25 @@ def find_tracks(root: Path, split: str, val_list: Path | None) -> list[tuple[str
     return tracks
 
 
-def recognize_tracks(tracks, recognizer, root: Path, log=lambda message: None) -> list[dict]:
-    """One machine reading per track, from its five lr-*.jpg frames in order."""
+def short_track(frames, count):
+    """count of the five frames, evenly spread, then the sharpest repeated in place up to five.
+
+    Simulates a live track with only count usable observations read by the five-frame model.
+    """
+    import cv2
+    if count >= len(frames):
+        return frames
+    picks = sorted({round(i * (len(frames) - 1) / (count - 1)) for i in range(count)}) if count > 1 else [len(frames) // 2]
+    chosen = [frames[i] for i in picks]
+    sharpness = [cv2.Laplacian(cv2.imread(str(f), cv2.IMREAD_GRAYSCALE), cv2.CV_64F).var() for f in chosen]
+    best = max(range(len(chosen)), key=lambda i: sharpness[i])
+    while len(chosen) < 5:
+        chosen.insert(best, chosen[best])
+    return chosen
+
+
+def recognize_tracks(tracks, recognizer, root: Path, log=lambda message: None, frames_per_track=5) -> list[dict]:
+    """One machine reading per track, from its five lr-*.jpg frames in order (or fewer, see short_track)."""
     from PIL import Image
 
     from app.live.runner import plate_confidence
@@ -61,10 +78,19 @@ def recognize_tracks(tracks, recognizer, root: Path, log=lambda message: None) -
 
     rows = []
     for index, (track, folder, plate) in enumerate(tracks, 1):
-        frames = sorted(folder.glob("lr-*.jpg"))
+        frames = short_track(sorted(folder.glob("lr-*.jpg")), frames_per_track)
         with Image.open(frames[2]) as middle:
             width, height = middle.size
-        prediction = _predict_joint(recognizer, frames, root)
+        if len(set(frames)) == len(frames):
+            prediction = _predict_joint(recognizer, frames, root)
+        else:  # repeated frames (short_track): the evidence check of _predict_joint does not apply
+            import time
+            from app.recognition.fusion import normalize_plate
+            started = time.perf_counter()
+            images = [Image.open(frame).convert("RGB") for frame in frames]
+            value = recognizer(images)
+            prediction = dict(value, normalized_text=normalize_plate(value["raw_text"]),
+                              latency_ms=(time.perf_counter() - started) * 1000)
         rows.append(dict(track=track, plate_text=plate, crop_width=width, crop_height=height,
                          machine_text=prediction["normalized_text"] or None,
                          confidence=plate_confidence(prediction), latency_ms=prediction["latency_ms"]))
@@ -123,6 +149,9 @@ def run(argv: list[str] | None = None) -> int:
     parser.add_argument("--target-precision", type=float, action="append",
                         help="Repeatable; the first one is the main target (default 0.95, 0.90, 0.98)")
     parser.add_argument("--out", type=Path, required=True, help="Folder for readings, evaluation files and report")
+    parser.add_argument("--tta", action="store_true", help="Turn on the recognizer's test-time augmentation")
+    parser.add_argument("--frames", type=int, choices=(1, 2, 3, 4, 5), default=5,
+                        help="Use this many of each track's five frames, repeating the sharpest (short live tracks)")
     args = parser.parse_args(argv)
     targets = args.target_precision or [0.95, 0.90, 0.98]
     try:
@@ -138,11 +167,16 @@ def run(argv: list[str] | None = None) -> int:
             snapshot = payload.get("pipeline_snapshot", payload)
             if args.device:
                 snapshot = {**snapshot, "device": args.device}
+            if args.tta:
+                recognizer_spec = snapshot["recognizer"]
+                snapshot = {**snapshot, "recognizer": {**recognizer_spec,
+                                                       "config": {**recognizer_spec.get("config", {}), "use_tta": True}}}
             tracks = find_tracks(args.dataset, args.split, args.val_list)[:args.limit]
             recognizer = load_recognizer(snapshot)
             rows = recognize_tracks(tracks, recognizer, args.dataset,
-                                    log=lambda message: print(message, file=sys.stderr, flush=True))
-            pipeline = dict(id=snapshot.get("id"), device=snapshot["device"],
+                                    log=lambda message: print(message, file=sys.stderr, flush=True),
+                                    frames_per_track=args.frames)
+            pipeline = dict(id=snapshot.get("id"), device=snapshot["device"], frames_per_track=args.frames,
                             **{key: snapshot["recognizer"].get(key) for key in ("version", "sha256", "config")})
         args.out.mkdir(parents=True, exist_ok=True)
         if not args.readings:
@@ -155,6 +189,8 @@ def run(argv: list[str] | None = None) -> int:
         (args.out / "report.json").write_text(json.dumps(result, indent=2, allow_nan=False) + "\n", encoding="utf-8")
         summary = {key: result[key] for key in ("split", "tracks", "recommended", "by_crop_width")}
         summary["exact_accuracy"] = result["recognition"]["end_to_end"]["exact_accuracy"]
+        latencies = sorted(row["latency_ms"] for row in rows if row.get("latency_ms") is not None)
+        summary["median_ocr_ms"] = latencies[len(latencies) // 2] if latencies else None
         sys.stdout.write(json.dumps(summary, indent=2) + "\n")
     except (OSError, ValueError, KeyError) as exc:
         parser.exit(2, f"ICPR calibration failed: {exc}\n")
