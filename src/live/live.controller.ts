@@ -59,6 +59,8 @@ import {
   isYoutubeUrl,
   MAX_HEIGHTS,
   youtubeVideoId,
+  isRtspUrl,
+  redactUrl,
 } from './payload';
 import { ACTIVE_SQL, ACTIVE_STATUSES, recordEvent, sessionView } from './sessions';
 
@@ -76,6 +78,7 @@ function sourceView(row: Record<string, any>) {
   const videoId = row.source_type === 'youtube' ? youtubeVideoId(row.url) : null;
   return {
     ...row,
+    url: redactUrl(row.url), // camera credentials never leave the server
     video_id: videoId,
     embed_url: videoId ? `https://www.youtube-nocookie.com/embed/${videoId}` : null,
   };
@@ -87,6 +90,10 @@ const demoPath = z
   .refine((value) => DEMO_VIDEO_EXTENSIONS.includes(path.extname(value).toLowerCase()), {
     message: `Demo videos are ${DEMO_VIDEO_EXTENSIONS.join(', ')} files.`,
   });
+const rtspUrl = z
+  .string()
+  .max(2000)
+  .refine(isRtspUrl, { message: 'Provide an rtsp:// or rtsps:// camera URL.' });
 const createSource = z.union([
   z
     .object({
@@ -106,6 +113,14 @@ const createSource = z.union([
       exclude_zones: excludeZones.default([]),
     })
     .strict(),
+  z
+    .object({
+      name,
+      source_type: z.literal('rtsp'),
+      url: rtspUrl,
+      exclude_zones: excludeZones.default([]),
+    })
+    .strict(),
 ]);
 const runSettings = {
   min_confidence: z.number().min(0).max(1).default(DEFAULT_MIN_CONFIDENCE),
@@ -121,6 +136,7 @@ const retention = z.number().int().min(0).max(100_000).nullable();
 const updateSource = z
   .object({
     name: name.optional(),
+    url: rtspUrl.optional(),
     exclude_zones: excludeZones.optional(),
     always_on: z.boolean().optional(),
     auto_settings: z
@@ -202,11 +218,15 @@ export class LiveController {
       additionalProperties: false,
       properties: {
         name: { type: 'string', minLength: 1, maxLength: 200 },
-        url: { type: 'string', description: 'YouTube watch or live URL' },
+        url: {
+          type: 'string',
+          description: 'YouTube watch or live URL, or with source_type rtsp an rtsp:// camera URL',
+        },
         source_type: {
           type: 'string',
-          enum: ['file'],
-          description: 'Demo camera (administrators): replay `path` instead of a YouTube URL.',
+          enum: ['file', 'rtsp'],
+          description:
+            '`file`: demo camera (administrators) replaying `path`. `rtsp`: IP camera at `url`; a password in it is never returned.',
         },
         path: { type: 'string', description: 'Video under PLATE_DATA_DIR/demo-videos' },
         exclude_zones: streamZones,
@@ -217,7 +237,11 @@ export class LiveController {
     const body = createSource.parse(input);
     let type = 'youtube',
       url: string;
-    if ('source_type' in body) {
+    if (!('source_type' in body)) url = body.url;
+    else if (body.source_type === 'rtsp') {
+      type = 'rtsp';
+      url = body.url;
+    } else {
       if (req.user.role !== 'admin')
         throw new ForbiddenException('Only administrators can add demo cameras.');
       let file: string;
@@ -230,7 +254,7 @@ export class LiveController {
         throw new UnprocessableEntityException(`No such video in ${DEMO_VIDEO_DIR}.`);
       type = 'file';
       url = body.path;
-    } else url = body.url;
+    }
     const row = (
       await this.db.query(
         `INSERT INTO stream_sources(id,owner_id,name,source_type,url,exclude_zones)
@@ -430,12 +454,15 @@ export class LiveController {
       const alwaysOn = body.always_on ?? source.always_on;
       if (alwaysOn && !auto.pipeline_id)
         throw new UnprocessableEntityException('always_on needs auto_settings with a pipeline_id.');
+      // Only an IP camera's URL can change (new credentials); a YouTube or demo camera is its URL.
+      if (body.url !== undefined && source.source_type !== 'rtsp')
+        throw new UnprocessableEntityException('Only an RTSP camera URL can be changed.');
       const pick = <K extends keyof typeof body>(key: K) =>
         body[key] === undefined ? source[key] : body[key];
       return (
         await c.query(
           `UPDATE stream_sources SET name=$2,exclude_zones=$3,always_on=$4,auto_settings=$5,
-          keyframe_retention_hours=$6,track_retention_days=$7,updated_at=now() WHERE id=$1 RETURNING *`,
+          keyframe_retention_hours=$6,track_retention_days=$7,url=$8,updated_at=now() WHERE id=$1 RETURNING *`,
           [
             id,
             pick('name'),
@@ -444,6 +471,7 @@ export class LiveController {
             JSON.stringify(auto),
             pick('keyframe_retention_hours'),
             pick('track_retention_days'),
+            pick('url'),
           ],
         )
       ).rows[0];

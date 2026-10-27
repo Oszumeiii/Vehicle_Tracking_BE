@@ -324,3 +324,20 @@ Chưa đo lại sau các thay đổi này: lượt đo bị dừng vì máy gầ
 - **Nút thắt là CPU/GIL:** job giải mã và tracking hết tốc độ trong cùng tiến trình. Ưu tiên trên GPU không đủ, nên job được giữ ở tốc độ thời gian thực khi có camera (`RealTime` trong `app/live/host.py`).
 - Vẫn giữ ưu tiên live trên luồng GPU: mỗi batch của job khoảng 0,5 s không được chen trước camera.
 
+## Nghiệm thu camera IP/RTSP (2026-10-27)
+
+**Môi trường thử:** camera giả lập bằng mediamtx 1.21.3. ffmpeg đẩy clip demo 1080p30 lên `rtsp://127.0.0.1:8554/cam`; quyền đọc cần `admin` + mật khẩu. Phiên chạy trong host live, `max_height` 720.
+
+| Bước | Kết quả |
+|---|---|
+| Sai mật khẩu | Sau 2,6 s phiên `ended`: "Camera refused the stream: … 401 Unauthorized"; không thử lại mãi |
+| Đúng mật khẩu | `running` ở 1280×720, 30 fps; 9–11 track trong 60 s; 0 frame bỏ |
+| Tắt camera 20 s | Phiên `reconnecting` ("Camera did not answer"), rồi 404 khi luồng chưa đẩy lại, vẫn thử lại |
+| Bật camera lại | `running` lại sau 2,4 s; 19 track trong 75 s tiếp theo |
+| Tìm mật khẩu trong mọi file sự kiện/log của phiên (trừ `payload.json`) | Không có |
+
+**Ghi chú:**
+- Lần chạy đầu coi 404 là lỗi vĩnh viễn nên phiên dừng khi camera vừa khởi động lại; đã sửa để chỉ 401/403 mới dừng hẳn.
+- Ngay sau khi vào luồng, ffmpeg đôi khi thoát (mã 0, lỗi giải mã khi bắt đầu giữa GOP); phiên tự nối lại trong khoảng 1 s.
+- Chưa thử với camera IP thật của nhóm.
+

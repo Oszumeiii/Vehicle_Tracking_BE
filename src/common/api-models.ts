@@ -274,9 +274,10 @@ export class StreamSourceResponse {
   @ApiProperty() id!: string;
   @ApiProperty() owner_id!: string;
   @ApiProperty() name!: string;
-  @ApiProperty({ enum: ['youtube', 'file'] }) source_type!: string;
+  @ApiProperty({ enum: ['youtube', 'file', 'rtsp'] }) source_type!: string;
   @ApiProperty({
-    description: 'YouTube link, or for a demo camera the video path under demo-videos.',
+    description:
+      'YouTube link; for a demo camera the video path under demo-videos; for an IP camera the RTSP URL with its password replaced by ***.',
   })
   url!: string;
   @ApiProperty(zones) exclude_zones!: number[][];

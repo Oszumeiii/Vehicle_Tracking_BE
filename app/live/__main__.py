@@ -1,7 +1,8 @@
 """Live recognition process: python -m app.live --payload PAYLOAD.json --out DIR
 
 The payload holds the pipeline snapshot (as created by `node dist/src/cli.js live-payload`)
-and the source: {"type": "youtube", "url": ...} or {"type": "file", "path": ..., "realtime": bool, "loop": bool},
+and the source: {"type": "youtube", "url": ...}, {"type": "rtsp", "url": ..., "max_height": ...}
+or {"type": "file", "path": ..., "realtime": bool, "loop": bool},
 either with optional "exclude_zones": [[x1, y1, x2, y2], ...] in normalized frame coordinates.
 Events are JSON lines on stdout; diagnostics go to stderr. Send "stop" on stdin, close
 stdin, or press Ctrl+C to stop: open tracks are finished and recognized before exit.
@@ -81,7 +82,7 @@ def decode_options(environ=os.environ):
 
 
 def source_factory(source):
-    from app.live.source import FfmpegFrames, FileFrames, resolve_youtube
+    from app.live.source import FfmpegFrames, FileFrames, RtspFrames, resolve_youtube
 
     if source.get("type") == "youtube":
         def open_youtube():
@@ -101,7 +102,12 @@ def source_factory(source):
                 cap.release()
             return info, FileFrames(path, realtime=bool(source.get("realtime")), loop=bool(source.get("loop")))
         return open_file
-    raise ValueError("Source type must be youtube or file")
+    if source.get("type") == "rtsp":
+        def open_rtsp():
+            frames = RtspFrames(source["url"], max_height=int(source.get("max_height") or 1080), **decode_options())
+            return frames.probe(), frames
+        return open_rtsp
+    raise ValueError("Source type must be youtube, file or rtsp")
 
 
 def load_recognizer(snapshot):

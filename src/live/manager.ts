@@ -14,7 +14,13 @@ import {
 } from '../recognition/engine';
 import { PipelineRegistry } from '../recognition/registry';
 import { ingestTrack } from './ingest';
-import { DEFAULT_MIN_CONFIDENCE, demoVideoFile, isLivePipeline, livePayload } from './payload';
+import {
+  DEFAULT_MIN_CONFIDENCE,
+  demoVideoFile,
+  isLivePipeline,
+  livePayload,
+  redactUrl,
+} from './payload';
 import { ACTIVE_SQL, recordEvent } from './sessions';
 
 type Row = Record<string, any>;
@@ -350,7 +356,7 @@ export class LiveManager {
             session.pipeline_snapshot,
             session.source_type === 'file'
               ? { type: 'file', path: demoVideoFile(this.options.dataDir, session.url) }
-              : { type: 'youtube', url: session.url },
+              : { type: session.source_type === 'rtsp' ? 'rtsp' : 'youtube', url: session.url },
             session.settings.exclude_zones ?? [],
             session.settings.max_height ?? 1080,
           ),
@@ -551,7 +557,7 @@ export class LiveManager {
   ) {
     await this.database.query(
       `UPDATE live_sessions SET status=$2,finished_at=now(),error_code=$3,error_message=$4 WHERE id=$1`,
-      [id, status, error?.code ?? null, error?.message ?? null],
+      [id, status, error?.code ?? null, error ? redactUrl(error.message) : null],
     );
     await recordEvent(this.database, id, 'status', {
       status,
