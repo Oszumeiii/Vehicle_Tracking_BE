@@ -234,6 +234,16 @@ Expand-Archive data/evaluation/icpr/icpr-2026-low-resolution-plate-dataset.zip d
   - `ground_truth.json` và `predictions.json`, đúng định dạng của `scripts.calibrate_threshold`.
   - `report.json`: bảng đầy đủ các ngưỡng 0.50–0.99 và độ chính xác theo cỡ crop.
 
+### Đo lại cách chọn crop và các biến thể OCR
+
+- **Chọn crop** trên một video (không cần stack; dùng `payload.json` của một phiên live để chạy đúng pipeline):
+  ```powershell
+  .\.venv\Scripts\python.exe -m scripts.eval_crops --video data/evaluation/crops/camboriu-yt-1080.mp4 `
+    --payload data/live/SESSION_ID/payload.json --zones "0,0.66,0.14,0.87;0.18,0.69,0.35,0.89" --out data/evaluation/crops/yt
+  ```
+  Kết quả: `report.json` (số `readable`, confidence, số track dính crop bị che theo từng cách chọn) và `sheet.jpg` (crop của các track đổi trạng thái, để soát bằng mắt).
+- **Biến thể OCR trên ICPR:** thêm `--tta` hoặc `--frames 3|4` vào lệnh `scripts.calibrate_icpr` ở trên.
+
 ### Cách 1: trang gán nhãn trong ứng dụng (khuyên dùng)
 
 1. **Admin tạo bộ mẫu:** tab **Gán nhãn**, chọn camera và số mẫu mỗi khoảng tin cậy (mặc định 30; 7 khoảng 0–0,5, 0,5–0,7, 0,7–0,8, 0,8–0,85, 0,85–0,9, 0,9–0,95, 0,95–1, tức tối đa 210 mẫu). API tương ứng: `POST /api/v2/evaluation-sets`.

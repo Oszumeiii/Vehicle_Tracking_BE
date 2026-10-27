@@ -363,3 +363,53 @@ Chưa đo lại sau các thay đổi này: lượt đo bị dừng vì máy gầ
 
 Không có lượt đo tắt ghi cùng lúc vì máy chỉ còn khoảng 3,6 GB RAM trống. Số so sánh lấy từ lần đo 30 phút trước đó.
 
+## Chọn crop và thử nghiệm OCR (2026-10-28)
+
+**Vấn đề:** ảnh ghép crop của phiên Camboriú 1080p cho thấy biển được cắt đủ (viền đệm 15%), nhưng cách chọn 5 crop mỗi track có lỗi:
+- crop **bị cột đèn che** vẫn được chọn vì to và nét;
+- crop xa, nhỏ luôn bị kéo vào vì chọn trải đều theo thời gian.
+
+Model đọc 5 crop cùng lúc, nên một crop hỏng kéo confidence của cả biển xuống.
+
+**Cách chọn mới (`robust`, mặc định), trong `select_five` của `app/recognition/video_tracking.py`:**
+- **Loại lần thấy có biển bị che hoặc cụt** (`hidden_or_cut`):
+  - box hẹp hơn 0,8 lần lần thấy liền trước hoặc liền sau;
+  - tỷ lệ rộng/cao dưới 0,75 lần trung vị của track;
+  - box chạm mép khung hình.
+  - Nếu không còn đủ 5 thì lấy lại lần tốt nhất trong số đã loại, nên không mất track nào.
+- **Ưu tiên crop lớn:** trọng số kích thước 0,40, nhóm ứng viên 40% tốt nhất; vẫn trải 5 crop theo thời gian trong nhóm đó.
+- Cách cũ vẫn chọn được qua `crop_selection: "current"` (dùng cho công cụ đo).
+
+**Đo A/B** bằng `python -m scripts.eval_crops`: cùng track, chọn crop theo hai cách, cùng recognizer, ngưỡng 0.96.
+
+| Video | Track | `readable` cũ → mới | Confidence trung vị | Track còn dính crop bị che/cụt |
+|---|---|---|---|---|
+| Bản ghi Camboriú YouTube 1080p, 7,7 phút | 57 | **4 → 8** | 0,70 → 0,74 | 22 → 14 |
+| Demo ban ngày `camboriu-day.mp4` | 36 | 3 → 4 | 0,590 → 0,598 | 20 → 7 |
+| Demo ban đêm `camboriu.mp4` | 2 | 0 → 0 | 0,52 → 0,49 | 1 → 1 |
+
+**Soát bằng mắt** 5 track mới thành `readable` (không có nhãn thật, nên đây là đánh giá định tính):
+- 3 track đúng hoặc hợp lý:
+  - AN05G35: bỏ được crop bị cột che, confidence 0,95 → 0,99;
+  - SET2J25: cách cũ đọc sai thành SEI2J25;
+  - BEL4F82.
+- 1 track giữ nguyên chữ ở cả hai cách.
+- **1 track đọc sai:** RLH7H61 thành RLM7H61 ở 0,98. Cách cũ đọc đúng nhưng chỉ đạt `low_confidence`, vì crop bị che kéo điểm xuống. Lỗi nằm ở model (nhầm H/M trên crop sạch), không ở bước chọn.
+- **Precision của `readable` trên camera thật vẫn chưa đo được.** Cần nhãn người (tab Gán nhãn, mỗi mẫu ít nhất 2 người).
+
+**Thử nghiệm OCR trên ICPR** (`scripts/calibrate_icpr.py --tta` / `--frames N`), ngưỡng 0.96:
+
+| Lượt | Độ đúng toàn biển | Precision (cận dưới 95%) | Coverage | OCR mỗi track |
+|---|---|---|---|---|
+| Hiện tại, test | 77,1% | 96,9% (96,1%) | 68,5% | khoảng 48 ms |
+| TTA, test | 77,3% | 97,2% (96,4%) | 67,7% | khoảng 148 ms |
+| 4 frame (lặp crop nét nhất), test | 74,6% | 95,6% (94,6%) | 66,7% | — |
+| 3 frame, test | 70,4% | 93,8% (92,6%) | 63,1% | — |
+| Hiện tại, validation | 78,0% | 95,7% (94,0%) | 70,1% | — |
+| TTA, validation | 78,1% | 96,4% (94,7%) | 69,0% | — |
+
+**Kết luận:**
+- **TTA giữ tắt:** chỉ thêm 0,2–0,7 điểm %, mà OCR chậm khoảng 3 lần.
+- **Track ngắn** (hiện bị loại: 29% ở live, 42% ở upload): 4 frame vẫn đạt precision khoảng 95% ở ngưỡng 0.96–0.97; 3 frame cần ngưỡng 0.97–0.98. Có thể đọc thay vì loại, nhưng phía Node và DB đang bắt buộc đúng 5 frame khác nhau, nên đây là thay đổi riêng, chưa làm.
+- ICPR không qua bước chọn crop (mỗi track đúng 5 frame), nên bảng ICPR của ngưỡng 0.96 không đổi.
+
