@@ -164,3 +164,104 @@ def test_sampling_scale_is_validated_and_gpu_model_keeps_names():
     assert recognize(["crop"]) == ["crop"]
     with pytest.raises(ValueError):
         Host(".", SharedModels(lambda s: None), Collect, sampling_scale=0, source_factory=str, runner_factory=FakeRunner)
+
+
+def job_payload(tmp_path, job, snapshot=SNAPSHOT):
+    folder = tmp_path / "recognition" / job
+    folder.mkdir(parents=True)
+    file = folder / "recognition-input.json"
+    file.write_text(json.dumps({"pipeline_snapshot": snapshot, "output_dir": str(folder)}))
+    return file
+
+
+def job_events(host, job):
+    with host.emit.lock:
+        return [e for e in host.emit.events if e.get("job") == job]
+
+
+def test_upload_jobs_run_on_the_shared_models_beside_sessions(tmp_path, monkeypatch):
+    import app.recognition.runner as runner
+    calls = []
+
+    def fake_execute(payload, models=None, stop=None, throttle=None):
+        model, recognize = models
+        model.predict("frame")  # through the shared GPU thread
+        calls.append(recognize(["crop"]))
+        return {"appearances": [], "statistics": {"decoded_frames": 1}}
+
+    monkeypatch.setattr(runner, "execute", fake_execute)
+    host, model, loads = make_host(tmp_path)
+    start(host, tmp_path, "a", "camboriu")
+    file = job_payload(tmp_path, "job1")
+    host.command(dict(cmd="job", job="job1", payload=str(file)))
+    wait(lambda: job_events(host, "job1"))
+    assert job_events(host, "job1") == [{"type": "exit", "job": "job1", "code": 0}]
+    assert json.loads((file.parent / "recognition-result.json").read_text())["ok"] is True
+    assert loads == ["joint"] and calls == [["text"]], "the job reused the session's models"
+    assert len(model.threads) == 1 and not host.emit.of("a", "exit"), "the session keeps running"
+    host.serve(iter([]))
+
+
+def test_a_stopped_or_misplaced_job_writes_an_error_result(tmp_path, monkeypatch):
+    import app.recognition.runner as runner
+    from app.recognition.video_tracking import JobStopped
+    started = threading.Event()
+
+    def slow_execute(payload, models=None, stop=None, throttle=None):
+        started.set()
+        stop.wait(5)
+        raise JobStopped("Job stopped")
+
+    monkeypatch.setattr(runner, "execute", slow_execute)
+    host, _, _ = make_host(tmp_path)
+    file = job_payload(tmp_path, "job2")
+    host.command(dict(cmd="job", job="job2", payload=str(file)))
+    started.wait(5)
+    host.command(dict(cmd="stop_job", job="job2"))
+    wait(lambda: job_events(host, "job2"))
+    assert job_events(host, "job2")[0]["code"] == 1
+    assert json.loads((file.parent / "recognition-result.json").read_text()) == {
+        "ok": False, "error_code": "WORKER_INTERRUPTED"}
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.json"
+    outside.write_text("{}")
+    host.command(dict(cmd="job", job="job3", payload=str(outside)))
+    wait(lambda: job_events(host, "job3"))
+    assert job_events(host, "job3")[0]["code"] == 1 and not (tmp_path.parent / "recognition-result.json").exists()
+    host.command({"cmd": "job"})
+    assert host.emit.events[-1]["status"] == "error"
+    host.serve(iter([]))
+
+
+def test_live_model_calls_go_before_queued_job_calls():
+    from app.live.host import GpuThread
+    gpu, order, gate = GpuThread(), [], threading.Event()
+    gpu.submit(gate.wait)  # occupy the GPU thread until every call is queued
+    calls = []
+
+    def call(name):
+        calls.append(gpu.submit(order.append, name))
+
+    jobs = [threading.Thread(target=call, args=(f"job{i}",), name=f"job-{i}") for i in range(2)]
+    for thread in jobs:
+        thread.start()
+        thread.join()
+    live = threading.Thread(target=call, args=("live",), name="live-session")
+    live.start()
+    live.join()
+    gate.set()
+    for future in calls:
+        future.result(timeout=5)
+    assert order == ["live", "job0", "job1"]
+
+
+def test_jobs_keep_real_time_only_while_cameras_run():
+    from app.live.host import RealTime
+    now, slept, busy = [0.], [], [True]
+    pace = RealTime(lambda: busy[0], clock=lambda: now[0], sleep=lambda s: (slept.append(round(s, 3)), now.__setitem__(0, now[0] + s)))
+    pace(10.)
+    now[0] += .1
+    pace(11.)  # one second of video after 0.1 s of work: wait 0.9 s
+    assert slept == [.9]
+    busy[0] = False
+    pace(30.)
+    assert slept == [.9], "no camera: full speed"

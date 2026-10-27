@@ -8,6 +8,7 @@ import {
   Runner,
   workerOptions,
 } from './recognition/engine';
+import { hostRunner } from './recognition/host-runner';
 import { GpuGate, LiveManager, liveSettings, spawnLiveProcess, SpawnLive } from './live/manager';
 import { Retention } from './live/retention';
 import { SharedLiveHost } from './live/host';
@@ -62,11 +63,19 @@ export async function runWorker(
     const settings = liveSettings();
     const gate = new GpuGate(settings.exclusiveGpu);
     // Several sessions share one Python process (and one copy of the models); one session
-    // keeps its own process, exactly as before.
-    const spawn =
+    // keeps its own process, exactly as before. Upload jobs of the live pipeline then run
+    // in that host too, beside the sessions, instead of waiting for the GPU.
+    const host =
       settings.maxSessions > 1
-        ? new SharedLiveHost(spawnLive, options.dataDir, settings.samplingScale).spawn
-        : spawnLive;
+        ? new SharedLiveHost(
+            spawnLive,
+            options.dataDir,
+            settings.samplingScale,
+            once ? 0 : (settings.hostIdleSeconds ?? 300),
+          )
+        : undefined;
+    const spawn = host ? host.spawn : spawnLive;
+    const viaHost = host ? hostRunner(host) : undefined;
     const live = new LiveManager(database, options, settings, spawn, gate);
     await live.recover();
     const retention = new Retention(database, options);
@@ -85,16 +94,25 @@ export async function runWorker(
     const slot = async () => {
       try {
         while (!stopping) {
-          // With an exclusive GPU, upload jobs wait while a live session runs.
-          if (!gate.enter('jobs')) {
-            await idle();
-            continue;
+          let worked = false;
+          // Jobs the shared host can run go there, also while live sessions run.
+          if (host && viaHost && gate.enter('host')) {
+            try {
+              worked = await processOne(database, options, viaHost, 'host');
+            } finally {
+              gate.leave('host');
+            }
           }
-          let worked: boolean;
-          try {
-            worked = await processOne(database, options, runner);
-          } finally {
-            gate.leave('jobs');
+          // Other jobs (or all, without a shared host) get their own process; with an
+          // exclusive GPU they wait while anything else uses it, and a warm idle host
+          // is stopped first to free its memory.
+          if (!worked && !stopping && gate.enter('jobs')) {
+            try {
+              if (host) await host.stopIdle();
+              worked = await processOne(database, options, runner, host ? 'process' : undefined);
+            } finally {
+              gate.leave('jobs');
+            }
           }
           if (once || stopping) break;
           if (!worked) await idle();
@@ -117,6 +135,7 @@ export async function runWorker(
       ...Array.from({ length: once ? 1 : concurrency }, () => slot()),
       ...(once ? [] : [liveLoop(), retention.run(shutdown.signal)]),
     ]);
+    await host?.stopIdle(); // a warm host would outlive the worker otherwise
     if (lostLock) throw lostLock;
     const failed = results.find((r) => r.status === 'rejected');
     if (failed) throw (failed as PromiseRejectedResult).reason;

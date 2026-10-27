@@ -16,6 +16,7 @@ import json
 import math
 from pathlib import Path
 import queue
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -585,7 +586,17 @@ class TrackSession:
             file.flush()
 
 
-def track_video(video, model, cfg, out):
+class JobStopped(Exception):
+    """A job running inside the shared live host was asked to stop (timeout or shutdown)."""
+    code = "WORKER_INTERRUPTED"
+
+
+def check_stop(stop):
+    if stop is not None and stop.is_set():
+        raise JobStopped("Job stopped")
+
+
+def track_video(video, model, cfg, out, stop=None, throttle=None):
     pts, candidates = [], []
     started = last_progress = time.perf_counter()
     with (out / "tracking_detections.csv").open("w", newline="", encoding="utf-8") as det_file, \
@@ -593,14 +604,18 @@ def track_video(video, model, cfg, out):
          TrackSession(model, cfg, det_file, gate_file) as session, \
          closing(read_frames(video, cfg["max_seconds"])) as frames:
         for index, timestamp, image, gray in frames:
+            check_stop(stop)
+            if throttle is not None:
+                throttle(timestamp)
             pts.append(timestamp)
             candidates += session.push(index, timestamp, image, gray)
             now = time.perf_counter()
             if now - last_progress >= 20:
+                # stderr: inside the shared live host, stdout carries its JSON events.
                 print(json.dumps(dict(stage="tracking", decoded_frames=len(pts),
                                       expected_frames=cfg["declared_frames"], sampled_frames=session.sampled,
                                       candidates=len(candidates),
-                                      elapsed_seconds=round(now - started, 1))), flush=True)
+                                      elapsed_seconds=round(now - started, 1))), file=sys.stderr, flush=True)
                 last_progress = now
         candidates += session.close()
     if not cfg["max_seconds"]:

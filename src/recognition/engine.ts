@@ -24,7 +24,7 @@ export type Runner = (
 ) => Promise<Row>;
 const id = () => randomUUID().replace(/-/g, '');
 
-function checkInterrupted(options: WorkerOptions) {
+export function checkInterrupted(options: WorkerOptions) {
   if (options.signal?.aborted)
     throw Object.assign(new Error('Worker interrupted'), { code: 'WORKER_INTERRUPTED' });
 }
@@ -58,11 +58,23 @@ export function safeStorage(root: string, key: string) {
   return file;
 }
 
-export async function claim(database: Database): Promise<Row | undefined> {
+/**
+ * Jobs the shared live host can run with its models: five-frame joint OCR on a scene
+ * video. 'host' claims only those, 'process' only the others (they need their own process).
+ */
+export type JobRoute = 'host' | 'process';
+const HOST_JOB = `(j.input_mode = 'scene' AND m.media_type = 'video'
+  AND j.pipeline_snapshot->>'task' = 'recognize'
+  AND j.pipeline_snapshot->'recognizer'->>'input_mode' = 'five_frame_joint')`;
+
+export async function claim(database: Database, route?: JobRoute): Promise<Row | undefined> {
+  const filter =
+    route === 'host' ? `AND ${HOST_JOB}` : route === 'process' ? `AND NOT ${HOST_JOB}` : '';
   return database.transaction(async (client) => {
     const result = await client.query(`WITH candidate AS (
-      SELECT id FROM recognition_jobs WHERE status = 'queued' ORDER BY created_at, id
-      FOR UPDATE SKIP LOCKED LIMIT 1
+      SELECT j.id FROM recognition_jobs j JOIN media_assets m ON m.id = j.media_id
+      WHERE j.status = 'queued' ${filter} ORDER BY j.created_at, j.id
+      FOR UPDATE OF j SKIP LOCKED LIMIT 1
     ) UPDATE recognition_jobs j SET status='running', stage='validating', started_at=now()
       FROM candidate c WHERE j.id=c.id RETURNING j.*`);
     const job = result.rows[0];
@@ -141,8 +153,8 @@ export function pythonEnv(): NodeJS.ProcessEnv {
   };
 }
 
-export const executeRecognition: Runner = async (job, folder, options, stage) => {
-  await verifySnapshot(job.pipeline_snapshot, options);
+/** The payload app.recognition.runner reads (subprocess or shared live host). */
+export async function writeRecognitionInput(job: Row, folder: string, options: WorkerOptions) {
   const input = path.join(folder, 'recognition-input.json');
   await writeFile(
     input,
@@ -159,6 +171,45 @@ export const executeRecognition: Runner = async (job, folder, options, stage) =>
       cache_dir: options.cacheDir,
     }),
   );
+  return input;
+}
+
+/** Forward stage changes the ML side writes to progress.json; returns a function that stops polling. */
+export function followProgress(folder: string, stage: (name: string) => Promise<void>) {
+  let checking = false;
+  let last = '';
+  const poll = setInterval(() => {
+    if (checking) return;
+    checking = true;
+    void readFile(path.join(folder, 'progress.json'), 'utf8')
+      .then(JSON.parse)
+      .then(async (progress) => {
+        if (progress.stage !== last) {
+          await stage(progress.stage);
+          last = progress.stage;
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        checking = false;
+      });
+  }, 250);
+  return () => clearInterval(poll);
+}
+
+/** recognition-result.json once the ML side exited: the result, or the error it reported. */
+export async function readRecognitionResult(folder: string, code: number | null) {
+  const result = JSON.parse(await readFile(path.join(folder, 'recognition-result.json'), 'utf8'));
+  if (code !== 0 || !result.ok)
+    throw Object.assign(new Error('ML process failed'), {
+      code: result.error_code ?? 'PIPELINE_FAILED',
+    });
+  return result;
+}
+
+export const executeRecognition: Runner = async (job, folder, options, stage) => {
+  await verifySnapshot(job.pipeline_snapshot, options);
+  const input = await writeRecognitionInput(job, folder, options);
   // Shutdown may arrive while hashing checkpoints or writing the payload, before
   // there is a child process to receive a termination signal.
   checkInterrupted(options);
@@ -199,24 +250,7 @@ export const executeRecognition: Runner = async (job, folder, options, stage) =>
     },
     options.timeoutSeconds * 1000 + 1000,
   );
-  let checking = false;
-  let last = '';
-  const poll = setInterval(() => {
-    if (checking) return;
-    checking = true;
-    void readFile(path.join(folder, 'progress.json'), 'utf8')
-      .then(JSON.parse)
-      .then(async (progress) => {
-        if (progress.stage !== last) {
-          await stage(progress.stage);
-          last = progress.stage;
-        }
-      })
-      .catch(() => {})
-      .finally(() => {
-        checking = false;
-      });
-  }, 250);
+  const stopPolling = followProgress(folder, stage);
   const onSignal = () => {
     interrupted = true;
     void stopTree(child);
@@ -233,15 +267,10 @@ export const executeRecognition: Runner = async (job, folder, options, stage) =>
     if (interrupted)
       throw Object.assign(new Error('Worker interrupted'), { code: 'WORKER_INTERRUPTED' });
     if (timedOut) throw Object.assign(new Error('Processing timed out'), { code: 'JOB_TIMEOUT' });
-    const result = JSON.parse(await readFile(path.join(folder, 'recognition-result.json'), 'utf8'));
-    if (code !== 0 || !result.ok)
-      throw Object.assign(new Error('ML process failed'), {
-        code: result.error_code ?? 'PIPELINE_FAILED',
-      });
-    return result;
+    return await readRecognitionResult(folder, code);
   } finally {
     clearTimeout(timer);
-    clearInterval(poll);
+    stopPolling();
     child.stdin?.end();
     process.off('SIGTERM', onSignal);
     process.off('SIGINT', onSignal);
@@ -644,9 +673,10 @@ export async function processOne(
   database: Database,
   options = workerOptions(),
   runner: Runner = executeRecognition,
+  route?: JobRoute,
 ) {
   if (options.signal?.aborted) return false;
-  const job = await claim(database);
+  const job = await claim(database, route);
   if (!job) return false;
   const folder = safeStorage(options.dataDir, `recognition/${job.id}`);
   let phase = 'pipeline';
