@@ -344,3 +344,22 @@ def test_frame_count_tolerates_only_a_short_missing_tail():
     for decoded in (49585, 49000):  # surplus, or a gap beyond max(1%, 2 s)
         with pytest.raises(RuntimeError, match="frame count"):
             check_frame_count(decoded, 49584, 27.5)
+
+
+def test_four_crop_tracks_are_kept_when_the_pipeline_allows_them(tmp_path):
+    from app.recognition.runner import build_appearance
+
+    video = tmp_path / "short.avi"
+    _plate_video(video, 4)
+    payload = {"input_path": str(video), "pipeline_snapshot": {"device": "cpu", "sampling": SAMPLING,
+               "tracking": {**TRACKING, "min_frames": 4}, "empty_scene_gate": GATE}}
+    folder = tmp_path / "recognition"
+    folder.mkdir()
+    appearances, stats = _video_detections(payload, BoxFixture(), folder, tmp_path)
+    assert stats["rejected_tracks"] == {} and stats["total_detections"] == 4
+    detections = appearances[0]["detections"]
+    assert [d["selected_order"] for d in detections] == [1, 2, 3, 4]
+    assert len({d["crop_storage_key"] for d in detections}) == 4
+    with pytest.raises(ValueError, match="invalid selection"):
+        build_appearance({"track_id": "1", "first_frame": 1, "last_frame": 3}, [
+            {"selected_order": i, "frame_index": i} for i in (1, 2, 3)], folder, tmp_path, 0, 1, "video_pts")

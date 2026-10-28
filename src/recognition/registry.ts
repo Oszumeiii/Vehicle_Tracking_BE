@@ -136,6 +136,7 @@ export class PipelineRegistry {
         track_buffer_seconds: 1.5,
         crop_padding: 0.15,
         crop_confidence: 0.25,
+        min_frames: 5,
       };
       if (Object.keys(snapshot.tracking ?? {}).some((k) => !(k in tracking)))
         throw new Error('Unsupported tracking option');
@@ -150,7 +151,11 @@ export class PipelineRegistry {
         tracking.crop_padding < 0 ||
         tracking.crop_padding > 1 ||
         tracking.crop_confidence < 0.1 ||
-        tracking.crop_confidence > 1
+        tracking.crop_confidence > 1 ||
+        ![4, 5].includes(tracking.min_frames) ||
+        // Four-crop tracks are read only by the joint model (one crop is repeated).
+        (tracking.min_frames === 4 &&
+          !(recognize && snapshot.recognizer?.input_mode === 'five_frame_joint'))
       )
         throw new Error('Invalid tracking configuration');
       const gate = {

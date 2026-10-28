@@ -827,6 +827,125 @@ test('PostgreSQL worker claims once, persists immutable evidence atomically, rej
         );
       },
     );
+    await t.test('four-crop tracks pass only for joint pipelines that allow them', async () => {
+      const jobId = newId();
+      const folder = path.join(root, 'recognition', jobId);
+      const result: any = await evidence(jobId, folder);
+      const appearance = result.appearances[0];
+      const detection = appearance.detections[0];
+      appearance.detections = await Promise.all(
+        Array.from({ length: 4 }, async (_, i) => {
+          const key = `recognition/${jobId}/frame-${i}.png`;
+          await writeFile(
+            path.join(folder, `frame-${i}.png`),
+            await readFile(path.join(folder, 'crop.png')),
+          );
+          return {
+            ...detection,
+            selected_order: i + 1,
+            frame_index: i + 1,
+            timestamp_seconds: i,
+            timestamp_source: 'video_pts',
+            crop_storage_key: key,
+            frame_storage_key: key,
+            predictions: [],
+          };
+        }),
+      );
+      const crops = appearance.detections.map((d: any) => d.crop_storage_key);
+      Object.assign(appearance, {
+        source_track_id: '7',
+        first_frame: 1,
+        last_frame: 4,
+        start_seconds: 0,
+        end_seconds: 3,
+        machine_text: 'ABC1234',
+        machine_status: 'readable',
+        agreement_count: null,
+        recognition_method: 'joint_multiframe',
+        predictions: [
+          {
+            variant: 'joint',
+            raw_text: 'abc-1234',
+            normalized_text: 'ABC1234',
+            ocr_score: null,
+            character_scores: null,
+            latency_ms: 12,
+            // The sharpest crop (third) is repeated in place to make five model inputs.
+            input_storage_keys: [crops[0], crops[1], crops[2], crops[2], crops[3]],
+            frame_weights: [0.1, 0.2, 0.3, 0.25, 0.15],
+            decoding: null,
+          },
+        ],
+      });
+      const job = {
+        id: jobId,
+        job_kind: 'recognize',
+        media_type: 'video',
+        input_mode: 'scene',
+        pipeline_snapshot: {
+          recognizer: { input_mode: 'five_frame_joint' },
+          tracking: { min_frames: 4 },
+        },
+      };
+      await validateResult(job, result, folder, options);
+      const prediction = appearance.predictions[0];
+      for (const keys of [
+        [crops[0], crops[1], crops[2], crops[3]],
+        [crops[0], crops[0], crops[1], crops[2], crops[2]],
+        [crops[0], crops[1], crops[3], crops[2], crops[3]],
+        [crops[0], crops[2], crops[1], crops[2], crops[3]],
+        [crops[0], crops[1], crops[2], 'unrelated.png', crops[3]],
+      ]) {
+        prediction.input_storage_keys = keys;
+        await assert.rejects(
+          () => validateResult(job, result, folder, options),
+          /ordered evidence/,
+        );
+      }
+      prediction.input_storage_keys = [crops[0], crops[0], crops[1], crops[2], crops[3]];
+      await validateResult(job, result, folder, options);
+      for (const pipeline of [
+        { recognizer: { input_mode: 'five_frame_joint' } },
+        { recognizer: { input_mode: 'single_crop' }, tracking: { min_frames: 4 } },
+      ])
+        await assert.rejects(
+          () => validateResult({ ...job, pipeline_snapshot: pipeline }, result, folder, options),
+          /Invalid crop count/,
+        );
+      const three = structuredClone(result);
+      three.appearances[0].detections.pop();
+      Object.assign(three.appearances[0], { last_frame: 3, end_seconds: 2 });
+      three.appearances[0].predictions[0].input_storage_keys = [
+        crops[0],
+        crops[0],
+        crops[1],
+        crops[1],
+        crops[2],
+      ];
+      await assert.rejects(() => validateResult(job, three, folder, options), /Invalid crop count/);
+      // Five distinct crops may not repeat one of them as a model input.
+      const five = structuredClone(result);
+      five.appearances[0].detections.push({
+        ...five.appearances[0].detections[3],
+        selected_order: 5,
+        frame_index: 5,
+        timestamp_seconds: 4,
+        crop_storage_key: `recognition/${jobId}/frame-4.png`,
+        frame_storage_key: `recognition/${jobId}/frame-4.png`,
+      });
+      await writeFile(
+        path.join(folder, 'frame-4.png'),
+        await readFile(path.join(folder, 'crop.png')),
+      );
+      Object.assign(five.appearances[0], { last_frame: 5, end_seconds: 4 });
+      await assert.rejects(() => validateResult(job, five, folder, options), /ordered evidence/);
+      five.appearances[0].predictions[0].input_storage_keys = [
+        ...crops,
+        `recognition/${jobId}/frame-4.png`,
+      ];
+      await validateResult(job, five, folder, options);
+    });
     await t.test('changed source fails before the runner is invoked', async () => {
       const jobId = await enqueue();
       await writeFile(path.join(root, storageKey), 'changed');

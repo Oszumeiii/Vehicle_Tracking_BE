@@ -56,11 +56,37 @@ def _predict(recognizer, path, data_dir):
                 latency_ms=(time.perf_counter() - start) * 1000)
 
 
+def repeat_sharpest(items, sharpness):
+    """Five inputs from four: the sharpest one repeated in place, keeping time order."""
+    items = list(items)
+    best = max(range(len(items)), key=lambda i: sharpness[i])
+    items.insert(best, items[best])
+    return items
+
+
+def ocr_inputs(paths):
+    """The joint model's five inputs: a four-crop track repeats its sharpest crop in place.
+
+    Same rule as scripts/calibrate_icpr.short_track, where it was measured.
+    """
+    paths = list(paths)
+    if len(paths) != 4:
+        return paths
+    import cv2
+    sharpness = []
+    for path in paths:
+        gray = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+        if gray is None:
+            raise ValueError(f"Cannot read crop {path}")
+        sharpness.append(cv2.Laplacian(gray, cv2.CV_64F).var())
+    return repeat_sharpest(paths, sharpness)
+
+
 def _predict_joint(recognizer, paths, data_dir):
-    """Run the joint model once over five real, temporally ordered crops."""
+    """Run the joint model once over five temporally ordered crops (four distinct for a short track)."""
     from PIL import Image
-    if len(paths) != 5 or len(set(paths)) != 5:
-        raise ValueError("Joint OCR requires five distinct crop evidence files")
+    if len(paths) != 5 or len(set(paths)) not in (4, 5):
+        raise ValueError("Joint OCR requires five inputs from four or five distinct crop evidence files")
     start = time.perf_counter()
     images = []
     try:
@@ -133,11 +159,12 @@ def _image_detections(payload, model, folder, data_dir):
 
 
 def build_appearance(candidate, manifest_rows, out, data_dir, start_seconds, end_seconds, timestamp_source):
-    """One track's appearance from its five manifest rows (evidence files under out)."""
+    """One track's appearance from its four or five manifest rows (evidence files under out)."""
     rows = sorted(manifest_rows, key=lambda row: row["selected_order"])
     frame_indices = [row["frame_index"] for row in rows]
-    if len(rows) != 5 or len(set(frame_indices)) != 5 or frame_indices != sorted(frame_indices):
-        raise ValueError("Five-frame tracking produced invalid selection")
+    if (len(rows) not in (4, 5) or len(set(frame_indices)) != len(rows)
+            or frame_indices != sorted(frame_indices)):
+        raise ValueError("Video tracking produced invalid selection")
     detections = [dict(selected_order=row["selected_order"], frame_index=row["frame_index"],
         timestamp_seconds=row["timestamp_seconds"], timestamp_source=timestamp_source,
         bbox=[float(row[key]) for key in ("x1", "y1", "x2", "y2")],
@@ -241,9 +268,10 @@ def execute(payload, models=None, stop=None, throttle=None):
         if joint:
             detections = appearance["detections"]
             frames = [d["frame_index"] for d in detections]
-            if len(frames) != 5 or len(set(frames)) != 5 or frames != sorted(frames):
-                raise ValueError("Joint OCR requires five ordered, distinct video frames")
-            prediction = _predict_joint(recognizer, [data_dir / d["crop_storage_key"] for d in detections], data_dir)
+            if len(frames) not in (4, 5) or len(set(frames)) != len(frames) or frames != sorted(frames):
+                raise ValueError("Joint OCR requires four or five ordered, distinct video frames")
+            prediction = _predict_joint(
+                recognizer, ocr_inputs(data_dir / d["crop_storage_key"] for d in detections), data_dir)
             for detection in detections:
                 detection["predictions"] = []
             text = prediction["normalized_text"]

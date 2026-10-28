@@ -1,7 +1,7 @@
 """Compare crop selections on a video: same tracks, five crops chosen two ways, both read by the OCR.
 
   python -m scripts.eval_crops --video clip.mp4 --payload data/live/SESSION/payload.json --out DIR
-      [--zones "x1,y1,x2,y2;..."] [--seconds N]
+      [--zones "x1,y1,x2,y2;..."] [--seconds N] [--short-tracks]
 
 Detection and tracking run once, exactly as in the live pipeline (TrackSession on the
 pinned snapshot); when a track ends its five crops are selected with "current" and with
@@ -9,6 +9,10 @@ pinned snapshot); when a track ends its five crops are selected with "current" a
 tracks.json, report.json and sheet.jpg (crops of tracks whose status differs). There are
 no ground-truth labels here: the readable share and confidence are compared, and the
 sheet is for a person to check that the readings did not get worse.
+
+--short-tracks also reads the tracks dropped for having only four valid observations, as a
+pipeline with tracking.min_frames 4 does (sharpest crop repeated, threshold + 0.01), into
+report.json "short" and sheet-short.jpg.
 """
 import argparse
 from collections import Counter
@@ -40,9 +44,9 @@ def crops_of(candidate_rows, jpeg, cfg):
 class BothSelections(vt.TrackSession):
     """A TrackSession that selects every finished track's crops with each mode."""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, short=False, **kwargs):
         super().__init__(*args, **kwargs)
-        self.compared = []
+        self.compared, self.short, self.shorts = [], short, []
 
     def _finish(self, tid):
         rows = self.active[tid]
@@ -57,6 +61,11 @@ class BothSelections(vt.TrackSession):
                                       picks={m: [dict(r) for r in c] for m, (c, _) in picks.items()},
                                       jpeg={r["frame_index"]: self._jpeg_bytes[r["frame_index"]]
                                             for m in MODES for r in picks[m][0]}))
+        elif self.short:
+            chosen, _ = vt.select_five(rows, {**self.cfg, "crop_selection": "robust", "min_frames": 4})
+            if chosen:
+                self.shorts.append(dict(track_id=tid, observations=len(rows), chosen=[dict(r) for r in chosen],
+                                        jpeg={r["frame_index"]: self._jpeg_bytes[r["frame_index"]] for r in chosen}))
         super()._finish(tid)
 
 
@@ -68,11 +77,11 @@ def read(recognizer, images):
     return text, plate_confidence(result)
 
 
-def sheet(rows, out, limit=12):
+def sheet(rows, out, limit=12, modes=MODES):
     """Crops of tracks whose status differs: one line per selection."""
     lines = []
     for row in rows[:limit]:
-        for mode in MODES:
+        for mode in modes:
             tiles = []
             for image in row["images"][mode]:
                 tile = cv2.cvtColor(np.asarray(image), cv2.COLOR_RGB2BGR)
@@ -105,13 +114,14 @@ def main(argv=None):
     parser.add_argument("--zones", default="", help="Exclusion zones as normalized x1,y1,x2,y2;... (the camera's)")
     parser.add_argument("--seconds", type=float, default=0, help="Only the first N seconds")
     parser.add_argument("--threshold", type=float, default=DEFAULT_MIN_CONFIDENCE)
+    parser.add_argument("--short-tracks", action="store_true", help="Also read four-observation tracks")
     args = parser.parse_args(argv)
     snapshot = json.loads(args.payload.read_text(encoding="utf-8-sig"))["pipeline_snapshot"]
     model, recognizer = load_models(snapshot)
     cfg = {**vt.video_config(args.video, snapshot), "max_track_seconds": 30,
            "exclude_zones": [list(map(float, z.split(","))) for z in args.zones.split(";") if z]}
     vt.warm_up_detector(model, cfg)
-    session = BothSelections(model, cfg, retain_images=True)
+    session = BothSelections(model, cfg, retain_images=True, short=args.short_tracks)
     with session:
         for index, timestamp, image, gray in vt.read_frames(args.video, args.seconds or 0):
             session.push(index, timestamp, image, gray)
@@ -151,6 +161,31 @@ def main(argv=None):
                                                      indent=1), encoding="utf-8")
     (args.out / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     sheet(sorted(changed, key=lambda r: -r["robust"]["confidence"]), args.out / "sheet.jpg")
+    if args.short_tracks:
+        from app.live.runner import SHORT_TRACK_MARGIN
+        from app.recognition.runner import repeat_sharpest
+        threshold = round(args.threshold + SHORT_TRACK_MARGIN, 6)
+        shorts = []
+        for track in session.shorts:
+            images = crops_of(track["chosen"], track["jpeg"], cfg)
+            sharpness = [cv2.Laplacian(cv2.cvtColor(np.asarray(i), cv2.COLOR_RGB2GRAY), cv2.CV_64F).var()
+                         for i in images]
+            text, confidence = read(recognizer, repeat_sharpest(images, sharpness))
+            shorts.append(dict(track_id=track["track_id"], observations=track["observations"], images={"short": images},
+                               short=dict(text=text, confidence=round(float(confidence or 0), 4),
+                                          status=classify(text, confidence, threshold),
+                                          widths=[round(vt._width(r)) for r in track["chosen"]])))
+        report["short"] = dict(
+            tracks=len(shorts), threshold=threshold,
+            readable=sum(r["short"]["status"] == "readable" for r in shorts),
+            statuses=dict(Counter(r["short"]["status"] for r in shorts)),
+            median_confidence=round(statistics.median([r["short"]["confidence"] for r in shorts]), 4) if shorts else None,
+            median_crop_width=statistics.median([w for r in shorts for w in r["short"]["widths"]]) if shorts else None)
+        (args.out / "short-tracks.json").write_text(
+            json.dumps([{k: v for k, v in r.items() if k != "images"} for r in shorts], indent=1), encoding="utf-8")
+        sheet(sorted(shorts, key=lambda r: -r["short"]["confidence"]), args.out / "sheet-short.jpg",
+              limit=24, modes=("short",))
+        (args.out / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     sys.stdout.write(json.dumps(report, indent=2) + "\n")
     return 0
 

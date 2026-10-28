@@ -427,3 +427,25 @@ Model đọc 5 crop cùng lúc, nên một crop hỏng kéo confidence của c�
 
 Precision trên camera thật ước khoảng 86–93%, thấp hơn 96,9% trên ICPR như đã dự báo (ICPR là cận trên). Cần nhãn người để đo chính xác và chỉnh lại ngưỡng cho camera.
 
+## Đọc track 4 frame (2026-10-28, tùy chọn, mặc định tắt)
+
+**Ý tưởng:** track chỉ có 4 lần thấy hợp lệ đang bị loại. Trên ICPR, đọc 4 frame (lặp crop nét nhất cho đủ 5) vẫn đạt precision 96,7% ở ngưỡng 0.97.
+
+**Đã làm (tắt mặc định):**
+- Pipeline joint có thể đặt `tracking.min_frames: 4` (mặc định 5; pipeline đọc từng crop không được bật).
+- Bằng chứng chỉ lưu 4 crop thật. Đầu vào OCR lặp crop nét nhất tại chỗ (`ocr_inputs` trong `app/recognition/runner.py`).
+- Node chỉ nhận key lặp khi track có 4 detection và chỉ lặp liền kề.
+- Camera live cần confidence cao hơn 0.01 cho track 4 frame: 0.97 với ngưỡng mặc định. Sự kiện `track` và `track.json` có thêm `frames`.
+
+**Đo** bằng `python -m scripts.eval_crops ... --short-tracks` trên ba video của mục trước:
+
+| Video | Track đọc được | Track bị loại (dưới 5 lần thấy) | Trong đó có đúng 4 lần thấy | `readable` thêm ở 0.97 |
+|---|---|---|---|---|
+| Bản ghi Camboriú YouTube 1080p, 7,7 phút | 57 | 8 | 1 (crop rộng 22 px, confidence 0,07) | 0 |
+| Demo ban ngày | 36 | 3 | 0 | 0 |
+| Demo ban đêm | 2 | 0 | 0 | 0 |
+
+**Kết luận:**
+- Phần lớn track bị loại chỉ có 1–3 lần thấy, thường là biển xa hoặc bị che. Bật 4 frame gần như không thêm biển đọc được, nên `config/pipelines.kaggle.json` vẫn để 5.
+- Nên đo lại khi có camera gần hơn, nơi track ngắn do xe đi nhanh chứ không phải do biển nhỏ.
+

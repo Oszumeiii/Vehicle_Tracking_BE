@@ -53,3 +53,29 @@ def test_robust_is_the_default_and_current_stays_available():
     rows = track([30, 32, 34, 36, 40, 44, 48, 52, 56, 25, 64, 68])
     assert select_five(rows, CFG) == select_five(rows, {**CFG, "crop_selection": "robust"})
     assert select_five(rows, {**CFG, "crop_selection": "current"})[0]
+
+
+def test_four_observations_are_kept_when_the_pipeline_reads_four_crop_tracks():
+    rows = track([40, 44, 30, 52])  # one hidden: taken back, there is nothing better
+    chosen, reason = select_five(rows, {**CFG, "min_frames": 4})
+    assert reason is None and [r["frame_index"] for r in chosen] == [0, 1, 2, 3]
+    chosen, _ = select_five(track([40 + 2 * i for i in range(12)]), {**CFG, "min_frames": 4})
+    assert len(chosen) == 5, "longer tracks still give five crops"
+    assert select_five(track([40, 44, 48]), {**CFG, "min_frames": 4}) == (None, "fewer_than_four_valid_frames")
+
+
+def test_a_four_crop_track_repeats_its_sharpest_crop_in_place(tmp_path):
+    import cv2
+    import numpy as np
+    from app.recognition.runner import ocr_inputs
+
+    paths = []
+    for i in range(4):
+        image = np.full((32, 96), 128, np.uint8)
+        if i == 2:
+            image[:, ::2] = 0  # stripes: by far the sharpest crop
+        path = tmp_path / f"crop-{i}.png"
+        cv2.imwrite(str(path), image)
+        paths.append(path)
+    assert ocr_inputs(paths) == [paths[0], paths[1], paths[2], paths[2], paths[3]]
+    assert ocr_inputs(paths + [tmp_path / "fifth.png"]) == paths + [tmp_path / "fifth.png"], "five stay as they are"
