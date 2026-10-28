@@ -156,7 +156,7 @@ Lưu ý khi vận hành:
   - Sai mật khẩu (401/403): phiên dừng ngay với lý do rõ ràng. Mất kết nối hoặc 404 (camera đang khởi động lại): tự kết nối lại như YouTube.
   - API, sự kiện và lỗi không bao giờ chứa mật khẩu. File `data/live/<phiên>/payload.json` vẫn giữ URL đầy đủ để tiến trình live dùng, nên thư mục `data/` chỉ người vận hành được đọc.
 - **Camera demo:** admin chép video vào `data/demo-videos/` rồi tạo camera với `{ "source_type": "file", "path": "camboriu.mp4" }`. Phiên phát lại video theo vòng lặp với tốc độ thật, nên demo không phụ thuộc mạng. Kịch bản demo: [DEMO.md](docs/DEMO.md).
-- **Hiệu chỉnh ngưỡng `min_confidence`:** admin tạo bộ mẫu trong tab **Gán nhãn** của FE. Người gán nhãn đọc biển từ crop mà không thấy kết quả máy, và báo cáo cho ra precision/coverage theo ngưỡng cùng ngưỡng đề xuất. Xem [EVALUATION.md](docs/EVALUATION.md#hiệu-chỉnh-ngưỡng-tin-cậy-live).
+- **Hiệu chỉnh ngưỡng `min_confidence`:** admin tạo bộ mẫu trong tab **Gán nhãn** của FE. Người gán nhãn đọc biển từ crop mà không thấy kết quả máy, và báo cáo cho ra precision/coverage theo ngưỡng cùng ngưỡng đề xuất. Xem [EVALUATION.md](docs/EVALUATION.md#hiệu-chỉnh-ngưỡng-tin-cậy-live); hướng dẫn gán cho nhóm: [LABELLING.md](docs/LABELLING.md).
 - Code `app/live` không nằm trong checksum của snapshot (chỉ `app/recognition` và model được ghim).
 
 Kết quả đo xem [TESTING.md](TESTING.md#nghiệm-thu-live-qua-api).

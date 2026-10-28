@@ -146,7 +146,7 @@ Mỗi track đã chốt là một job `succeeded` có `live_session_id`, `live_t
 
 Nhãn tách khỏi review; người gán không thấy kết quả máy. Xem [EVALUATION.md](EVALUATION.md#hiệu-chỉnh-ngưỡng-tin-cậy-live).
 
-- `POST /api/v2/evaluation-sets` (admin): `{name, stream_source_id | live_session_id, per_bin?}` → `201`. Lấy ngẫu nhiên tối đa `per_bin` (1–200, mặc định 30) track live có confidence ở mỗi khoảng 0, 0.5, 0.7, 0.8, 0.85, 0.9, 0.95. Camera chưa có track trả `422`.
+- `POST /api/v2/evaluation-sets` (admin): `{name, stream_source_id | live_session_id, per_bin?, min_crop_width?}` → `201`. Lấy ngẫu nhiên tối đa `per_bin` (1–200, mặc định 30) track live có confidence ở mỗi khoảng 0, 0.5, 0.7, 0.8, 0.85, 0.9, 0.95. `min_crop_width` (px) chỉ lấy track có chiều rộng crop trung vị từ giá trị này trở lên, để người gán không phải xem biển quá nhỏ (camera Camboriú: dưới 51 px không đọc được). Camera chưa có track (hoặc không track nào đủ rộng) trả `422`.
 - `GET /api/v2/evaluation-sets`, `GET /api/v2/evaluation-sets/{id}` (mọi người dùng): `items`, `labelled_items`, `labelers`, `my_labels`.
 - `DELETE /api/v2/evaluation-sets/{id}` (admin): `204`; xóa nhãn, giữ track.
 - `GET /api/v2/evaluation-sets/{id}/next?exclude=ID,ID`: `{remaining, item}`. `item` là mẫu kế tiếp mình chưa gán (thứ tự ổn định, riêng cho từng người), hoặc `null` khi hết. `exclude` là các mẫu đã bỏ qua.

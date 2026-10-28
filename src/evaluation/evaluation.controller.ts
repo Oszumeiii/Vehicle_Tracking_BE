@@ -32,6 +32,7 @@ const createSet = z
     stream_source_id: z.string().min(1).max(32).optional(),
     live_session_id: z.string().min(1).max(32).optional(),
     per_bin: z.number().int().min(1).max(200).default(30),
+    min_crop_width: z.number().int().min(1).max(2000).optional(),
   })
   .strict()
   .refine((value) => Boolean(value.stream_source_id) !== Boolean(value.live_session_id), {
@@ -71,7 +72,11 @@ const SET_SCHEMA = {
     created_by: { type: 'string' },
     stream_source_id: { type: 'string', nullable: true },
     live_session_id: { type: 'string', nullable: true },
-    params: { type: 'object', additionalProperties: true, description: 'per_bin and bin edges' },
+    params: {
+      type: 'object',
+      additionalProperties: true,
+      description: 'per_bin, bin edges and min_crop_width when given',
+    },
     created_at: { type: 'string', format: 'date-time' },
     items: { type: 'integer' },
     labelled_items: { type: 'integer', description: 'Items with at least one label' },
@@ -245,6 +250,12 @@ export class EvaluationController {
           default: 30,
           description: `Tracks per confidence bin; bins start at ${BINS.slice(0, -1).join(', ')}`,
         },
+        min_crop_width: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 2000,
+          description: 'Only tracks whose median crop is at least this wide (px), e.g. 51',
+        },
       },
     },
   })
@@ -261,6 +272,7 @@ export class EvaluationController {
       this.db,
       { source: body.stream_source_id, session: body.live_session_id },
       body.per_bin,
+      body.min_crop_width,
     );
     if (!tracks.length) throw new UnprocessableEntityException('No live tracks to sample yet.');
     const id = newId();
@@ -274,7 +286,11 @@ export class EvaluationController {
           req.user.id,
           body.stream_source_id ?? null,
           body.live_session_id ?? null,
-          JSON.stringify({ per_bin: body.per_bin, bins: BINS.slice(0, -1) }),
+          JSON.stringify({
+            per_bin: body.per_bin,
+            bins: BINS.slice(0, -1),
+            ...(body.min_crop_width ? { min_crop_width: body.min_crop_width } : {}),
+          }),
         ],
       );
       for (const track of tracks)

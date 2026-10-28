@@ -353,8 +353,8 @@ Tổng cộng 20/280 mẫu có nhãn, đều thuộc nhóm crop lớn nhất và
 - Mẫu chỉ có crop lớn, nên kết quả không đại diện cho biển xa.
 - **Ngưỡng mặc định không đổi vì kết quả này** (BR30).
 
-**Bộ mẫu cho nhóm gán:** "Camboriú YouTube 26–27/10: cho nhóm gán (mỗi mẫu ≥ 2 người)", cùng cấu hình, chưa có nhãn.
-- Mỗi thành viên đăng nhập bằng tài khoản của mình và gán trong tab **Gán nhãn**.
-- Admin mở **Báo cáo ngưỡng** với tối thiểu 2 nhãn mỗi mẫu.
-- Nên gán `null` chỉ khi chắc chắn không ai đọc được, và bỏ qua khi còn phân vân.
+**Bộ mẫu cho nhóm gán:** "Camboriú YouTube: crop ≥ 51 px, cho nhóm gán", tạo với `min_crop_width: 51` và `per_bin: 25` (khoảng 160 track).
+- Bộ 280 track ban đầu có khoảng 180 track crop dưới 51 px. Ở cỡ đó không đọc được ký tự nào, nên gán chỉ tốn công mà không thêm thông tin.
+- Cách gán chi tiết: `docs/LABELLING.md`. Mỗi mẫu cần ít nhất 2 người; admin mở **Báo cáo ngưỡng** với tối thiểu 2 nhãn mỗi mẫu.
+- Kết quả chỉ đại diện cho biển đủ lớn để người đọc được. Đó cũng là nhóm biển duy nhất máy có thể xếp `readable` đúng.
 
