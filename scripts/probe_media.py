@@ -10,14 +10,21 @@ def probe(path):
     suffix = path.suffix.lower()
     if suffix in ('.png', '.jpg', '.jpeg'):
         from PIL import Image
-        with Image.open(path) as picture:
-            if picture.format not in ('JPEG', 'PNG') or picture.width * picture.height > 25_000_000:
-                raise ValueError('Invalid format or image exceeds 25 megapixels')
-            picture.verify()
-        with Image.open(path) as picture:
-            picture.load()
-            return dict(media_type='image', mime_type=Image.MIME[picture.format], width=picture.width,
-                        height=picture.height, duration_seconds=None)
+        try:
+            with Image.open(path) as picture:
+                if picture.format not in ('JPEG', 'PNG') or picture.width * picture.height > 25_000_000:
+                    raise ValueError('Invalid format or image exceeds 25 megapixels')
+                picture.verify()
+            with Image.open(path) as picture:
+                picture.load()
+                width, height = picture.size
+                # EXIF orientations 5-8 rotate by 90 degrees: report the size as recognition sees it.
+                if picture.getexif().get(0x0112) in (5, 6, 7, 8):
+                    width, height = height, width
+                return dict(media_type='image', mime_type=Image.MIME[picture.format], width=width,
+                            height=height, duration_seconds=None)
+        except Image.DecompressionBombError as exc:  # declared size far beyond the limit
+            raise ValueError('Image exceeds 25 megapixels') from exc
     import cv2
     with path.open('rb') as source:
         header = source.read(16)

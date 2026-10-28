@@ -8,6 +8,8 @@ Có **6 lỗi mức P2** cần xử lý trong các trường hợp đầu vào h
 
 ## Các lỗi đã xác minh
 
+> **Cập nhật 28/10/2026:** F01, F03, F04, F05 và F06 đã được sửa và có test (thử lại trên API đang chạy trước khi sửa: F04 và F05 vẫn trả 500). F02 đã được giảm thiểu bằng `.gitattributes` (`eol=lf`). Cùng đợt này bổ sung giới hạn số lần đăng nhập sai (mục "rate limit login" ở phần năng lực còn thiếu).
+
 ### F01 - P2: Ảnh JPEG có EXIF orientation bị xử lý sai hướng
 
 - Nguồn: [runner.py:116](../app/recognition/runner.py#L116), [probe_media.py:19](../scripts/probe_media.py#L19).

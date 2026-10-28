@@ -16,5 +16,9 @@ export function settings() {
     ),
     maxUpload: positive('PLATE_MAX_UPLOAD_MIB', 500) * 1024 * 1024,
     sessionHours: positive('PLATE_SESSION_HOURS', 12),
+    // Failed sign-ins allowed per email and client address, and per address, in the window.
+    loginMaxFailures: positive('PLATE_LOGIN_MAX_FAILURES', 5),
+    loginMaxFailuresPerAddress: positive('PLATE_LOGIN_MAX_FAILURES_PER_ADDRESS', 30),
+    loginWindowMinutes: positive('PLATE_LOGIN_WINDOW_MINUTES', 15),
   };
 }

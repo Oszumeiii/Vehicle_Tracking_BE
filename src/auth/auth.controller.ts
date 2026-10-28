@@ -7,14 +7,18 @@ import {
   Param,
   Query,
   Req,
+  Res,
   UseGuards,
   HttpCode,
+  HttpException,
+  HttpStatus,
   UnauthorizedException,
   ForbiddenException,
   NotFoundException,
   ConflictException,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags, ApiBody, ApiResponse } from '@nestjs/swagger';
+import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { Database } from '../database/database';
 import { Actor, newId, pagination } from '../common/http';
@@ -23,6 +27,7 @@ import { ApiFailures, ApiPage, ApiPageResponse } from '../common/openapi';
 import { LoginResponse, UserResponse } from '../common/api-models';
 import { AuthGuard } from './auth.guard';
 import { hashPassword, verifyPassword, makeToken, hashToken } from './security';
+import { LoginThrottle } from './throttle';
 
 const email = z.string().trim().toLowerCase().pipe(z.email().max(254));
 const loginSchema = z.object({ email, password: z.string().min(1).max(1024) }).strict();
@@ -50,11 +55,22 @@ const admin = (actor: Actor) => {
 @ApiFailures(401, 422)
 @Controller('api/v2')
 export class AuthController {
+  private readonly window = settings().loginWindowMinutes * 60000;
+  private readonly perAccount = new LoginThrottle(settings().loginMaxFailures, this.window);
+  private readonly perAddress = new LoginThrottle(
+    settings().loginMaxFailuresPerAddress,
+    this.window,
+  );
+
   constructor(private readonly db: Database) {}
 
   @Post('auth/login')
   @HttpCode(200)
   @ApiResponse({ status: 200, type: LoginResponse })
+  @ApiResponse({
+    status: 429,
+    description: 'Too many failed sign-ins from this address (for this email); see Retry-After.',
+  })
   @ApiBody({
     schema: {
       type: 'object',
@@ -66,11 +82,30 @@ export class AuthController {
       },
     },
   })
-  async login(@Body() input: unknown) {
+  async login(
+    @Body() input: unknown,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
     const body = loginSchema.parse(input);
+    const address = req.ip ?? 'unknown';
+    const account = `${body.email}|${address}`;
+    const wait = Math.max(this.perAccount.retryAfter(account), this.perAddress.retryAfter(address));
+    if (wait) {
+      res.setHeader('Retry-After', String(wait));
+      throw new HttpException(
+        `Too many failed sign-ins. Try again in ${Math.ceil(wait / 60)} min.`,
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
     const user = (await this.db.query('SELECT * FROM users WHERE email=$1', [body.email])).rows[0];
     const valid = await verifyPassword(body.password, user?.password_hash ?? (await dummyHash));
-    if (!valid || !user?.is_active) throw new UnauthorizedException('Invalid email or password.');
+    if (!valid || !user?.is_active) {
+      this.perAccount.fail(account);
+      this.perAddress.fail(address);
+      throw new UnauthorizedException('Invalid email or password.');
+    }
+    this.perAccount.succeed(account);
     const token = makeToken();
     const expiry = new Date(Date.now() + settings().sessionHours * 3600000);
     // Lock the account while creating a session so disabling it cannot race login.

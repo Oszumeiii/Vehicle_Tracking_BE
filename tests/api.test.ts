@@ -525,6 +525,11 @@ test('prepare pipeline works without OCR and supports manual review, search and 
     await api
       .post(`/api/v2/recognition-results/${resultId}/reviews`)
       .set('Authorization', `Bearer ${ownerToken}`)
+      .send({ action: 'correct', corrected_text: 'ﬃ'.repeat(64), expected_revision: 0 })
+      .expect(422); // 64 characters, but 192 once upper-cased: longer than the column
+    await api
+      .post(`/api/v2/recognition-results/${resultId}/reviews`)
+      .set('Authorization', `Bearer ${ownerToken}`)
       .send({ action: 'correct', corrected_text: ' abc-1d23 ', expected_revision: 0 })
       .expect(201);
     const found = await api
@@ -762,6 +767,36 @@ test('public health and OpenAPI are usable while invalid query/body values retur
     .set('Authorization', `Bearer ${ownerToken}`)
     .send({ media_id: 'x', pipeline_id: 'x', checkpoint: '/tmp/model' })
     .expect(422);
+  // PostgreSQL cannot store NUL: invalid input, not a server error.
+  await api
+    .get('/api/v2/recognition-results?plate=AB%00C')
+    .set('Authorization', `Bearer ${ownerToken}`)
+    .expect(422);
+  const large = await api
+    .post('/api/v2/auth/login')
+    .set('Content-Type', 'application/json')
+    .send(JSON.stringify({ email: 'a@example.test', password: 'x'.repeat(2_000_000) }))
+    .expect(413);
+  assert.equal(large.body.detail, 'Request body is too large.');
+  await api
+    .post('/api/v2/auth/login')
+    .set('Content-Type', 'application/json')
+    .send('{"email":')
+    .expect(400);
+});
+
+test('repeated failed sign-ins are refused for a while, even with the right password', async () => {
+  const user = await seedUser(fixture.database);
+  const attempt = (password: string) =>
+    api.post('/api/v2/auth/login').send({ email: user.email, password });
+  for (let i = 0; i < 5; i++) await attempt(`wrong-password-${i}`).expect(401);
+  const refused = await attempt('wrong-password-5').expect(429);
+  assert.ok(Number(refused.headers['retry-after']) > 0);
+  assert.match(refused.body.detail, /Too many failed sign-ins/);
+  await attempt(user.password).expect(429);
+  // Other accounts from the same address still sign in.
+  const other = await seedUser(fixture.database);
+  await login(other);
 });
 
 test('admin-created accounts normalize unique email, hide hashes, and apply current roles to existing sessions', async () => {

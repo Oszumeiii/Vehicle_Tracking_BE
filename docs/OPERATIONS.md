@@ -77,6 +77,12 @@ Cấu hình mặc định là `PLATE_PIPELINES_CONFIG=config/pipelines.kaggle.js
 
 Cả hai profile dùng kiểm duyệt, tra cứu và CSV chung. Với OCR, mở đầy đủ 5 crop và frame nguồn để kiểm tra chuỗi nhận diện và việc ghép track trước khi `confirm` hoặc `correct`. Nếu không có track đủ 5 frame, job vẫn có thể `succeeded` với danh sách kết quả rỗng và thống kê loại track.
 
+## Đăng nhập bị chặn tạm
+
+Đăng nhập sai 5 lần với cùng email từ cùng một địa chỉ (hoặc 30 lần từ một địa chỉ với mọi email) trong 15 phút thì API trả `429` kèm `Retry-After`, kể cả khi lần sau nhập đúng mật khẩu. Hết thời gian chờ thì tự mở lại; đăng nhập đúng xóa bộ đếm của email đó.
+- Đổi ngưỡng bằng `PLATE_LOGIN_MAX_FAILURES`, `PLATE_LOGIN_MAX_FAILURES_PER_ADDRESS`, `PLATE_LOGIN_WINDOW_MINUTES`.
+- Bộ đếm nằm trong bộ nhớ của tiến trình API: khởi động lại API thì bộ đếm về 0.
+
 ## Theo dõi và chạy lại
 
 Poll `GET /api/v2/recognition-jobs/{id}` khoảng 2 giây một lần. Giai đoạn gồm `validating`, `detection_tracking`, `recognition` khi có chạy OCR, `persisting`, sau đó `complete` hoặc `failed`. `succeeded` có thể có không kết quả; không đồng nghĩa OCR đúng. Video chỉ tạo appearance cho track có đủ 5 frame hợp lệ.

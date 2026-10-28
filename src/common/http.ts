@@ -66,7 +66,31 @@ export class ApiErrors implements ExceptionFilter {
       });
       return;
     }
+    // Body parser errors (http-errors): 413 for an oversized body, 400 for invalid JSON.
+    const parser = error as { status?: number; expose?: boolean; type?: string };
+    if (
+      parser?.expose &&
+      Number.isInteger(parser.status) &&
+      parser.status! >= 400 &&
+      parser.status! < 500
+    ) {
+      res.status(parser.status!).json({
+        detail:
+          parser.type === 'entity.too.large'
+            ? 'Request body is too large.'
+            : parser.type === 'entity.parse.failed'
+              ? 'Request body is not valid JSON.'
+              : 'Invalid request.',
+      });
+      return;
+    }
     const code = (error as { code?: string })?.code;
+    // PostgreSQL data exceptions (class 22): a value it cannot store, e.g. a NUL character
+    // or text longer than its column after normalization. The input is invalid, not the server.
+    if (typeof code === 'string' && code.startsWith('22')) {
+      res.status(422).json({ detail: 'A value in the request is invalid or too long.' });
+      return;
+    }
     if (code === '23505' || code === '23503' || code === '23001') {
       res.status(409).json({
         detail: code === '23505' ? 'Resource already exists.' : 'Resource is still referenced.',
