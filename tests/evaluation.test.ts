@@ -123,9 +123,26 @@ test('sets are sampled per confidence bin, labelled blind and calibrated from co
     .set(as('admin'))
     .send({ ...body, stream_source_id: empty.id })
     .expect(422);
+  // Test crops are 8 px wide: a minimum width above that leaves nothing to sample.
+  await api
+    .post('/api/v2/evaluation-sets')
+    .set(as('admin'))
+    .send({ ...body, min_crop_width: 9 })
+    .expect(422);
+  const wide = (
+    await api
+      .post('/api/v2/evaluation-sets')
+      .set(as('admin'))
+      .send({ ...body, min_crop_width: 8 })
+      .expect(201)
+  ).body;
+  assert.equal(wide.items, CONFIDENCES.length);
+  assert.equal(wide.params.min_crop_width, 8);
+  await api.delete(`/api/v2/evaluation-sets/${wide.id}`).set(as('admin')).expect(204);
   const set = (await api.post('/api/v2/evaluation-sets').set(as('admin')).send(body).expect(201))
     .body;
   assert.equal(set.items, CONFIDENCES.length);
+  assert.equal(set.params.min_crop_width, undefined);
   assert.equal(set.my_labels, 0);
   const items = (
     await db().query('SELECT id, job_id, bin FROM evaluation_items WHERE set_id=$1', [set.id])

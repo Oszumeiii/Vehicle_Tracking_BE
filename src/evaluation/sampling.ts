@@ -19,12 +19,14 @@ export interface SampledTrack {
 /**
  * Up to perBin random live tracks of a camera or session from each confidence bin,
  * so precision can be measured near every candidate threshold, not only where most
- * tracks fall. Tracks without a confidence are skipped.
+ * tracks fall. Tracks without a confidence are skipped; with minCropWidth, so are tracks
+ * whose median crop is narrower (plates too small for a person to read).
  */
 export async function sampleLiveTracks(
   db: Queryable,
   filter: { source?: string; session?: string },
   perBin: number,
+  minCropWidth?: number,
 ): Promise<SampledTrack[]> {
   const rows = (
     await db.query(
@@ -34,8 +36,11 @@ export async function sampleLiveTracks(
       JOIN live_sessions s ON s.id=j.live_session_id
       WHERE (($1::text IS NOT NULL AND s.stream_source_id=$1) OR ($2::text IS NOT NULL AND j.live_session_id=$2))
         AND j.statistics->>'confidence' IS NOT NULL
+        AND ($3::int IS NULL OR (
+          SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY d.crop_width)
+          FROM plate_detections d WHERE d.appearance_id=a.id) >= $3)
       ORDER BY random()`,
-      [filter.source ?? null, filter.session ?? null],
+      [filter.source ?? null, filter.session ?? null, minCropWidth ?? null],
     )
   ).rows;
   return BINS.slice(1).flatMap((upper, bin) =>
