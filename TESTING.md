@@ -361,6 +361,11 @@ Chưa đo lại sau các thay đổi này: lượt đo bị dừng vì máy gầ
 
 **Lỗi tìm ra khi đo:** với HLS, ffmpeg liệt kê đoạn đầu tiên từ PTS 0 thay vì PTS thật của luồng, nên giờ UTC của đoạn đó bị lùi gần 3 giờ. Recorder giờ lấy keyframe đầu của đoạn làm mốc bắt đầu; đã có test.
 
+**Sửa ngày 28/10: mất đoạn cuối khi dừng phiên.** Trước đây dừng phiên thì ffmpeg bị kill, nên đoạn MP4 đang ghi (tối đa 10 s cuối) không được đóng và không có trong danh sách. Track ở cuối phiên vì vậy không cắt được clip. Nay ffmpeg ghi hình nhận lệnh `q` qua stdin; trong lúc chờ, frame còn lại được đọc bỏ để pipe không bị nghẽn; quá 10 s mới kill.
+- File thử 30 s, dừng ở giây 14: trước khi sửa chỉ có đoạn 0–10,2 s trong danh sách; sau khi sửa có cả đoạn 10,2–16,4 s.
+- YouTube Camboriú 720p, dừng sau 25 s: 3/3 đoạn được liệt kê, đoạn cuối phát được, ffmpeg thoát sau 0,2 s.
+- Có test hồi quy trong `tests/test_live_recording.py`.
+
 Không có lượt đo tắt ghi cùng lúc vì máy chỉ còn khoảng 3,6 GB RAM trống. Số so sánh lấy từ lần đo 30 phút trước đó.
 
 ## Chọn crop và thử nghiệm OCR (2026-10-28)

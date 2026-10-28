@@ -68,13 +68,30 @@ def copy_of(folder, tmp_path):
 
 def test_recording_is_a_second_stream_copy_output():
     command = FfmpegFrames("clip.mp4", 320, 180, ffmpeg="ffmpeg", record_dir=None).command
-    assert "segment" not in command
+    assert "segment" not in command and "-nostdin" in command
     import tempfile
     with tempfile.TemporaryDirectory() as folder:
         command = FfmpegFrames("clip.mp4", 320, 180, ffmpeg="ffmpeg", record_dir=folder).command
     pipe = command.index("pipe:1")
     tail = command[pipe + 1:]
     assert tail[:4] == ["-map", "0:v:0", "-c", "copy"] and "segment" in tail and tail[-1].endswith("seg_%06d.mp4")
+    assert "-nostdin" not in command, "close() quits a recording ffmpeg through stdin"
+
+
+def test_stopping_mid_segment_still_closes_and_lists_the_last_segment(tmp_path):
+    video = h264(tmp_path / "in.mp4", 30)
+    folder = tmp_path / "record"
+    source = FfmpegFrames(str(video), 320, 240, record_dir=folder)
+    for pts, _ in source:
+        if pts >= 12:  # 2 s into the second segment
+            break
+    source.close()
+    recorder = Recorder(folder, to_iso, keep_minutes=60, now=lambda: BASE)
+    recorder.scan()
+    assert [e["file"] for e in recorder.entries] == ["seg_000000.mp4", "seg_000001.mp4"]
+    assert recorder.covered >= 12
+    count, ok = frames_of(folder / "seg_000001.mp4")
+    assert ok and count >= 20
 
 
 def test_recorder_indexes_closed_segments_with_wall_clock_and_keyframes(recording, tmp_path):

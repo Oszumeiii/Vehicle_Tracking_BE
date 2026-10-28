@@ -174,6 +174,9 @@ class FfmpegFrames:
                              "-segment_format", "mp4", "-reset_timestamps", "0",
                              "-segment_list", str(record_dir / "segments.csv"), "-segment_list_type", "csv",
                              str(record_dir / "seg_%06d.mp4")]
+            # close() quits ffmpeg with "q" on stdin so it closes and lists the open segment;
+            # a killed ffmpeg loses the last (up to 10 s) of the recording.
+            self.command.remove("-nostdin")
         self.record_dir = record_dir
         self.pacer = pacer or Pacer()
         self.fetch = fetch or _fetch_text
@@ -201,7 +204,8 @@ class FfmpegFrames:
         import os
         from app.core.processes import WindowsJob
         self.job = WindowsJob() if os.name == "nt" else None
-        self.process = subprocess.Popen(self.command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stdin = subprocess.PIPE if self.record_dir is not None else subprocess.DEVNULL
+        self.process = subprocess.Popen(self.command, stdin=stdin, stdout=subprocess.PIPE,
                                         stderr=subprocess.PIPE, bufsize=0)
         if self.job:
             self.job.assign(self.process)  # ffmpeg dies with this process
@@ -271,7 +275,21 @@ class FfmpegFrames:
             self._stderr_done = True
             self._pts_ready.notify_all()
 
-    def close(self):
+    def close(self, grace_seconds=10.0):
+        """Stop ffmpeg; while recording it is first asked to quit so the open segment is finished."""
+        if self.process and self.process.poll() is None and self.process.stdin:
+            try:
+                self.process.stdin.write(b"q")
+                self.process.stdin.close()
+            except OSError:
+                pass  # ffmpeg is already exiting
+            else:
+                # Nobody reads the frames any more: drain them, or ffmpeg blocks on a full pipe.
+                threading.Thread(target=self._drain, name="ffmpeg-drain", daemon=True).start()
+                try:
+                    self.process.wait(grace_seconds)
+                except subprocess.TimeoutExpired:
+                    pass
         if self.process and self.process.poll() is None:
             self.process.kill()
         if self.process:
@@ -279,6 +297,13 @@ class FfmpegFrames:
         if self.job:
             self.job.close()
             self.job = None
+
+    def _drain(self):
+        try:
+            while self.process.stdout.read(1 << 16):
+                pass
+        except (OSError, ValueError):
+            pass
 
 
 class NoPacer:
