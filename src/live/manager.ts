@@ -464,10 +464,11 @@ export class LiveManager {
           message: `Live process exited unexpectedly (code ${exitCode}).`,
         };
       }
+      // The process has exited, so the GPU is free before the final status is visible.
+      this.gate.leave('live');
       await this.finish(session.id, status, error, exitCode, run.killed).catch(() => {});
       log.end();
       this.runs.delete(session.id);
-      this.gate.leave('live');
       resolveDone();
     };
     // Wait for stdout to drain so the final events are handled before finishing.
