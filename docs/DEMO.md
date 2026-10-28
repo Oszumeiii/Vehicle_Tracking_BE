@@ -21,7 +21,14 @@ Demo khoảng 10 phút, đi qua cả hai nguồn của hệ thống: video uploa
 4. **Một video ngắn** (15–60 s) để demo phần upload.
 5. **Chạy thử lần cuối** trước giờ demo: nhấp đúp `start-all.cmd`.
    - Lần đầu script tự sao lưu DB vào `data/backups/` rồi migrate.
-   - Bật một phiên trên camera demo để model nạp sẵn vào cache và kiểm tra GPU.
+   - Chạy script kiểm tra (`scripts/smoke.mjs`) bằng tài khoản dùng để demo:
+     ```powershell
+     $env:PLATE_SMOKE_EMAIL = 'admin@example.com'; $env:PLATE_SMOKE_PASSWORD = '<mật khẩu>'
+     npm run smoke                                              # API, DB, web, model, camera (~1 s)
+     npm run smoke -- --upload clip.mp4                         # + upload, nhận diện, bằng chứng, rồi xóa
+     npm run smoke -- --live "Demo Camboriú (ban ngày)" --seconds 60   # + chạy camera rồi dừng
+     ```
+     Đo ngày 28/10/2026: kiểm tra nhanh mất khoảng 1 s; clip 15 s 1080p xong trong 39 s (6 biển, mở được bằng chứng); camera demo ban ngày chạy sau 26 s, 16 track trong 60 s, không bỏ frame, độ trễ 0,65 s. Cũng là lúc model được nạp sẵn vào cache.
 
 ## Thời gian đo được (để chia giờ demo)
 
@@ -58,14 +65,15 @@ Có 3 cửa sổ: **API**, **WORKER**, **WEB**. Đợi dòng `Ready: web http://
 | 3 | Thanh bên: **Tìm biển số** | Tra cứu kết quả đã lưu, không xử lý lại |
 | 4 | Tab **Camera live** → camera **Demo (video)** → **Bật phiên** | Khoảng 40 s để nạp model và mở nguồn; trạng thái chuyển *Đang chạy* |
 | 5 | Xem feed **Biển số real-time** và stats (frame, độ trễ, track đang mở) | Mỗi track đã chốt là một kết quả, đẩy qua SSE trong khoảng 4 s |
-| 6 | Bấm một thẻ biển → hộp bằng chứng 5 keyframe | Bằng chứng giống luồng upload; sau 24 h chỉ giữ 1 keyframe |
+| 6 | Bấm một thẻ biển → hộp bằng chứng 5 keyframe, xem video của lượt xuất hiện | Bằng chứng giống luồng upload; sau 24 h chỉ giữ 1 keyframe. Track `readable` có sẵn clip; track khác được cắt từ bản ghi khi mở (camera mạng giữ bản ghi 4 giờ) |
 | 7 | Tab **Watchlist**: thêm một biển vừa thấy | Khi xe đó xuất hiện lại sẽ có toast cảnh báo và âm báo. Video demo lặp mỗi 3 phút nên cảnh báo xuất hiện trong buổi demo |
 | 8 | Tab **Vùng loại trừ**: kéo một vùng quanh biển tên đường | Detector hay nhầm bảng cố định là biển số; áp dụng từ phiên kế tiếp |
 | 9 | Tab **Lịch sử** | Gộp theo lượt xuất hiện: cùng biển trong 5 phút là một dòng |
 | 10 | (Nếu mạng tốt) camera **YouTube** Camboriú → **Bật phiên** | Luồng thật, giờ chụp lấy theo đồng hồ của luồng HLS |
-| 11 | Công tắc **Chạy 24/7**; dừng phiên | Worker tự bật lại sau sự cố; dừng tay thì tắt 24/7 |
+| 11 | Công tắc **Chạy 24/7**; dừng phiên | Worker tự bật lại sau sự cố; dừng tay thì tắt 24/7. Khi dừng, đoạn ghi hình cuối vẫn được đóng, nên track cuối phiên vẫn có video |
+| 12 | (Tùy chọn) tab **Gán nhãn** → bộ mẫu → **Báo cáo ngưỡng** | Ngưỡng `readable` 0,96 được hiệu chỉnh trên tập ICPR có nhãn; nhãn người gán trên camera thật dùng để kiểm tra lại (`docs/EVALUATION.md`, `docs/LABELLING.md`) |
 
-Mỗi lúc chỉ chạy được một phiên live (GPU 8 GB), và job upload chờ trong lúc có phiên live. Vì vậy hãy demo phần upload (bước 1–3) trước, hoặc dừng phiên live trước khi upload.
+Với `PLATE_LIVE_MAX_SESSIONS` ≥ 2 (mặc định trong `.env` của máy demo), các camera chạy chung một tiến trình GPU, tối đa 3 camera. Job upload video vẫn chạy trong lúc camera chạy, nhưng chỉ nhanh bằng thời gian thực (clip 20 s mất khoảng 20 s thay vì nhanh hơn). Nếu `PLATE_LIVE_MAX_SESSIONS=1` thì job upload phải chờ phiên live dừng; khi đó hãy demo phần upload (bước 1–3) trước.
 
 ## Phương án dự phòng
 
@@ -73,6 +81,7 @@ Mỗi lúc chỉ chạy được một phiên live (GPU 8 GB), và job upload ch
 - **Phiên đứng ở *Đang chờ*:** một job upload đang chạy, chờ job xong hoặc hủy job.
 - **Phiên lỗi `CHECKPOINT_MISSING` / `CUDA_UNAVAILABLE`:** kiểm tra `models/` và driver GPU (`nvidia-smi`), rồi chạy lại.
 - **Không thấy biển nào:** kiểm tra vùng loại trừ có che mất đường không; thử video demo khác.
+- **Đăng nhập báo "Too many failed sign-ins":** đã gõ sai mật khẩu 5 lần trong 15 phút. Chờ hết thời gian, hoặc đóng cửa sổ API rồi chạy lại `start-all.cmd` (bộ đếm nằm trong bộ nhớ của API).
 - **Lỡ đóng cửa sổ worker:** chạy lại `start-all.cmd`. Dịch vụ đang chạy được giữ nguyên; phiên cũ chuyển *Bị gián đoạn*, camera 24/7 tự bật lại.
 
 ## Sau buổi demo
