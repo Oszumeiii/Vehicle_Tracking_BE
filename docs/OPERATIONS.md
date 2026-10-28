@@ -118,6 +118,7 @@ Phiên live khi worker dừng bằng Ctrl+C sẽ chốt track đang mở (tối 
 - Tiến trình live tự xóa đoạn cũ hơn `PLATE_LIVE_RECORD_MINUTES`; worker dọn bản ghi của phiên đã dừng và video cắt tạm (`cache/`, `live/recording-cache/`) sau 1 giờ.
 - Clip lưu lâu dài nằm cùng bằng chứng của job: `recognition/<job>/clip.mp4`.
 - Tắt ghi bằng `PLATE_LIVE_RECORD=false`.
+- Khi dừng phiên, ffmpeg được yêu cầu thoát (`q` qua stdin) để đóng đoạn đang ghi, nên track ở cuối phiên vẫn có clip. Chỉ khi ffmpeg không thoát trong 10 s, hoặc worker bị kill đột ngột, thì mới mất đoạn cuối.
 - Ước tính dung lượng: 4 giờ × 1080p ≈ 7 GB mỗi camera.
 
 Một phiên live chiếm GPU liên tục. Với `PLATE_LIVE_MAX_SESSIONS` ≥ 2, job video dùng pipeline joint chạy trong host live (dùng chung model, giữ ở tốc độ thời gian thực khi có camera). Job quá `PLATE_JOB_TIMEOUT_SECONDS` được yêu cầu dừng; nếu 30 s sau vẫn chưa dừng thì host bị kill, kéo theo các phiên live trong đó. Các job khác vẫn theo quy tắc cũ: mặc định (`PLATE_LIVE_EXCLUSIVE_GPU=true`) chúng chờ trong lúc phiên live chạy và ngược lại. Muốn xử lý video upload thì dừng phiên live, hoặc chạy worker trên máy có GPU đủ lớn rồi đặt `false`. Số đo nằm trong `TESTING.md`. Các job `queued` tiếp tục được lấy; job `failed` không tự chạy lại.
