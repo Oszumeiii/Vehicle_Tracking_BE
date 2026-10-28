@@ -118,9 +118,10 @@ def _predict_joint(recognizer, paths, data_dir):
 
 
 def _image_detections(payload, model, folder, data_dir):
-    from PIL import Image
+    from PIL import Image, ImageOps
     with Image.open(payload["input_path"]) as source:
-        picture = source.convert("RGB")
+        # A phone photo stores its rotation in EXIF; detect and crop on the upright image.
+        picture = ImageOps.exif_transpose(source).convert("RGB")
     width, height = picture.size
     frame = folder / "frame.png"
     picture.save(frame)
