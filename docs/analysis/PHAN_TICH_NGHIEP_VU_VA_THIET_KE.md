@@ -2,7 +2,7 @@
 
 Nhận diện biển số độ phân giải thấp
 
-Phiên bản 1.8 · 28/10/2026
+Phiên bản 1.9 · 28/10/2026
 
 ## 1. Mục tiêu, bối cảnh và thuật ngữ
 
@@ -134,12 +134,12 @@ Hơn ba camera live đồng thời trên một GPU 8 GB, lưu video toàn thời
 
 | Mã | Yêu cầu | Cách kiểm chứng / giới hạn |
 |---|---|---|
-| NFR01 | Bảo mật truy cập và bí mật xác thực | Test tài khoản chéo; mật khẩu hash scrypt, DB chỉ lưu hash token; không lộ đường dẫn nội bộ. |
+| NFR01 | Bảo mật truy cập và bí mật xác thực | Test tài khoản chéo; mật khẩu hash scrypt, DB chỉ lưu hash token; không lộ đường dẫn nội bộ. Đăng nhập sai 5 lần (cùng email, cùng địa chỉ) hoặc 30 lần (cùng địa chỉ) trong 15 phút thì bị chặn tạm với `429`, kể cả khi lần sau đúng mật khẩu. |
 | NFR02 | Toàn vẹn dữ liệu và cập nhật đồng thời | FK, unique/check, transaction; test hai review cùng revision chỉ một lần thành công. |
 | NFR03 | Tái lập và truy vết | Giữ snapshot/checksum, raw/normalized text, input crop và lịch sử; đối chiếu lại một lượt chạy. |
 | NFR04 | Xử lý dài không giữ request HTTP | Tạo job trả 202; inference trong worker riêng; đo thời gian theo thiết bị và nguồn thực. Chưa cam kết SLA. |
 | NFR05 | Phục hồi lỗi có trạng thái rõ | Worker khởi động lại đánh dấu job running cũ là failed/WORKER_INTERRUPTED; người dùng tạo lượt mới. |
-| NFR06 | Giới hạn tài nguyên và đầu vào | Upload mặc định 500 MiB, ảnh tối đa 25 MP; limit tối đa 200; cấu hình timeout phía server. |
+| NFR06 | Giới hạn tài nguyên và đầu vào | Upload mặc định 500 MiB, ảnh tối đa 25 MP; limit tối đa 200; cấu hình timeout phía server. Đầu vào sai không gây lỗi 500: body JSON quá lớn `413`, JSON hỏng `400`, giá trị PostgreSQL không lưu được (ký tự NUL, chuỗi dài hơn cột sau khi viết hoa) `422`, ảnh khai kích thước khổng lồ `422`. |
 | NFR07 | Khả năng vận hành/bảo trì | Migration có checksum, health DB/schema, tách API/worker, hướng dẫn backup và log; health không thay kiểm tra inference. |
 | NFR08 | Đánh giá khoa học | Nhãn độc lập, chia tập theo nguồn/identity khi biết; đo exact accuracy, CER, unreadable và latency; báo riêng lỗi bỏ sót. |
 | NFR09 | Live gần thời gian thực | Bài chạy 60 phút: bỏ 0,6% frame, lag xử lý p95 0,86 s; track đến client sau khoảng 3,5-4,2 s khi luồng ổn định; đuổi kịp sau khi kẹt tối đa 1,3× mà không bỏ frame. |
@@ -202,7 +202,7 @@ Nguồn chỉnh sửa: [01-use-case.puml](diagrams/01-use-case.puml). Admin kế
 - **Actor:** User, Admin.
 - **Tiền điều kiện:** Được cấp tài khoản; logout/me cần phiên hợp lệ.
 - **Luồng chính:** (1) Gửi email/mật khẩu. (2) Hệ thống kiểm tra tài khoản và tạo phiên. (3) Client nhận token, hạn dùng; dùng token gọi me/nghiệp vụ. (4) Logout thu hồi phiên hiện tại.
-- **Thay thế/lỗi:** Sai mật khẩu, tài khoản khóa hoặc hết phiên trả 401; dữ liệu sai cấu trúc trả 422. Các phiên khác không bị logout theo thao tác này.
+- **Thay thế/lỗi:** Sai mật khẩu, tài khoản khóa hoặc hết phiên trả 401; dữ liệu sai cấu trúc trả 422; sai quá nhiều lần trong 15 phút trả 429 kèm `Retry-After`. Các phiên khác không bị logout theo thao tác này.
 - **Hậu điều kiện:** Phiên mới được lưu dạng hash hoặc phiên hiện tại bị thu hồi; không trả password_hash.
 - **Truy vết:** FR01; BR01, BR03; `/auth/login`, `/auth/logout`, `/auth/me`.
 
@@ -364,8 +364,8 @@ Nguồn chỉnh sửa: [01-use-case.puml](diagrams/01-use-case.puml). Admin kế
 
 - **Actor:** Admin (tạo bộ mẫu); User, Admin (gán nhãn).
 - **Tiền điều kiện:** Camera hoặc phiên đã có track live có confidence.
-- **Luồng chính:** (1) Admin tạo bộ mẫu, chọn số mẫu mỗi khoảng confidence. (2) Người gán mở bộ mẫu, nhận mẫu kế tiếp theo thứ tự xáo trộn riêng của mình, chỉ thấy 5 crop và một keyframe. (3) Gõ biển đọc được, chọn không đọc được, hoặc bỏ qua. (4) Quay lại để sửa nhãn vừa gán.
-- **Thay thế/lỗi:** User thường tạo bộ mẫu: 403. Camera chưa có track: 422. Biển không phải 2-16 chữ/số: 422.
+- **Luồng chính:** (1) Admin tạo bộ mẫu, chọn số mẫu mỗi khoảng confidence, có thể chỉ lấy track có crop đủ rộng để người đọc được (`min_crop_width`). (2) Người gán mở bộ mẫu, nhận mẫu kế tiếp theo thứ tự xáo trộn riêng của mình, chỉ thấy 5 crop và một keyframe. (3) Gõ biển đọc được, chọn không đọc được, hoặc bỏ qua. (4) Quay lại để sửa nhãn vừa gán.
+- **Thay thế/lỗi:** User thường tạo bộ mẫu: 403. Camera chưa có track (hoặc không track nào đủ rộng): 422. Biển không phải 2-16 chữ/số: 422.
 - **Hậu điều kiện:** Nhãn lưu trong `evaluation_labels`; track trong bộ mẫu được bảo vệ khỏi retention.
 - **Truy vết:** FR27; BR30, BR31; `/evaluation-sets`.
 
@@ -859,7 +859,7 @@ Trigger `live_session_events_notify` (AFTER INSERT) và `live_sessions_notify` (
 | `created_by` | `varchar(32)` | Không | FK → `users.id`, ON DELETE RESTRICT; Admin tạo bộ mẫu. |
 | `stream_source_id` | `varchar(32)` | Có | FK → `stream_sources.id`, ON DELETE SET NULL; camera được lấy mẫu. |
 | `live_session_id` | `varchar(32)` | Có | FK → `live_sessions.id`, ON DELETE SET NULL; hoặc một phiên. |
-| `params` | `jsonb` | Không | D=`'{}'`; CHECK object; `per_bin` và các mốc khoảng confidence. |
+| `params` | `jsonb` | Không | D=`'{}'`; CHECK object; `per_bin`, các mốc khoảng confidence và `min_crop_width` nếu có. |
 | `created_at` | `timestamptz` | Không | D=`now()`. |
 
 #### 10.3.15. `evaluation_items` - mẫu trong bộ
@@ -1128,7 +1128,7 @@ Quyền đi theo chủ camera; Admin xem tất cả. Track live là job nên API
 | Mã | Method và đường dẫn | Input chính | Kết quả thành công | Use case |
 |---|---|---|---|---|
 | API39 | `GET /demo-videos` | - (Admin) | `200` video trong `demo-videos`; User `403` | UC18 |
-| API40 | `POST /evaluation-sets` | `name`, `stream_source_id` hoặc `live_session_id`, `per_bin?` (Admin) | `201` bộ mẫu kèm tiến độ; chưa có track `422` | UC19 |
+| API40 | `POST /evaluation-sets` | `name`, `stream_source_id` hoặc `live_session_id`, `per_bin?`, `min_crop_width?` (Admin) | `201` bộ mẫu kèm tiến độ; chưa có track (hoặc không track nào đủ rộng) `422` | UC19 |
 | API41 | `GET /evaluation-sets` | - | `200` các bộ mẫu kèm `items`, `labelled_items`, `labelers`, `my_labels` | UC19 |
 | API42 | `GET /evaluation-sets/{id}` | ID | `200` một bộ mẫu | UC19 |
 | API43 | `DELETE /evaluation-sets/{id}` | ID (Admin) | `204`; xóa nhãn, giữ track | UC19 |
@@ -1163,7 +1163,8 @@ API17 bổ sung bộ lọc `origin`, `stream_source_id`, `live_session_id`, `cap
 | `403` | Tài khoản không có role Admin cho API quản trị. |
 | `404` | Không tồn tại hoặc không thuộc quyền; artifact chưa có. |
 | `409` | Revision cũ; kết quả job chưa succeeded; job chưa kết thúc; media còn tham chiếu; email trùng; khóa/hạ quyền Admin cuối cùng. |
-| `413` | File vượt giới hạn upload. |
+| `413` | File vượt giới hạn upload, hoặc body JSON quá lớn. |
+| `429` | Đăng nhập sai quá nhiều lần; xem `Retry-After`. |
 | `415` | Loại file/extension không hỗ trợ. |
 | `416` | Range nằm ngoài file; kèm `Content-Range: bytes */<size>`. |
 | `422` | Body/filter sai; file hỏng; input mode không phù hợp; ảnh đơn vào joint-five; confirm khi chưa có text; correction rỗng. |
@@ -1224,6 +1225,9 @@ Khi đóng gói hoặc chuyển host, phải đưa theo migration SQL, mã `app/
 | Chia GPU giữa upload và live | Đo được hai tiến trình cùng nạp model làm tràn VRAM 8 GB và cả hai gần như đứng. Job video joint chạy trong host live (một bản model); các job khác vẫn chờ khi camera chạy. |
 | Job trong host giữ tốc độ thời gian thực | Hai camera cộng một job chạy hết tốc độ: camera bỏ 2,3% và 5,4% frame (CPU/GIL, ưu tiên GPU không đủ); giữ thời gian thực: 0% và 0,88%, job 3 phút mất 195 s. |
 | Che mật khẩu camera RTSP | URL camera thường chứa mật khẩu; che ở mọi đầu ra (API, sự kiện, lỗi), chỉ thư mục dữ liệu của người vận hành giữ bản đầy đủ. |
+| Dừng ffmpeg ghi hình bằng lệnh `q` thay vì kill | Kill làm đoạn MP4 đang ghi (tối đa 10 s cuối) không được đóng, nên track cuối phiên không có video. ffmpeg ghi hình đọc stdin; khi dừng, frame còn lại được đọc bỏ để pipe không nghẽn; quá 10 s mới kill. Camera không ghi hình vẫn kill ngay. |
+| Giới hạn đăng nhập sai trong bộ nhớ API | Đủ cho một tiến trình API trên máy demo, không cần bảng hay Redis. Đánh đổi: khởi động lại API thì bộ đếm về 0; nhiều tiến trình API sẽ cần bộ đếm dùng chung. Khóa theo email + địa chỉ, nên người khác không khóa được tài khoản của mình từ máy khác. |
+| Bộ mẫu chỉ gồm crop đủ rộng (`min_crop_width`) | Trên camera Camboriú, 180/280 track của bộ mẫu thường có crop dưới 51 px, không đọc được ký tự nào. Gán chúng tốn công mà không thêm thông tin. Kết quả chỉ đại diện cho biển đủ lớn, cũng là nhóm duy nhất máy có thể xếp `readable` đúng. |
 | Track 4 frame là tùy chọn, mặc định tắt | Trên ICPR, đọc 4 frame (lặp crop nét nhất) vẫn đạt precision khoảng 96,7% ở 0,97. Nhưng trên ba video thật chỉ 1/11 track bị loại có đúng 4 lần thấy, phần còn lại chỉ 1-3 lần. Vì vậy code hỗ trợ `tracking.min_frames: 4` (bằng chứng 4 crop thật, ngưỡng live cộng 0,01) nhưng config vẫn để 5. |
 | Chọn crop bỏ biển bị che/cụt | Trên camera thật, crop bị cột đèn che vẫn được chọn vì to và nét, kéo confidence cả biển xuống. Bỏ lần thấy có box co đột ngột, tỷ lệ lệch hoặc chạm mép, và ưu tiên crop lớn: 7,7 phút Camboriú 1080p có 8 thay vì 4 track `readable`. Đánh đổi: một biển trước đây bị chặn ở `low_confidence` có thể thành `readable` sai, nên precision live vẫn cần nhãn người. TTA chỉ thêm dưới 1 điểm % mà OCR chậm khoảng 3 lần nên không bật. |
 | Ghi đệm bằng stream copy, clip có chọn lọc | Ghi toàn bộ video vĩnh viễn tốn khoảng 43 GB/ngày mỗi camera; stream copy gần như không tốn CPU (2 camera bật ghi vẫn 0 frame bỏ). Clip mọi track sẽ khoảng 4 GB/giờ ở Camboriú nên chỉ giữ lâu dài clip của track đọc rõ hoặc có cảnh báo; track khác cắt theo yêu cầu trong 4 giờ. |
@@ -1285,7 +1289,12 @@ Các tình huống dưới đây là tiêu chí có thể thực hiện lại; m
 | AT39 | Track không clip, rồi sau thời gian giữ | Cắt từ bản ghi trong khoảng 0,5 s; hết hạn trả 404; khoảng bản ghi > 600 s trả 400 | UC21; BR33 |
 | AT40 | Cùng video, chọn crop cũ và mới (`scripts/eval_crops.py`) | Không mất track; ít track dính crop bị che hơn; số `readable` không giảm; soát ảnh ghép các track đổi trạng thái | FR11-FR12 |
 | AT41 | Pipeline joint đặt `tracking.min_frames: 4`, track có 4 lần thấy | Lưu 4 detection; prediction có 5 `input_storage_keys`, chỉ lặp một crop liền kề; pipeline không bật thì từ chối; live cần confidence ≥ ngưỡng + 0,01 | FR11-FR12 |
-| AT42 | Bộ mẫu gán bằng tài khoản AI labeller | Báo cáo tính được precision theo ngưỡng; kết quả ghi rõ nguồn nhãn AI và không dùng để đổi ngưỡng mặc định | UC18; BR30 |
+| AT42 | Bộ mẫu gán bằng tài khoản AI labeller | Báo cáo tính được precision theo ngưỡng; kết quả ghi rõ nguồn nhãn AI và không dùng để đổi ngưỡng mặc định | UC19; BR30 |
+| AT43 | Dừng phiên khi đoạn ghi hình đang mở (giây thứ 12 của đoạn 10 s thứ hai) | Đoạn cuối được đóng, có trong index, phát được; YouTube thật: 3/3 đoạn, ffmpeg thoát sau 0,2 s | UC21; FR30 |
+| AT44 | Bộ mẫu với `min_crop_width` lớn hơn / bằng cỡ crop | `422` / lấy đủ mẫu và ghi vào `params` | UC19; FR27 |
+| AT45 | Đăng nhập sai 6 lần liên tiếp, rồi đúng mật khẩu; tài khoản khác cùng địa chỉ | 401 × 5, rồi 429 kèm `Retry-After`; đúng mật khẩu vẫn 429; tài khoản khác 200 | UC01; NFR01 |
+| AT46 | Body JSON 2 MB, JSON hỏng, NUL trong query, chuỗi `ﬃ` × 64 khi sửa biển, PNG khai 20000 × 10000, ảnh JPEG có EXIF xoay | 413, 400, 422, 422, 422; nhận diện trên ảnh đã xoay thẳng | UC03, UC07, UC08; NFR06 |
+| AT47 | `npm run smoke` trên stack đang chạy, kèm `--upload` và `--live` | Kiểm tra nhanh khoảng 1 s; clip 15 s xong trong 39 s, có bằng chứng, rồi xóa; camera demo chạy sau 26 s, 16 track trong 60 s, không bỏ frame | NFR07 |
 
 ### 13.2. Ma trận liên kết yêu cầu với thành phần thực hiện
 
@@ -1314,7 +1323,7 @@ Baseline đã ghi nhận trong các lượt triển khai là **48 test Node và 
 
 Test Node dùng NestJS/HTTP và PostgreSQL thật trong DB/cluster tạm; nhiều kết quả ML hoàn tất được tạo bằng fixture để kiểm quyền, transaction và hợp đồng. Test adapter/runner kiểm số frame, preprocessing, output và lỗi nhưng không đo accuracy. Đã ghi nhận smoke inference checkpoint/video thực trong quá trình tích hợp; smoke chứng minh đường chạy thực hiện được trên mẫu đó, không chứng minh chất lượng toàn tập hoặc khả năng tổng quát sang biển số Việt Nam.
 
-Sau khi bổ sung live (giai đoạn 1-5a), lượt chạy ghi nhận **64 test Node và 112 test Python đạt** cùng format check. Sau giai đoạn 6 (camera demo, gán nhãn, nhiều camera), lượt chạy ngày 25/10/2026 ghi nhận **69 test Node và 118 test Python đạt**. Sau giai đoạn 8 (26/10/2026): **72 test Node và 123 test Python đạt** (1 test bỏ qua). Sau giai đoạn 9 (27/10/2026): **76 test Node và 134 test Python đạt**. Sau giai đoạn 10 (ghi đệm và video): **79 test Node và 143 test Python đạt**. Sau giai đoạn 11 (chọn crop): **146 test Python đạt**. Sau giai đoạn 12 (track 4 frame): **80 test Node và 150 test Python đạt**. CI GitHub chạy test Node/Python cho backend, và lint/test/build cho FE ở mỗi pull request; các phép đo trên luồng YouTube thật (60 phút, kẹt mạng, 24/7, dọn dữ liệu, giờ luồng) được ghi trong [TESTING.md](../../TESTING.md) kèm ngày và phần cứng.
+Sau khi bổ sung live (giai đoạn 1-5a), lượt chạy ghi nhận **64 test Node và 112 test Python đạt** cùng format check. Sau giai đoạn 6 (camera demo, gán nhãn, nhiều camera), lượt chạy ngày 25/10/2026 ghi nhận **69 test Node và 118 test Python đạt**. Sau giai đoạn 8 (26/10/2026): **72 test Node và 123 test Python đạt** (1 test bỏ qua). Sau giai đoạn 9 (27/10/2026): **76 test Node và 134 test Python đạt**. Sau giai đoạn 10 (ghi đệm và video): **79 test Node và 143 test Python đạt**. Sau giai đoạn 11 (chọn crop): **146 test Python đạt**. Sau giai đoạn 12 (track 4 frame): **80 test Node và 150 test Python đạt**. Sau giai đoạn 13 (ghi hình, bảo mật, smoke check): **82 test Node và 155 test Python đạt**. CI GitHub chạy test Node/Python cho backend, và lint/test/build cho FE ở mỗi pull request; các phép đo trên luồng YouTube thật (60 phút, kẹt mạng, 24/7, dọn dữ liệu, giờ luồng) được ghi trong [TESTING.md](../../TESTING.md) kèm ngày và phần cứng.
 
 Để tái lập xác minh kỹ thuật, dùng [TESTING_NEST.md](../TESTING_NEST.md) và lệnh trong [README](../../README.md). Cần lưu commit, dependency, cấu hình, phần cứng, ngày chạy và log từng đợt nếu dùng các con số này trong báo cáo nghiệm thu. Sau một thay đổi runtime mới, chỉ báo test là hiện hành khi đã chạy lại phạm vi chịu ảnh hưởng.
 

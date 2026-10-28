@@ -276,7 +276,7 @@ Trigger `live_session_events_notify` (AFTER INSERT) và `live_sessions_notify` (
 | `created_by` | `varchar(32)` | Không | FK → `users.id`, ON DELETE RESTRICT; Admin tạo bộ mẫu. |
 | `stream_source_id` | `varchar(32)` | Có | FK → `stream_sources.id`, ON DELETE SET NULL; camera được lấy mẫu. |
 | `live_session_id` | `varchar(32)` | Có | FK → `live_sessions.id`, ON DELETE SET NULL; hoặc một phiên. |
-| `params` | `jsonb` | Không | D=`'{}'`; CHECK object; `per_bin` và các mốc khoảng confidence. |
+| `params` | `jsonb` | Không | D=`'{}'`; CHECK object; `per_bin`, các mốc khoảng confidence và `min_crop_width` nếu có. |
 | `created_at` | `timestamptz` | Không | D=`now()`. |
 
 ### 10.3.15. `evaluation_items` — mẫu trong bộ

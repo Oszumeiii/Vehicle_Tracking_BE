@@ -132,12 +132,12 @@ Hơn ba camera live đồng thời trên một GPU 8 GB, lưu video toàn thời
 
 | Mã | Yêu cầu | Cách kiểm chứng / giới hạn |
 |---|---|---|
-| NFR01 | Bảo mật truy cập và bí mật xác thực | Test tài khoản chéo; mật khẩu hash scrypt, DB chỉ lưu hash token; không lộ đường dẫn nội bộ. |
+| NFR01 | Bảo mật truy cập và bí mật xác thực | Test tài khoản chéo; mật khẩu hash scrypt, DB chỉ lưu hash token; không lộ đường dẫn nội bộ. Đăng nhập sai 5 lần (cùng email, cùng địa chỉ) hoặc 30 lần (cùng địa chỉ) trong 15 phút thì bị chặn tạm với `429`, kể cả khi lần sau đúng mật khẩu. |
 | NFR02 | Toàn vẹn dữ liệu và cập nhật đồng thời | FK, unique/check, transaction; test hai review cùng revision chỉ một lần thành công. |
 | NFR03 | Tái lập và truy vết | Giữ snapshot/checksum, raw/normalized text, input crop và lịch sử; đối chiếu lại một lượt chạy. |
 | NFR04 | Xử lý dài không giữ request HTTP | Tạo job trả 202; inference trong worker riêng; đo thời gian theo thiết bị và nguồn thực. Chưa cam kết SLA. |
 | NFR05 | Phục hồi lỗi có trạng thái rõ | Worker khởi động lại đánh dấu job running cũ là failed/WORKER_INTERRUPTED; người dùng tạo lượt mới. |
-| NFR06 | Giới hạn tài nguyên và đầu vào | Upload mặc định 500 MiB, ảnh tối đa 25 MP; limit tối đa 200; cấu hình timeout phía server. |
+| NFR06 | Giới hạn tài nguyên và đầu vào | Upload mặc định 500 MiB, ảnh tối đa 25 MP; limit tối đa 200; cấu hình timeout phía server. Đầu vào sai không gây lỗi 500: body JSON quá lớn `413`, JSON hỏng `400`, giá trị PostgreSQL không lưu được (ký tự NUL, chuỗi dài hơn cột sau khi viết hoa) `422`, ảnh khai kích thước khổng lồ `422`. |
 | NFR07 | Khả năng vận hành/bảo trì | Migration có checksum, health DB/schema, tách API/worker, hướng dẫn backup và log; health không thay kiểm tra inference. |
 | NFR08 | Đánh giá khoa học | Nhãn độc lập, chia tập theo nguồn/identity khi biết; đo exact accuracy, CER, unreadable và latency; báo riêng lỗi bỏ sót. |
 | NFR09 | Live gần thời gian thực | Bài chạy 60 phút: bỏ 0,6% frame, lag xử lý p95 0,86 s; track đến client sau khoảng 3,5–4,2 s khi luồng ổn định; đuổi kịp sau khi kẹt tối đa 1,3× mà không bỏ frame. |
@@ -200,7 +200,7 @@ Nguồn chỉnh sửa: [01-use-case.puml](diagrams/01-use-case.puml). Admin kế
 - **Actor:** User, Admin.
 - **Tiền điều kiện:** Được cấp tài khoản; logout/me cần phiên hợp lệ.
 - **Luồng chính:** (1) Gửi email/mật khẩu. (2) Hệ thống kiểm tra tài khoản và tạo phiên. (3) Client nhận token, hạn dùng; dùng token gọi me/nghiệp vụ. (4) Logout thu hồi phiên hiện tại.
-- **Thay thế/lỗi:** Sai mật khẩu, tài khoản khóa hoặc hết phiên trả 401; dữ liệu sai cấu trúc trả 422. Các phiên khác không bị logout theo thao tác này.
+- **Thay thế/lỗi:** Sai mật khẩu, tài khoản khóa hoặc hết phiên trả 401; dữ liệu sai cấu trúc trả 422; sai quá nhiều lần trong 15 phút trả 429 kèm `Retry-After`. Các phiên khác không bị logout theo thao tác này.
 - **Hậu điều kiện:** Phiên mới được lưu dạng hash hoặc phiên hiện tại bị thu hồi; không trả password_hash.
 - **Truy vết:** FR01; BR01, BR03; `/auth/login`, `/auth/logout`, `/auth/me`.
 
@@ -362,8 +362,8 @@ Nguồn chỉnh sửa: [01-use-case.puml](diagrams/01-use-case.puml). Admin kế
 
 - **Actor:** Admin (tạo bộ mẫu); User, Admin (gán nhãn).
 - **Tiền điều kiện:** Camera hoặc phiên đã có track live có confidence.
-- **Luồng chính:** (1) Admin tạo bộ mẫu, chọn số mẫu mỗi khoảng confidence. (2) Người gán mở bộ mẫu, nhận mẫu kế tiếp theo thứ tự xáo trộn riêng của mình, chỉ thấy 5 crop và một keyframe. (3) Gõ biển đọc được, chọn không đọc được, hoặc bỏ qua. (4) Quay lại để sửa nhãn vừa gán.
-- **Thay thế/lỗi:** User thường tạo bộ mẫu: 403. Camera chưa có track: 422. Biển không phải 2–16 chữ/số: 422.
+- **Luồng chính:** (1) Admin tạo bộ mẫu, chọn số mẫu mỗi khoảng confidence, có thể chỉ lấy track có crop đủ rộng để người đọc được (`min_crop_width`). (2) Người gán mở bộ mẫu, nhận mẫu kế tiếp theo thứ tự xáo trộn riêng của mình, chỉ thấy 5 crop và một keyframe. (3) Gõ biển đọc được, chọn không đọc được, hoặc bỏ qua. (4) Quay lại để sửa nhãn vừa gán.
+- **Thay thế/lỗi:** User thường tạo bộ mẫu: 403. Camera chưa có track (hoặc không track nào đủ rộng): 422. Biển không phải 2–16 chữ/số: 422.
 - **Hậu điều kiện:** Nhãn lưu trong `evaluation_labels`; track trong bộ mẫu được bảo vệ khỏi retention.
 - **Truy vết:** FR27; BR30, BR31; `/evaluation-sets`.
 
