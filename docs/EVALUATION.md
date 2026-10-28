@@ -312,3 +312,49 @@ Báo cáo chỉ có ý nghĩa với tập nhãn đủ lớn và đại diện ch
   2. camera có biển lớn hơn (gần hơn hoặc zoom).
 - Hoặc hiệu chỉnh offline trên bộ dữ liệu có nhãn sẵn (ví dụ dữ liệu ICPR dùng để huấn luyện model) bằng `scripts.calibrate_threshold`.
 - Nếu một lúc nào đó dùng nhãn AI, phải ghi rõ nguồn nhãn khi công bố kết quả (BR30), và không trình bày như nhãn của người.
+
+### Ước lượng sơ bộ bằng nhãn AI trên camera Camboriú (28/10/2026)
+
+**Bộ mẫu:** "Camboriú YouTube 26–27/10: nhãn AI (Claude), ước lượng sơ bộ", gồm 280 track (40 × 7 khoảng confidence) lấy từ mọi phiên của camera. Gồm cả phiên 720p và phiên 1080p, cả trước và sau cách chọn crop mới.
+
+**Cách làm:**
+- Tài khoản `user` "Claude (AI labeller)" gán qua đúng API gán mù: chỉ thấy crop, không thấy biển máy đọc hay confidence.
+- Ảnh ghép 10 mẫu mỗi trang, crop phóng to, sắp từ crop lớn đến nhỏ.
+- Chỉ gửi nhãn khi chắc chắn từng ký tự (đối chiếu định dạng LLLNLNN/LLLNNNN). Mẫu có dù chỉ một ký tự mơ hồ (H/K, I/J, G/O/D, R/H, 6/8) thì bỏ qua.
+- **Không gửi `null`** cho biển quá nhỏ: báo cáo tính `null` là máy đọc sai, nên gửi `null` sẽ phạt cả những lần máy đọc đúng mà người đọc không ra.
+
+**Mức đọc được theo cỡ crop** (rộng trung vị của 5 crop, đã gồm 15% phần đệm):
+
+| Rộng crop | Mẫu đã xem | Nhãn chắc chắn |
+|---|---|---|
+| 64–72 px | 10 | 5 |
+| 57–63 px | 42 | 9 |
+| 51–56 px | 48 | 6 |
+| dưới 51 px | 180 (chỉ soát nhóm hẹp nhất, 16–26 px) | 0 |
+
+Tổng cộng 20/280 mẫu có nhãn, đều thuộc nhóm crop lớn nhất và có confidence máy từ 0,8 trở lên.
+
+**So với máy:**
+
+| Ngưỡng | Track `readable` | Đúng | Precision |
+|---|---|---|---|
+| 0,85 | 18 | 9 | 50% |
+| 0,90 | 13 | 7 | 54% |
+| 0,95 | 8 | 7 | 88% |
+| **0,96 (mặc định)** | 6 | 6 | 100% |
+| 0,97 | 6 | 6 | 100% |
+
+- Cả 11 lần máy đọc khác nhãn đều dưới 0,96. Ví dụ: H thành N/M (SAH2B43 → SAN2B43, FHV6B53 → FMV6B53), U thành O, T thành I (SET2J25 → SEI2J25 ở 0,953).
+- Kết quả phù hợp với ngưỡng 0,96 hiệu chỉnh trên ICPR: các lỗi kiểu này nằm ngay dưới ngưỡng.
+
+**Giới hạn:**
+- 6/6 ở 0,96 chỉ cho cận dưới 95% (Wilson) khoảng 61%. Đây là dấu hiệu, chưa phải số đo.
+- Nhãn AI không phải ground truth độc lập. Ở 11 ca khác nhau, chính nhãn cũng có thể sai.
+- Mẫu chỉ có crop lớn, nên kết quả không đại diện cho biển xa.
+- **Ngưỡng mặc định không đổi vì kết quả này** (BR30).
+
+**Bộ mẫu cho nhóm gán:** "Camboriú YouTube 26–27/10: cho nhóm gán (mỗi mẫu ≥ 2 người)", cùng cấu hình, chưa có nhãn.
+- Mỗi thành viên đăng nhập bằng tài khoản của mình và gán trong tab **Gán nhãn**.
+- Admin mở **Báo cáo ngưỡng** với tối thiểu 2 nhãn mỗi mẫu.
+- Nên gán `null` chỉ khi chắc chắn không ai đọc được, và bỏ qua khi còn phân vân.
+

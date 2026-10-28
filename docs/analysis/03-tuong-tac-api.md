@@ -269,8 +269,10 @@ Các tình huống dưới đây là tiêu chí có thể thực hiện lại; m
 | AT36 | 2, 3, 4 camera trong một host | 3 camera bỏ dưới 1% frame; 4 camera vượt mức (khuyến nghị tối đa 3) | NFR12 |
 | AT37 | Hai camera bật ghi 5 phút | 0 frame bỏ; bản ghi có index đúng giờ; đoạn quá hạn bị xóa | FR30; BR33 |
 | AT38 | Track đọc rõ và track có cảnh báo | Có clip lưu cùng job; mở video tua đúng giây biển xuất hiện (khung hình trùng box biển số) | UC21; FR30 |
-| AT40 | Cùng video, chọn crop cũ và mới (`scripts/eval_crops.py`) | Không mất track; ít track dính crop bị che hơn; số `readable` không giảm; soát ảnh ghép các track đổi trạng thái | FR11–FR12 |
 | AT39 | Track không clip, rồi sau thời gian giữ | Cắt từ bản ghi trong khoảng 0,5 s; hết hạn trả 404; khoảng bản ghi > 600 s trả 400 | UC21; BR33 |
+| AT40 | Cùng video, chọn crop cũ và mới (`scripts/eval_crops.py`) | Không mất track; ít track dính crop bị che hơn; số `readable` không giảm; soát ảnh ghép các track đổi trạng thái | FR11–FR12 |
+| AT41 | Pipeline joint đặt `tracking.min_frames: 4`, track có 4 lần thấy | Lưu 4 detection; prediction có 5 `input_storage_keys`, chỉ lặp một crop liền kề; pipeline không bật thì từ chối; live cần confidence ≥ ngưỡng + 0,01 | FR11–FR12 |
+| AT42 | Bộ mẫu gán bằng tài khoản AI labeller | Báo cáo tính được precision theo ngưỡng; kết quả ghi rõ nguồn nhãn AI và không dùng để đổi ngưỡng mặc định | UC18; BR30 |
 
 ### 13.2. Ma trận liên kết yêu cầu với thành phần thực hiện
 
@@ -299,7 +301,7 @@ Baseline đã ghi nhận trong các lượt triển khai là **48 test Node và 
 
 Test Node dùng NestJS/HTTP và PostgreSQL thật trong DB/cluster tạm; nhiều kết quả ML hoàn tất được tạo bằng fixture để kiểm quyền, transaction và hợp đồng. Test adapter/runner kiểm số frame, preprocessing, output và lỗi nhưng không đo accuracy. Đã ghi nhận smoke inference checkpoint/video thực trong quá trình tích hợp; smoke chứng minh đường chạy thực hiện được trên mẫu đó, không chứng minh chất lượng toàn tập hoặc khả năng tổng quát sang biển số Việt Nam.
 
-Sau khi bổ sung live (giai đoạn 1–5a), lượt chạy ghi nhận **64 test Node và 112 test Python đạt** cùng format check. Sau giai đoạn 6 (camera demo, gán nhãn, nhiều camera), lượt chạy ngày 25/10/2026 ghi nhận **69 test Node và 118 test Python đạt**. Sau giai đoạn 8 (26/10/2026): **72 test Node và 123 test Python đạt** (1 test bỏ qua). Sau giai đoạn 9 (27/10/2026): **76 test Node và 134 test Python đạt**. Sau giai đoạn 10 (ghi đệm và video): **79 test Node và 143 test Python đạt**. Sau giai đoạn 11 (chọn crop): **146 test Python đạt**. CI GitHub chạy test Node/Python cho backend, và lint/test/build cho FE ở mỗi pull request; các phép đo trên luồng YouTube thật (60 phút, kẹt mạng, 24/7, dọn dữ liệu, giờ luồng) được ghi trong [TESTING.md](../../TESTING.md) kèm ngày và phần cứng.
+Sau khi bổ sung live (giai đoạn 1–5a), lượt chạy ghi nhận **64 test Node và 112 test Python đạt** cùng format check. Sau giai đoạn 6 (camera demo, gán nhãn, nhiều camera), lượt chạy ngày 25/10/2026 ghi nhận **69 test Node và 118 test Python đạt**. Sau giai đoạn 8 (26/10/2026): **72 test Node và 123 test Python đạt** (1 test bỏ qua). Sau giai đoạn 9 (27/10/2026): **76 test Node và 134 test Python đạt**. Sau giai đoạn 10 (ghi đệm và video): **79 test Node và 143 test Python đạt**. Sau giai đoạn 11 (chọn crop): **146 test Python đạt**. Sau giai đoạn 12 (track 4 frame): **80 test Node và 150 test Python đạt**. CI GitHub chạy test Node/Python cho backend, và lint/test/build cho FE ở mỗi pull request; các phép đo trên luồng YouTube thật (60 phút, kẹt mạng, 24/7, dọn dữ liệu, giờ luồng) được ghi trong [TESTING.md](../../TESTING.md) kèm ngày và phần cứng.
 
 Để tái lập xác minh kỹ thuật, dùng [TESTING_NEST.md](../TESTING_NEST.md) và lệnh trong [README](../../README.md). Cần lưu commit, dependency, cấu hình, phần cứng, ngày chạy và log từng đợt nếu dùng các con số này trong báo cáo nghiệm thu. Sau một thay đổi runtime mới, chỉ báo test là hiện hành khi đã chạy lại phạm vi chịu ảnh hưởng.
 
