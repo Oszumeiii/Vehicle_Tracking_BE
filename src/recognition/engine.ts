@@ -395,26 +395,29 @@ export async function validateResult(
   const video = job.media_type === 'video';
   if (joint && (!video || job.input_mode !== 'scene'))
     throw new Error('Joint five-frame OCR supports scene video only');
+  // Joint pipelines with tracking.min_frames 4 also read four-crop tracks.
+  const minCrops = joint && job.pipeline_snapshot?.tracking?.min_frames === 4 ? 4 : 5;
   const trackIds = new Set<string>();
   for (const appearance of result.appearances) {
     const detections = appearance.detections;
     if (!Array.isArray(detections) || !detections.length)
       throw new Error('Appearance has no evidence');
-    if (detections.length !== (video ? 5 : 1)) throw new Error('Invalid crop count');
+    const count = detections.length;
+    if (video ? count < minCrops || count > 5 : count !== 1) throw new Error('Invalid crop count');
     if (video) {
       const frames = detections.map((d: Row) => d.frame_index);
       const timestamps = detections.map((d: Row) => d.timestamp_seconds);
       if (
-        new Set(frames).size !== 5 ||
+        new Set(frames).size !== count ||
         frames.some(
           (v: any, i: number) => !Number.isInteger(v) || v < 1 || (i && v <= frames[i - 1]),
         ) ||
         timestamps.some((v: any, i: number) => !finite(v) || v < 0 || (i && v <= timestamps[i - 1]))
       )
-        throw new Error('Video needs five ordered distinct frames and timestamps');
+        throw new Error('Video needs ordered distinct frames and timestamps');
       if (
-        new Set(detections.map((d: Row) => d.crop_storage_key)).size !== 5 ||
-        new Set(detections.map((d: Row) => d.frame_storage_key)).size !== 5
+        new Set(detections.map((d: Row) => d.crop_storage_key)).size !== count ||
+        new Set(detections.map((d: Row) => d.frame_storage_key)).size !== count
       )
         throw new Error('Video needs separate evidence files for each selected frame');
       if (
@@ -426,12 +429,12 @@ export async function validateResult(
         appearance.first_frame < 1 ||
         !Number.isInteger(appearance.last_frame) ||
         appearance.first_frame > frames[0] ||
-        appearance.last_frame < frames[4] ||
+        appearance.last_frame < frames[count - 1] ||
         !finite(appearance.start_seconds) ||
         appearance.start_seconds < 0 ||
         !finite(appearance.end_seconds) ||
         appearance.start_seconds > timestamps[0] ||
-        appearance.end_seconds < timestamps[4]
+        appearance.end_seconds < timestamps[count - 1]
       )
         throw new Error('Invalid video track extent or identity');
       trackIds.add(appearance.source_track_id);
@@ -512,13 +515,23 @@ export async function validateResult(
         throw new Error('Joint OCR requires one appearance prediction');
       const prediction = appearance.predictions[0];
       validatePrediction(prediction);
+      const crops = detections.map((d: Row) => d.crop_storage_key);
+      const keys = prediction.input_storage_keys;
+      const sameAsCrops = (list: any[]) =>
+        list.length === crops.length && list.every((key, index) => key === crops[index]);
+      // Five model inputs: the ordered crops, a four-crop track repeating one of them in place.
       if (
         prediction.input_storage_key != null ||
-        !Array.isArray(prediction.input_storage_keys) ||
-        prediction.input_storage_keys.length !== 5 ||
-        prediction.input_storage_keys.some(
-          (key: any, index: number) => key !== detections[index].crop_storage_key,
-        )
+        !Array.isArray(keys) ||
+        keys.length !== 5 ||
+        !(count === 5
+          ? sameAsCrops(keys)
+          : keys.some(
+              (key: any, index: number) =>
+                index > 0 &&
+                key === keys[index - 1] &&
+                sameAsCrops(keys.filter((_: any, other: number) => other !== index)),
+            ))
       )
         throw new Error('Joint prediction inputs differ from ordered evidence crops');
       const weights = prediction.frame_weights;

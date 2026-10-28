@@ -15,7 +15,7 @@ from app.live import DEFAULT_MIN_CONFIDENCE
 from app.live.recorder import ClipMaker, Recorder
 from app.live.source import TIMEOUT, LiveReader, SourceError, StreamEnded
 from app.recognition.fusion import levenshtein
-from app.recognition.runner import _predict_joint, build_appearance, write_json
+from app.recognition.runner import _predict_joint, build_appearance, ocr_inputs, write_json
 from app.recognition.video_tracking import TrackSession, export_retained, tracking_config, warm_up_detector
 
 
@@ -27,6 +27,11 @@ def plate_confidence(prediction):
     decoding = prediction.get("decoding") or {}
     value = decoding.get("beam_confidence_proxy")
     return decoding.get("greedy_symbol_confidence") if value is None else value
+
+
+# A track read from four crops (one repeated) needs this much more confidence: on ICPR
+# four frames at 0.97 matched the precision of five at 0.96.
+SHORT_TRACK_MARGIN = 0.01
 
 
 def classify(text, confidence, threshold):
@@ -282,7 +287,8 @@ class LiveRunner:
         appearance = build_appearance(candidate, manifest, folder, self.data_dir, candidate["first_seconds"],
                                       candidate["last_seconds"], "live_pts")
         detections = appearance["detections"]
-        prediction = _predict_joint(self.recognizer, [self.data_dir / d["crop_storage_key"] for d in detections],
+        prediction = _predict_joint(self.recognizer,
+                                    ocr_inputs(self.data_dir / d["crop_storage_key"] for d in detections),
                                     self.data_dir)
         for detection in detections:
             detection["predictions"] = []
@@ -290,14 +296,15 @@ class LiveRunner:
         appearance.update(machine_text=text, machine_status="readable" if text else "unreadable",
                           agreement_count=None, recognition_method="joint_multiframe", predictions=[prediction])
         confidence = plate_confidence(prediction)
-        status = classify(text, confidence, self.min_confidence)
+        threshold = self.min_confidence + (SHORT_TRACK_MARGIN if len(detections) < 5 else 0)
+        status = classify(text, confidence, min(round(threshold, 6), 1.))
         duplicate_of = self.linker.link(key, text, candidate["first_seconds"], candidate["last_seconds"],
                                         candidate["first_box"], candidate["last_box"])
 
         capture_clock, captured_from, captured_to = capture_times(clock, candidate["first_seconds"],
                                                                   candidate["last_seconds"])
         record = dict(track=key, epoch=epoch, status=status, confidence=confidence, duplicate_of=duplicate_of,
-                      observations=candidate["observations"], captured_from=captured_from,
+                      frames=len(detections), observations=candidate["observations"], captured_from=captured_from,
                       captured_to=captured_to, capture_clock=capture_clock, sampling_scale=self.sampling_scale,
                       appearance=appearance)
         write_json(folder / "track.json", record)
@@ -310,6 +317,6 @@ class LiveRunner:
             if self.clips is not None and (policy == "all" or (policy == "readable" and status == "readable")):
                 self.clips.request(key, candidate["first_seconds"], candidate["last_seconds"])
         self.emit(dict(type="track", track=key, epoch=epoch, text=text, status=status, confidence=confidence,
-                       duplicate_of=duplicate_of, captured_from=record["captured_from"],
+                       frames=len(detections), duplicate_of=duplicate_of, captured_from=record["captured_from"],
                        captured_to=record["captured_to"],
                        path=(folder / "track.json").relative_to(self.out).as_posix()))

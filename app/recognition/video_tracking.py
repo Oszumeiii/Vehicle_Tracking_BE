@@ -291,6 +291,8 @@ def select_five(rows, cfg):
     cfg["crop_selection"] (default SELECTION): "current" scores every observation;
     "robust" first sets aside hidden or cut plates (taking back the best of them only
     when fewer than five remain) and weighs crop size more.
+    cfg["min_frames"] (default 5): a track with only four valid observations keeps all
+    four when it is 4; the joint OCR then repeats one of them (runner.ocr_inputs).
     """
     unique = {}
     for r in rows:
@@ -299,8 +301,10 @@ def select_five(rows, cfg):
             if previous is None or r["confidence"] > previous["confidence"]:
                 unique[r["frame_index"]] = r
     eligible = sorted(unique.values(), key=lambda r: r["frame_index"])
-    if len(eligible) < 5:
-        return None, "fewer_than_five_valid_frames"
+    min_frames = cfg.get("min_frames", 5)
+    if len(eligible) < min_frames:
+        return None, "fewer_than_five_valid_frames" if min_frames == 5 else "fewer_than_four_valid_frames"
+    count = min(5, len(eligible))
     if any(b["timestamp_seconds"] <= a["timestamp_seconds"] for a, b in zip(eligible, eligible[1:])):
         raise ValueError("Track timestamps must be strictly increasing")
     weights, fraction = QUALITY_WEIGHTS, TOP_FRACTION
@@ -309,19 +313,19 @@ def select_five(rows, cfg):
         flagged = hidden_or_cut(eligible)
         if flagged:
             kept = [r for i, r in enumerate(eligible) if i not in flagged]
-            if len(kept) < 5:
+            if len(kept) < count:
                 scores = score_rows(eligible, weights)
-                best = sorted(flagged, key=lambda i: scores[i], reverse=True)[:5 - len(kept)]
+                best = sorted(flagged, key=lambda i: scores[i], reverse=True)[:count - len(kept)]
                 kept = sorted(kept + [eligible[i] for i in best], key=lambda r: r["frame_index"])
             eligible = kept
     scores = score_rows(eligible, weights)
     pool_size = min(len(eligible), max(5, MIN_POOL, math.ceil(fraction * len(eligible))))
     top = sorted(range(len(eligible)), key=lambda i: scores[i], reverse=True)[:pool_size]
     pool = sorted(top)
-    picks = np.rint(np.linspace(0, len(pool) - 1, 5)).astype(int)
+    picks = np.rint(np.linspace(0, len(pool) - 1, count)).astype(int)
     chosen = [eligible[pool[i]] for i in picks]
-    if len({r["frame_index"] for r in chosen}) != 5:
-        chosen = [eligible[i] for i in sorted(top[:5])]
+    if len({r["frame_index"] for r in chosen}) != count:
+        chosen = [eligible[i] for i in sorted(top[:count])]
     return chosen, None
 
 
@@ -408,6 +412,7 @@ def tracking_config(width, height, fps, declared, snapshot, video_id, video_path
                 declared_frames=declared, max_seconds=0, batch=tracking["batch"], imgsz=tracking["imgsz"],
                 device="cpu" if snapshot["device"] == "cpu" else 0,
                 crop_confidence=tracking["crop_confidence"], crop_padding=tracking["crop_padding"],
+                min_frames=tracking.get("min_frames", 5),
                 sampling=dict(snapshot["sampling"]), empty_scene_gate=dict(snapshot["empty_scene_gate"]),
                 botsort=dict(tracker_type="botsort", track_high_thresh=.25, track_low_thresh=.10,
                              new_track_thresh=.25,
@@ -769,7 +774,7 @@ def export_crops(video, cfg, out, pts, frames, candidates):
                                                frame_meta["selected_order"]))
     finally:
         cap.release()
-    if len(manifest) != 5 * len(candidates):
+    if len(manifest) != sum(len(candidate["rows"]) for candidate in candidates):
         raise RuntimeError("Missing crops after export")
     for row in manifest:
         frame = cv2.imread(str(out / row["sampled_frame_path"]))

@@ -580,3 +580,25 @@ def test_rtsp_not_found_is_retried_like_an_outage():
     restarting.command = [_sys.executable, "-c", "import sys; sys.stderr.write('Server returned 404 Not Found\n')"]
     with pytest.raises(SourceError):
         restarting.probe(timeout=10)
+
+
+def test_four_crop_live_tracks_repeat_one_crop_and_need_more_confidence(tmp_path):
+    video = tmp_path / "input.avi"
+    _plate_video(video, 4)
+    short = {**SNAPSHOT, "tracking": {**TRACKING, "min_frames": 4}}
+
+    def live(folder, snapshot, min_confidence):
+        events = []
+        runner = LiveRunner(snapshot, folder, lambda: (INFO, FileFrames(video)), events.append, BoxFixture(),
+                            recognizer, backoff_max=.01, min_confidence=min_confidence)
+        runner.run(threading.Event())
+        return [e for e in events if e["type"] == "track"]
+
+    tracks = live(tmp_path / "a", short, .96)  # confidence .97 meets the 0.97 of a four-crop track exactly
+    assert len(tracks) == 1 and tracks[0]["frames"] == 4 and tracks[0]["status"] == "readable"
+    record = json.loads((tmp_path / "a" / tracks[0]["path"]).read_text(encoding="utf-8"))
+    crops = [d["crop_storage_key"] for d in record["appearance"]["detections"]]
+    keys = record["appearance"]["predictions"][0]["input_storage_keys"]
+    assert record["frames"] == 4 and len(crops) == 4 and len(keys) == 5 and sorted(set(keys)) == sorted(crops)
+    assert live(tmp_path / "b", short, .965)[0]["status"] == "low_confidence"
+    assert live(tmp_path / "c", SNAPSHOT, .96) == [], "without min_frames 4 the track is dropped"
