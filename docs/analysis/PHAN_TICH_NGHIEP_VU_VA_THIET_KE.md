@@ -2,7 +2,7 @@
 
 Nhận diện biển số độ phân giải thấp
 
-Phiên bản 1.9 · 28/10/2026
+Phiên bản 1.9.1 · 30/10/2026
 
 ## 1. Mục tiêu, bối cảnh và thuật ngữ
 
@@ -145,7 +145,7 @@ Hơn ba camera live đồng thời trên một GPU 8 GB, lưu video toàn thời
 | NFR09 | Live gần thời gian thực | Bài chạy 60 phút: bỏ 0,6% frame, lag xử lý p95 0,86 s; track đến client sau khoảng 3,5-4,2 s khi luồng ổn định; đuổi kịp sau khi kẹt tối đa 1,3× mà không bỏ frame. |
 | NFR10 | Live bền và tự phục hồi | Kết nối lại khi mất luồng; watchdog `LIVE_STALLED`; worker khởi động lại thì phiên `interrupted` và track trên đĩa vẫn được nhập; camera 24/7 tự bật lại. |
 | NFR11 | Tài nguyên live có giới hạn | Mỗi tiến trình live riêng giữ khoảng 4,4 GB VRAM (phần lớn là CUDA context và bộ đệm allocator; PyTorch thực dùng khoảng 1,9 GB); job upload và live không chạy cùng lúc trên GPU 8 GB; bằng chứng khoảng 2,6 GB/giờ, giảm khoảng 80% sau khi bỏ bớt keyframe. |
-| NFR12 | Nhiều camera trên một GPU | RTX 4060 8 GB, host dùng chung: hai camera tốn VRAM như một (tối đa 6,9 GB toàn GPU), GPU bận 31-38%; 30 phút hai camera 24/7 bỏ 0,12-0,13% frame, lag p95 dưới 0,75 s; host tự thoát khi hết phiên. Bật hai camera cùng lúc: không bỏ frame nào trong 60 s đầu. Môi trường thật 27/10: 2 camera bỏ 0,04-0,07% (30 phút), 3 camera 0,06-0,36% (lag p95 tới 1,2 s), 4 camera 4-30% nên khuyến nghị tối đa 3. |
+| NFR12 | Nhiều camera trên một GPU | RTX 4060 8 GB, host dùng chung: hai camera tốn VRAM như một (tối đa 6,9 GB toàn GPU), GPU bận 31-38%; 30 phút hai camera 24/7 bỏ 0,12-0,13% frame, lag p95 dưới 0,75 s; host tự thoát khi hết phiên. Bật hai camera cùng lúc: không bỏ frame nào trong 60 s đầu. Môi trường thật 27/10: 2 camera bỏ 0,04-0,07% (30 phút), 3 camera 0,06-0,36% (lag p95 tới 1,2 s), 4 camera 4-30% nên khuyến nghị tối đa 3. Đo lại 30/10 (2 camera, YouTube 1080p có ghi hình + demo, 10 phút): bỏ 0,6% / 0%, lag p95 khoảng 1,1 s, VRAM 4,9 GB; điều kiện là nạp kernel CUDA kiểu lazy (trước đó các phiên lỗi vì cạn commit Windows). |
 
 Giới hạn upload có thể cấu hình; giới hạn 25 MP hiện được kiểm tra trong mã probe ảnh. Đây là các giới hạn đầu vào, không phải kết quả benchmark. Mục tiêu concurrency, p95 latency, thời gian phục hồi và accuracy cần chốt sau khi xác định phần cứng, dữ liệu và quy mô vận hành. Bản đầu vận hành một worker xử lý hàng đợi tuần tự; không diễn giải kiến trúc này là đã hỗ trợ nhiều worker đồng thời.
 
@@ -1225,6 +1225,7 @@ Khi đóng gói hoặc chuyển host, phải đưa theo migration SQL, mã `app/
 | Chia GPU giữa upload và live | Đo được hai tiến trình cùng nạp model làm tràn VRAM 8 GB và cả hai gần như đứng. Job video joint chạy trong host live (một bản model); các job khác vẫn chờ khi camera chạy. |
 | Job trong host giữ tốc độ thời gian thực | Hai camera cộng một job chạy hết tốc độ: camera bỏ 2,3% và 5,4% frame (CPU/GIL, ưu tiên GPU không đủ); giữ thời gian thực: 0% và 0,88%, job 3 phút mất 195 s. |
 | Che mật khẩu camera RTSP | URL camera thường chứa mật khẩu; che ở mọi đầu ra (API, sự kiện, lỗi), chỉ thư mục dữ liệu của người vận hành giữ bản đầy đủ. |
+| Nạp kernel CUDA kiểu lazy (`CUDA_MODULE_LOADING=LAZY`) | Trên Windows, PyTorch mặc định nạp mọi kernel ngay khi tạo CUDA context, làm host live giữ khoảng 12 GB commit (RAM thật khoảng 3 GB). Với 2 camera và các ứng dụng khác, commit chạm giới hạn và phiên lỗi `Unable to allocate`. Lazy giảm còn khoảng 7 GB, VRAM giảm khoảng 1 GB. Đánh đổi: kernel được nạp ở lần dùng đầu, nhưng phần làm nóng (warm-up) đã chạy trước khi nhận frame. |
 | Dừng ffmpeg ghi hình bằng lệnh `q` thay vì kill | Kill làm đoạn MP4 đang ghi (tối đa 10 s cuối) không được đóng, nên track cuối phiên không có video. ffmpeg ghi hình đọc stdin; khi dừng, frame còn lại được đọc bỏ để pipe không nghẽn; quá 10 s mới kill. Camera không ghi hình vẫn kill ngay. |
 | Giới hạn đăng nhập sai trong bộ nhớ API | Đủ cho một tiến trình API trên máy demo, không cần bảng hay Redis. Đánh đổi: khởi động lại API thì bộ đếm về 0; nhiều tiến trình API sẽ cần bộ đếm dùng chung. Khóa theo email + địa chỉ, nên người khác không khóa được tài khoản của mình từ máy khác. |
 | Bộ mẫu chỉ gồm crop đủ rộng (`min_crop_width`) | Trên camera Camboriú, 180/280 track của bộ mẫu thường có crop dưới 51 px, không đọc được ký tự nào. Gán chúng tốn công mà không thêm thông tin. Kết quả chỉ đại diện cho biển đủ lớn, cũng là nhóm duy nhất máy có thể xếp `readable` đúng. |
@@ -1295,6 +1296,7 @@ Các tình huống dưới đây là tiêu chí có thể thực hiện lại; m
 | AT45 | Đăng nhập sai 6 lần liên tiếp, rồi đúng mật khẩu; tài khoản khác cùng địa chỉ | 401 × 5, rồi 429 kèm `Retry-After`; đúng mật khẩu vẫn 429; tài khoản khác 200 | UC01; NFR01 |
 | AT46 | Body JSON 2 MB, JSON hỏng, NUL trong query, chuỗi `ﬃ` × 64 khi sửa biển, PNG khai 20000 × 10000, ảnh JPEG có EXIF xoay | 413, 400, 422, 422, 422; nhận diện trên ảnh đã xoay thẳng | UC03, UC07, UC08; NFR06 |
 | AT47 | `npm run smoke` trên stack đang chạy, kèm `--upload` và `--live` | Kiểm tra nhanh khoảng 1 s; clip 15 s xong trong 39 s, có bằng chứng, rồi xóa; camera demo chạy sau 26 s, 16 track trong 60 s, không bỏ frame | NFR07 |
+| AT48 | Hai camera (YouTube 1080p có ghi hình + demo) chạy 10 phút trên máy dev khi các ứng dụng khác vẫn mở | Không phiên nào lỗi; bỏ frame dưới 1%; lag p95 dưới 1,5 s; commit còn dự phòng (đo được 40,3/45,4 GB) | NFR11, NFR12 |
 
 ### 13.2. Ma trận liên kết yêu cầu với thành phần thực hiện
 

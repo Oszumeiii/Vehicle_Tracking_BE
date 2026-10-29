@@ -280,6 +280,64 @@ RTX 4060 Laptop 8 GB, Ryzen 7 7735HS. Ứng dụng khác đã chiếm khoảng 1
 - **Hai camera với hfps thì CPU/GPU không theo kịp:** bỏ 12–17% frame, vượt xa mục tiêu dưới 1%.
 - **Pipeline hfps chỉ để thử nghiệm** cho job upload hoặc một camera. Không dùng hfps cho hai camera cùng lúc: mọi phiên trong host dùng chung pipeline đầu tiên được nạp.
 
+## Kiểm tra FE sau giai đoạn 13 (2026-10-29)
+
+**Cách làm:** Playwright headless trên stack local, admin tạm. Mỗi trang chụp ở 1440 × 900 và 390 × 844; ghi lỗi console, phản hồi 4xx/5xx, phần tử tràn ngang. Kiểm tra FE đang chạy (nhánh `refactor/ui-foundation` của Codex có thay đổi chưa commit) và FE `main` (cổng 5174).
+
+| Màn hình / luồng | Kết quả |
+|---|---|
+| 6 trang (Tra cứu, Kết quả & duyệt, Phương tiện, Camera live, Gán nhãn, Cài đặt), desktop và mobile | Không trang nào tràn ngang, không có lỗi 5xx |
+| Đăng nhập sai 6 lần | Lần thứ 6 hiện "Too many failed sign-ins. Try again in 15 min." (thông báo tiếng Anh từ API) |
+| Upload clip 15 s và tìm biển | Job chạy xong, đã xóa sau khi thử |
+| Bật camera demo, feed, hộp bằng chứng, các tab Lịch sử / Vùng loại trừ / Watchlist / Bản ghi, dừng phiên | Chạy được; có các lỗi bên dưới |
+| Gán nhãn: mở bộ "crop ≥ 51 px", 5 crop hiện ra, Bỏ qua chuyển mẫu, tab Báo cáo ngưỡng | Đạt (không lưu nhãn nào) |
+
+**Lỗi đã sửa (FE #12, BE #42):**
+- Hộp bằng chứng tối khoảng 60%: hiệu ứng "đèn rọi" (`box-shadow` 9999 px) của 5 ô biển tràn ra khỏi khung ảnh. Đo màu nền: 108/255 trước, 255/255 sau.
+- Hộp bằng chứng nằm dưới thanh tiêu đề (z-index 10 so với 50).
+- Track "tin cậy thấp" của camera demo báo "Video không còn lưu"; nay cắt từ video demo khi mở.
+- Camera demo hiện nút "Mở trong bản ghi" dẫn tới tab không tồn tại.
+- Thêm ô "Chiều rộng crop tối thiểu" khi tạo bộ mẫu.
+
+**Ghi lại cho bố cục mới của Codex (chưa sửa, vì file đang được sửa dở):**
+- Trang Kết quả & duyệt trên mobile: khung chi tiết bị cắt mất phần bên phải.
+- Thẻ "Tổng lượt ghi nhận" hiện 100, đúng bằng giới hạn một trang, nên có thể đang đếm theo trang chứ không theo tổng.
+- Tiến trình upload hiện 45% khi job vẫn `queued`.
+- `GET /stream-sources/{id}/snapshot` trả 404 khi camera chưa từng có khung hình (FE cố ý lấy một lần): không ảnh hưởng, chỉ có một dòng lỗi trong console.
+
+## Hai camera trên máy dev và bộ nhớ commit (2026-10-30)
+
+**Cấu hình:** YouTube Camboriú 1080p (có ghi hình) + camera demo ban ngày, cùng một host, 10 phút mỗi lượt, 14h–15h giờ Brazil. Máy RTX 4060 Laptop 8 GB, RAM 15 GB, các ứng dụng khác vẫn mở (Docker/WSL, trình duyệt, Codex).
+
+| | Mặc định, lượt 1 | Mặc định, lượt 2 | **`CUDA_MODULE_LOADING=LAZY`** |
+|---|---|---|---|
+| Phiên lỗi giữa chừng | YouTube lỗi ở phút 5 | cả hai lỗi ở phút 7,5 | **không** |
+| Lỗi | `Unable to allocate 43.1 MiB` (numpy), OpenCV `Insufficient memory` | như lượt 1 | — |
+| Commit cao nhất / giới hạn | chạm giới hạn (khoảng 35 GB lúc đó) | 45,6 / 45,9 GB | **40,3 / 45,4 GB** |
+| Commit của host Python (1 camera) | 12,2 GB | — | **6,8 GB** |
+| RAM của host Python (1 camera) | 3,4 GB | — | **2,3 GB** |
+| VRAM tối đa | 5,9 GB | 5,8 GB | **4,9 GB** |
+| Bỏ frame YouTube / demo | 0% / 0% (trước khi lỗi) | 0,32% / 0% | **0,6% / 0%** |
+| Lag p95 YouTube / demo | 0,49 / 0,72 s | 1,12 / 0,62 s | **1,13 / 1,12 s** |
+| Track (readable) YouTube / demo | 42 (1) / 131 (14) | 130 (24) / 89 (10) | **175 (15) / 128 (13)** |
+| CPU trung bình | 6% | 7% | 10% |
+
+**Nguyên nhân:** RAM trống vẫn còn 1–3 GB khi phiên lỗi. Thứ cạn là **commit** của Windows (RAM + page file): khi host chết, commit của cả máy giảm từ 45,3 xuống 33,6 GB. Tức là host Python giữ khoảng 12 GB commit dù chỉ dùng khoảng 3 GB RAM. Đo riêng từng bước khởi động trong một tiến trình:
+
+| Bước | Commit (mặc định) | Commit (LAZY) |
+|---|---|---|
+| `import torch` | 1,31 GiB | 1,31 GiB |
+| Tạo CUDA context | 4,56 GiB | 1,53 GiB |
+| Lần detect đầu (fp16) | 7,87 GiB | 2,69 GiB |
+| Thêm batch 4 và 16 | 8,51 GiB | 3,35 GiB |
+
+PyTorch 2.10 trên Windows nạp sẵn mọi kernel CUDA khi biến `CUDA_MODULE_LOADING` không được đặt. Nay `app/__init__.py` đặt mặc định `LAZY` trước khi import torch (biến môi trường vẫn ghi đè được), nên áp dụng cho host live, job upload và các script.
+
+**Kết luận:**
+- Với LAZY, 2 camera chạy ổn định trên máy dev: bỏ frame dưới 1%, lag p95 khoảng 1,1 s, còn khoảng 5 GB commit dự phòng.
+- CPU chỉ khoảng 10%, nên không cần `PLATE_LIVE_HWACCEL=cuda`: giải mã không phải nút thắt, bật lên chỉ đẩy thêm tải sang GPU. Lượt thử này đã được bỏ qua.
+- Máy ảo Docker/WSL (chỉ chạy PostgreSQL) giữ khoảng 8 GB commit. Nếu máy vẫn thiếu bộ nhớ, giới hạn nó trong `%UserProfile%\.wslconfig` (`[wsl2]` `memory=3GB`) rồi `wsl --shutdown`.
+
 ## Nhiều camera trên một GPU và tải CPU (2026-10-27)
 
 **Đo trên môi trường thật** (stack khởi động lại theo `main`, migration 0009 đã áp dụng): YouTube Camboriú 720p và camera demo ban ngày chạy chung một host trong 30 phút.

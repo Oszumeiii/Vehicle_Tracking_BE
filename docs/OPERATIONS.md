@@ -111,6 +111,14 @@ Track không nhập được (bằng chứng hỏng) được ghi thành event `
 
 Chạy lại bằng `POST /api/v2/recognition-jobs` với cùng `media_id`. Job cũ và review cũ còn nguyên. API không có retry/cancel riêng. Tra cứu chung chọn lượt xử lý nghiệp vụ succeeded mới nhất của mỗi nguồn; vẫn xem lịch sử qua job cụ thể.
 
+## Máy thiếu bộ nhớ (phiên lỗi `Unable to allocate`)
+
+Trên Windows, phiên live có thể lỗi `STREAM_FAILED` với thông báo `Unable to allocate … MiB` hoặc OpenCV `Insufficient memory` dù RAM trống vẫn còn 1–3 GB. Nguyên nhân là **commit** (RAM + page file) chạm giới hạn.
+- Kiểm tra trong Task Manager → Performance → Memory → *Committed*.
+- Code đặt mặc định `CUDA_MODULE_LOADING=LAZY` (`app/__init__.py`), giảm commit của host live từ khoảng 12 GB xuống khoảng 7 GB. Đừng đặt biến này thành `EAGER`.
+- Máy ảo Docker/WSL giữ khoảng 8 GB commit chỉ để chạy PostgreSQL: giới hạn bằng `.wslconfig` (`[wsl2]` `memory=3GB`), rồi `wsl --shutdown` và mở lại Docker Desktop.
+- Đóng bớt ứng dụng nặng (trình duyệt nhiều tab, trợ lý AI chạy nền) trước khi chạy nhiều camera.
+
 ## Dừng, khởi động lại và cập nhật
 
 Để bảo trì, ngừng nhận request mới bằng cách dừng API; chờ job hiện tại kết thúc nếu muốn giữ lần xử lý đó, rồi dừng worker bằng Ctrl+C. Dừng worker trong lúc inference sẽ ngắt subprocess và job có thể thành `WORKER_INTERRUPTED`. Nếu tiến trình bị tắt đột ngột, lần khởi động worker tiếp theo chuyển các job còn `running` sang `failed/WORKER_INTERRUPTED`.
