@@ -113,15 +113,39 @@ export async function cutRecording(
   out: string,
 ): Promise<{ first_seen_offset: number; seconds: number }> {
   if (!files.length) throw new NotRecorded('No recording');
+  return runClips(options, ['--index', ...files, '--from', from, '--to', to, '--out', out], out);
+}
+
+/**
+ * Cut a track seen from PTS first to last (padded) out of the looped demo video a file camera
+ * replays: the video is that camera's recording.
+ */
+export async function cutDemoVideo(
+  options: Pick<WorkerOptions, 'python'>,
+  video: string,
+  first: number,
+  last: number,
+  pad: number,
+  out: string,
+): Promise<{ first_seen_offset: number; seconds: number }> {
+  const args = ['--video', video, '--pts-from', String(first), '--pts-to', String(last)];
+  return runClips(options, [...args, '--pad', String(pad), '--out', out], out);
+}
+
+async function runClips(
+  options: Pick<WorkerOptions, 'python'>,
+  args: string[],
+  out: string,
+): Promise<{ first_seen_offset: number; seconds: number }> {
   while (cutting >= 2) await new Promise<void>((resolve) => waiting.push(resolve));
   cutting++;
   try {
     await mkdir(path.dirname(out), { recursive: true });
-    const child = spawn(
-      options.python,
-      ['-m', 'app.live.clips', '--index', ...files, '--from', from, '--to', to, '--out', out],
-      { cwd: process.cwd(), windowsHide: true, env: pythonEnv() },
-    );
+    const child = spawn(options.python, ['-m', 'app.live.clips', ...args], {
+      cwd: process.cwd(),
+      windowsHide: true,
+      env: pythonEnv(),
+    });
     let stdout = '';
     child.stdout?.on('data', (chunk) => (stdout += String(chunk)));
     child.stderr?.resume();

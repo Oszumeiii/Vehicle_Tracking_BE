@@ -70,6 +70,7 @@ Action `confirm` chấp nhận text máy; `correct` bắt buộc text mới; `un
     - `clip`: clip lưu cùng track;
     - `recording`: cắt từ bản ghi đệm của camera, còn trong `PLATE_LIVE_RECORD_MINUTES`;
     - `media`: video upload, `url` là `/media/{id}/content`;
+    - `demo`: track của camera demo; cắt từ video demo khi mở lần đầu (vài giây), sau đó lấy từ cache;
     - `none`: không còn video.
   - `GET /api/v2/recognition-results/{id}/video` → `video/mp4` (hỗ trợ Range). Header `X-Plate-First-Seen-Seconds` cho biết giây biển xuất hiện trong video. Hết thời gian giữ thì `404`. Nhận cả `?token=` để dùng trực tiếp trong `<video src>`.
 - **Bản ghi camera:**

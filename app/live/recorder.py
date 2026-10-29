@@ -135,20 +135,20 @@ class ClipMaker:
         return covered is not None and covered >= item[2] + self.pad
 
     def _cut(self, key, first, last):
-        from app.live.clips import NotRecorded, cut, file_entry
+        from app.live.clips import NotRecorded, cut, cut_demo, file_entry
         target = self.out / "clips" / f"{key}.mp4"
-        start, end, seen = first - self.pad, last + self.pad, first
         try:
             if self.video is not None:
                 path, duration = self.video
                 if self._file_entry is None:
                     self._file_entry = file_entry(path, duration, self.ffmpeg)
-                offset = (first // duration) * duration if duration > 0 else 0.
-                start, end, seen = max(0., start - offset), min(duration, end - offset), first - offset
-                entries = [self._file_entry]
+                info = cut_demo(path, first, last, target, pad=self.pad, duration=duration,
+                                entry=self._file_entry, ffmpeg=self.ffmpeg)
             else:
-                entries = self.recorder.snapshot()
-            info = cut(entries, start, end, target, clock="pts", ffmpeg=self.ffmpeg)
+                start = first - self.pad
+                info = cut(self.recorder.snapshot(), start, last + self.pad, target, clock="pts", ffmpeg=self.ffmpeg)
+                info = dict(first_seen_offset=round(info["first_seen_offset"] + first - start, 3),
+                            seconds=info["seconds"])
         except NotRecorded:
             return
         except Exception as exc:  # noqa: BLE001 - a missing clip never stops recognition
@@ -156,5 +156,4 @@ class ClipMaker:
             return
         self.emit(dict(type="clip", track=key, path=target.relative_to(self.out).as_posix(),
                        # where the plate first shows up inside the clip
-                       first_seen_offset=round(info["first_seen_offset"] + seen - start, 3),
-                       seconds=info["seconds"]))
+                       first_seen_offset=info["first_seen_offset"], seconds=info["seconds"]))
