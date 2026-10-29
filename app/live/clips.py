@@ -11,7 +11,10 @@ inpoint/outpoint in the files' own timestamps: an output -ss compares decoding t
 with B-frames, would skip the keyframe it should start on.
 
   python -m app.live.clips --index REC/index.jsonl [...] --from ISO --to ISO --out clip.mp4
+  python -m app.live.clips --video DEMO.mp4 --pts-from S --pts-to S [--pad 3] --out clip.mp4
 prints {"first_seen_offset": s, "seconds": s} or exits 2 when the span is not recorded.
+A demo camera replays its video in a loop, so the video is its own recording: --video cuts
+a track (seen from PTS S to S) out of it, padded on both sides.
 """
 import argparse
 from datetime import datetime
@@ -121,15 +124,51 @@ def file_entry(path, duration, ffmpeg=None):
                 first_ts=first, keyframes=times)
 
 
+def video_duration(path):
+    import cv2
+    capture = cv2.VideoCapture(str(path))
+    try:
+        fps = float(capture.get(cv2.CAP_PROP_FPS))
+        return float(capture.get(cv2.CAP_PROP_FRAME_COUNT)) / fps if fps > 0 else 0.
+    finally:
+        capture.release()
+
+
+def cut_demo(path, first, last, out, pad=3.0, duration=None, entry=None, ffmpeg=None):
+    """Clip of a track seen from PTS first to last on a looped demo video (PTS p plays p mod duration).
+
+    Returns where the plate first shows up inside the clip, and the clip's length.
+    """
+    if duration is None:
+        duration = video_duration(path)
+    offset = (first // duration) * duration if duration > 0 else 0.
+    start, end, seen = max(0., first - pad - offset), min(duration, last + pad - offset), first - offset
+    info = cut([entry or file_entry(path, duration, ffmpeg)], start, end, out, clock="pts", ffmpeg=ffmpeg)
+    return dict(first_seen_offset=round(info["first_seen_offset"] + seen - start, 3), seconds=info["seconds"])
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--index", nargs="+", required=True, type=Path)
-    parser.add_argument("--from", dest="start", required=True)
-    parser.add_argument("--to", dest="end", required=True)
+    parser.add_argument("--index", nargs="+", type=Path)
+    parser.add_argument("--from", dest="start")
+    parser.add_argument("--to", dest="end")
+    parser.add_argument("--video", type=Path)
+    parser.add_argument("--pts-from", type=float)
+    parser.add_argument("--pts-to", type=float)
+    parser.add_argument("--pad", type=float, default=3.0)
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args(argv)
+    if args.video is None and not (args.index and args.start and args.end):
+        parser.error("give --index with --from/--to, or --video with --pts-from/--pts-to")
+    if args.video is not None and (args.pts_from is None or args.pts_to is None):
+        parser.error("--video needs --pts-from and --pts-to")
     try:
-        info = cut(read_index(args.index), args.start, args.end, args.out, clock="utc")
+        if args.video is not None:
+            if not args.video.is_file():
+                raise NotRecorded("Demo video not found")
+            info = cut_demo(args.video, args.pts_from, args.pts_to, args.out, pad=args.pad)
+        else:
+            info = cut(read_index(args.index), args.start, args.end, args.out, clock="utc")
     except NotRecorded as exc:
         print(json.dumps({"error": str(exc)}))
         return 2

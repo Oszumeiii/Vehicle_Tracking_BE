@@ -20,19 +20,26 @@ import { ApiFailures, ApiRangedFileResponse } from '../common/openapi';
 import { Ownership } from '../common/ownership';
 import { Database } from '../database/database';
 import { safeStorage } from '../recognition/engine';
-import { coverage, cutRecording, NotRecorded, recordingIndexes } from './clips';
+import { coverage, cutDemoVideo, cutRecording, NotRecorded, recordingIndexes } from './clips';
+import { demoVideoFile } from './payload';
 
 type Row = Record<string, any>;
 const PAD_SECONDS = 3;
 const MAX_RECORDING_SECONDS = 600;
 const OFFSET_HEADER = 'X-Plate-First-Seen-Seconds';
 
-/** Where a result's video is: its clip, the camera's rolling recording, the uploaded video, or nowhere. */
+/**
+ * Where a result's video is: its clip, the camera's rolling recording, the uploaded video, the
+ * demo video a file camera replays (cut on request), or nowhere.
+ */
 interface VideoSource {
-  kind: 'clip' | 'recording' | 'media' | 'none';
+  kind: 'clip' | 'recording' | 'media' | 'demo' | 'none';
   /** Seconds into the video where the plate first shows. */
   first_seen_offset: number | null;
   job: Row;
+  result: Row;
+  /** Demo video file of a file camera. */
+  video?: string;
 }
 
 /**
@@ -61,13 +68,29 @@ export class VideoController {
       )
     ).rows[0];
     if (job.media_id)
-      return { kind: 'media', first_seen_offset: Number(result.start_seconds ?? 0), job };
+      return { kind: 'media', first_seen_offset: Number(result.start_seconds ?? 0), job, result };
     if (job.clip_storage_key)
       return {
         kind: 'clip',
         first_seen_offset: Number(job.statistics?.clip_first_seen_offset ?? PAD_SECONDS),
         job,
+        result,
       };
+    const camera = (
+      await this.db.query(
+        `SELECT c.source_type, c.url FROM live_sessions s JOIN stream_sources c ON c.id=s.stream_source_id
+         WHERE s.id=$1`,
+        [job.live_session_id],
+      )
+    ).rows[0];
+    if (camera?.source_type === 'file' && result.start_seconds !== null) {
+      const video = await Promise.resolve()
+        .then(() => demoVideoFile(settings().dataDir, camera.url))
+        .catch(() => null);
+      if (video && (await stat(video).catch(() => null))?.isFile())
+        return { kind: 'demo', first_seen_offset: null, job, result, video };
+      return { kind: 'none', first_seen_offset: null, job, result };
+    }
     const recorded = await coverage(
       await recordingIndexes(settings().dataDir, [job.live_session_id]),
     );
@@ -76,7 +99,7 @@ export class VideoController {
     const covered = recorded.some(
       (span) => Date.parse(span.from) <= from && Date.parse(span.to) >= to,
     );
-    return { kind: covered ? 'recording' : 'none', first_seen_offset: null, job };
+    return { kind: covered ? 'recording' : 'none', first_seen_offset: null, job, result };
   }
 
   @Get('recognition-results/:id/video-info')
@@ -89,7 +112,7 @@ export class VideoController {
       required: ['available', 'kind', 'url', 'first_seen_offset'],
       properties: {
         available: { type: 'boolean' },
-        kind: { type: 'string', enum: ['clip', 'recording', 'media', 'none'] },
+        kind: { type: 'string', enum: ['clip', 'recording', 'media', 'demo', 'none'] },
         url: { type: 'string', nullable: true },
         first_seen_offset: {
           type: 'number',
@@ -129,7 +152,32 @@ export class VideoController {
     let file: string;
     let offset = video.first_seen_offset;
     if (video.kind === 'clip') file = safeStorage(dataDir, video.job.clip_storage_key);
-    else if (video.kind === 'recording') {
+    else if (video.kind === 'demo') {
+      file = safeStorage(dataDir, `live/${video.job.live_session_id}/cache/${video.job.id}.mp4`);
+      const sidecar = `${file}.json`;
+      const cached = await readFile(sidecar, 'utf8')
+        .then(JSON.parse)
+        .catch(() => null);
+      if (cached && (await stat(file).catch(() => null))) offset = cached.first_seen_offset;
+      else {
+        const first = Number(video.result.start_seconds);
+        const last = Number(video.result.end_seconds ?? first);
+        const info = await cutDemoVideo(
+          { python },
+          video.video!,
+          first,
+          last,
+          PAD_SECONDS,
+          file,
+        ).catch((error) => {
+          throw error instanceof NotRecorded
+            ? new NotFoundException('The demo video is no longer available.')
+            : error;
+        });
+        offset = info.first_seen_offset;
+        await writeFile(sidecar, JSON.stringify({ first_seen_offset: offset }));
+      }
+    } else if (video.kind === 'recording') {
       file = safeStorage(dataDir, `live/${video.job.live_session_id}/cache/${video.job.id}.mp4`);
       const sidecar = `${file}.json`;
       const cached = await readFile(sidecar, 'utf8')

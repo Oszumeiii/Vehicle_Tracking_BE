@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 import { after, before, test } from 'node:test';
@@ -239,10 +239,44 @@ test('administrators add demo cameras that replay a video from demo-videos in a 
     loop: true,
     exclude_zones: [[0, 0, 0.2, 0.2]],
   });
+  // Any track of a demo camera has a video: the looped demo video is cut on request.
+  await writeTrack(queued.id, 'e000-t000001', { status: 'low_confidence' });
+  spawned[0].child.line({
+    type: 'status',
+    status: 'running',
+    epoch: 0,
+    width: 1920,
+    height: 1080,
+    fps: 30,
+  });
+  spawned[0].child.line({
+    type: 'track',
+    track: 'e000-t000001',
+    status: 'low_confidence',
+    epoch: 0,
+  });
+  const result = await until(
+    async () =>
+      (
+        await fixture.database.query(
+          'SELECT a.id FROM recognition_jobs j JOIN plate_appearances a ON a.job_id=j.id WHERE j.live_session_id=$1',
+          [queued.id],
+        )
+      ).rows[0],
+    (row) => Boolean(row),
+    'demo track ingested',
+  );
+  const info = `/api/v2/recognition-results/${result.id}/video-info`;
+  const demoInfo = (await api.get(info).set(as('admin')).expect(200)).body;
+  assert.equal(demoInfo.kind, 'demo');
+  assert.equal(demoInfo.available, true);
+  assert.equal(demoInfo.url, `/api/v2/recognition-results/${result.id}/video`);
+  await rm(join(videos, 'camboriu.mp4'));
+  assert.equal((await api.get(info).set(as('admin')).expect(200)).body.kind, 'none');
   spawned[0].child.exit(1);
   await until(
     () => sessionRow(queued.id),
-    (row) => row.status === 'failed',
+    (row) => ['failed', 'ended', 'stopped'].includes(row.status),
     'demo session ended',
   );
 });

@@ -361,6 +361,8 @@ Chưa đo lại sau các thay đổi này: lượt đo bị dừng vì máy gầ
 
 **Lỗi tìm ra khi đo:** với HLS, ffmpeg liệt kê đoạn đầu tiên từ PTS 0 thay vì PTS thật của luồng, nên giờ UTC của đoạn đó bị lùi gần 3 giờ. Recorder giờ lấy keyframe đầu của đoạn làm mốc bắt đầu; đã có test.
 
+**Video cho mọi track của camera demo (29/10).** Trước đây chỉ track `readable` của camera demo có video (clip); track khác báo "Video không còn lưu", vì camera demo không có bản ghi đệm. Nay `video-info` trả `kind: demo` và API cắt đoạn đó từ chính video demo khi mở lần đầu (PTS của track lấy theo vòng lặp). Thử thật: track `low_confidence` BDU3I36, lần đầu 6,7 s (4,4 MB), các lần sau lấy từ cache trong 26 ms; khung hình tại `first_seen_offset` thấy đúng xe đang qua vạch.
+
 **Sửa ngày 28/10: mất đoạn cuối khi dừng phiên.** Trước đây dừng phiên thì ffmpeg bị kill, nên đoạn MP4 đang ghi (tối đa 10 s cuối) không được đóng và không có trong danh sách. Track ở cuối phiên vì vậy không cắt được clip. Nay ffmpeg ghi hình nhận lệnh `q` qua stdin; trong lúc chờ, frame còn lại được đọc bỏ để pipe không bị nghẽn; quá 10 s mới kill.
 - File thử 30 s, dừng ở giây 14: trước khi sửa chỉ có đoạn 0–10,2 s trong danh sách; sau khi sửa có cả đoạn 10,2–16,4 s.
 - YouTube Camboriú 720p, dừng sau 25 s: 3/3 đoạn được liệt kê, đoạn cuối phát được, ffmpeg thoát sau 0,2 s.

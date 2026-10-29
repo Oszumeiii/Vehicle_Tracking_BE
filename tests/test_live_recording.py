@@ -143,6 +143,21 @@ def test_a_demo_video_is_cut_from_the_file_even_after_it_looped(tmp_path):
     assert file_entry(video, 20.0)["pts_end"] == 20.0
 
 
+def test_any_demo_track_can_be_cut_on_demand_from_the_command_line(tmp_path, capsys):
+    from app.live.clips import main
+    video = h264(tmp_path / "demo.mp4", 20)
+    out = tmp_path / "cache" / "job.mp4"
+    out.parent.mkdir()
+    # Third pass of the loop: PTS 51-52 plays file time 11-12 s; padded 9-14 s, starting at keyframe 8 s.
+    assert main(["--video", str(video), "--pts-from", "51", "--pts-to", "52", "--pad", "2", "--out", str(out)]) == 0
+    info = json.loads(capsys.readouterr().out)
+    count, ok = frames_of(out)
+    assert ok and count == pytest.approx(60, abs=2), "8 s (keyframe) to 14 s"
+    assert info["first_seen_offset"] == pytest.approx(3.0, abs=.05)
+    assert main(["--video", str(tmp_path / "missing.mp4"), "--pts-from", "1", "--pts-to", "2",
+                 "--out", str(out)]) == 2
+
+
 def test_clips_wait_until_the_recording_covers_the_track(recording, tmp_path):
     folder = copy_of(recording, tmp_path)
 
