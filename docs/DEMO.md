@@ -46,6 +46,8 @@ Demo khoảng 10 phút, đi qua cả hai nguồn của hệ thống: video uploa
 
 Vì việc bật phiên mất gần một phút, nên bật camera demo ngay sau khi chuyển sang tab **Camera live**, rồi nói phần kiến trúc trong lúc chờ. Thêm biển watchlist sớm (ngay khi thấy biển đầu tiên) để cảnh báo kịp xuất hiện trong buổi demo.
 
+**Bộ nhớ (đo 30/10/2026):** 2 camera (YouTube 1080p + demo) chạy ổn định 10 phút: bỏ frame dưới 1%, lag p95 khoảng 1,1 s, host dùng khoảng 2,8 GB RAM và 4,9 GB VRAM. Trước buổi demo nên đóng bớt ứng dụng nặng; nếu phiên lỗi `Unable to allocate`, xem mục *Máy thiếu bộ nhớ* trong [OPERATIONS.md](OPERATIONS.md).
+
 **Chất lượng camera YouTube (đo 27/10/2026):** để `max_height` ở 1080 khi mạng cho phép. Ở 720p, confidence thấp hẳn: trong 30 phút chỉ 2/318 track đạt `readable` (ngưỡng 0.96), trong khi clip demo 1080p đạt 37/373. Có thể chạy tới 3 camera cùng lúc; job upload video vẫn chạy được trong lúc camera chạy (chậm bằng thời gian thực).
 
 ## Khởi động

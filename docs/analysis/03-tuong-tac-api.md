@@ -279,6 +279,7 @@ Các tình huống dưới đây là tiêu chí có thể thực hiện lại; m
 | AT45 | Đăng nhập sai 6 lần liên tiếp, rồi đúng mật khẩu; tài khoản khác cùng địa chỉ | 401 × 5, rồi 429 kèm `Retry-After`; đúng mật khẩu vẫn 429; tài khoản khác 200 | UC01; NFR01 |
 | AT46 | Body JSON 2 MB, JSON hỏng, NUL trong query, chuỗi `ﬃ` × 64 khi sửa biển, PNG khai 20000 × 10000, ảnh JPEG có EXIF xoay | 413, 400, 422, 422, 422; nhận diện trên ảnh đã xoay thẳng | UC03, UC07, UC08; NFR06 |
 | AT47 | `npm run smoke` trên stack đang chạy, kèm `--upload` và `--live` | Kiểm tra nhanh khoảng 1 s; clip 15 s xong trong 39 s, có bằng chứng, rồi xóa; camera demo chạy sau 26 s, 16 track trong 60 s, không bỏ frame | NFR07 |
+| AT48 | Hai camera (YouTube 1080p có ghi hình + demo) chạy 10 phút trên máy dev khi các ứng dụng khác vẫn mở | Không phiên nào lỗi; bỏ frame dưới 1%; lag p95 dưới 1,5 s; commit còn dự phòng (đo được 40,3/45,4 GB) | NFR11, NFR12 |
 
 ### 13.2. Ma trận liên kết yêu cầu với thành phần thực hiện
 
