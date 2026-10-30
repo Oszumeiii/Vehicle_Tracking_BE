@@ -114,7 +114,7 @@ Vì mỗi track là một job, review, xem crop, xuất CSV và tra cứu biển
 
 Hỗ trợ cho UI:
 - camera có `embed_url` để nhúng trình phát YouTube;
-- `GET /api/v2/stream-sources/{id}/snapshot` trả keyframe mới nhất để vẽ vùng loại trừ;
+- `GET /api/v2/stream-sources/{id}/snapshot` trả keyframe mới nhất để vẽ vùng loại trừ (`204` khi camera chưa có track);
 - muốn stats trên UI mượt hơn thì đặt `PLATE_LIVE_STATS_SECONDS=1`–`2` (đổi lại ghi DB nhiều hơn).
 
 Lưu ý khi vận hành:
@@ -145,7 +145,8 @@ Lưu ý khi vận hành:
   - sau `track_retention_days` (mặc định 7) track bị xóa;
   - track đã review hoặc đã có cảnh báo watchlist được giữ;
   - đặt `null` để giữ mãi;
-  - thư mục mồ côi và thùng rác cũng được dọn.
+  - thư mục mồ côi và thùng rác cũng được dọn;
+  - phiên đăng nhập (`auth_sessions`) hết hạn hoặc đã đăng xuất quá 7 ngày bị xóa.
 - **Xóa phiên:** `DELETE /api/v2/live-sessions/{id}` cho phiên đã kết thúc (xóa track, bằng chứng và lịch sử). Xóa hết phiên thì xóa được camera. `GET /live-sessions/{id}` có `evidence_bytes`.
 - **Lượt xuất hiện:** các track cùng biển (hoặc lệch 1 ký tự) trên một camera trong vòng `PLATE_LIVE_SIGHTING_MINUTES` (mặc định 5) có chung `sighting_id`. `GET /recognition-results?group_by=sighting` trả mỗi lượt một dòng, kèm `sighting_count`, `first_seen`, `last_seen`; `GET /api/v2/sightings/{id}/results` liệt kê các track của lượt đó.
 - **Xem lại video:**

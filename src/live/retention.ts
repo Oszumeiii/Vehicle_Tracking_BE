@@ -32,7 +32,7 @@ const LIVE_JOBS = `recognition_jobs j JOIN plate_appearances a ON a.job_id=j.id
  * keyframe_retention_hours are pruned to one per track (1080p JPEGs are ~80% of the
  * bytes; crops stay), and tracks older than track_retention_days are deleted.
  * Folders left without rows (a crash between moving a track and committing it, a
- * deleted session, the trash) are swept as well.
+ * deleted session, the trash) are swept as well, and so are old sign-in sessions.
  */
 export class Retention {
   constructor(
@@ -59,7 +59,17 @@ export class Retention {
       deleted: await this.deleteTracks(),
       orphans: await this.sweepOrphans(),
       recordings: await this.sweepRecordings(),
+      sessions: await this.deleteSignIns(),
     };
+  }
+
+  /** Sign-in sessions expired or signed out more than a week ago; they only grow otherwise. */
+  private async deleteSignIns() {
+    const { rowCount } = await this.database.query(
+      `DELETE FROM auth_sessions
+      WHERE expires_at < now() - interval '7 days' OR revoked_at < now() - interval '7 days'`,
+    );
+    return rowCount ?? 0;
   }
 
   private async pruneKeyframes() {

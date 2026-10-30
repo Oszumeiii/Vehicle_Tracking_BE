@@ -306,18 +306,27 @@ export class LiveController {
     description:
       'Latest keyframe recorded on this camera, for drawing exclude zones in normalized coordinates.',
   })
+  @ApiResponse({ status: 204, description: 'No frame from this camera yet; run a session first.' })
   async snapshot(@Req() req: { user: Actor }, @Param('id') id: string, @Res() res: Response) {
     await this.owner.streamSource(req.user, id);
+    // Only the latest tracks of each session are read (index on live_session_id, captured_to);
+    // the web app polls this every few seconds while a demo camera runs.
     const frame = (
       await this.db.query(
-        `SELECT d.frame_storage_key FROM recognition_jobs j
-        JOIN live_sessions s ON s.id=j.live_session_id
+        `SELECT d.frame_storage_key FROM live_sessions s
+        JOIN LATERAL (SELECT j.id, j.captured_to FROM recognition_jobs j
+          WHERE j.live_session_id=s.id AND j.captured_to IS NOT NULL
+          ORDER BY j.captured_to DESC LIMIT 20) j ON true
         JOIN plate_appearances a ON a.job_id=j.id JOIN plate_detections d ON d.appearance_id=a.id
-        WHERE s.stream_source_id=$1 ORDER BY j.captured_to DESC, d.selected_order DESC LIMIT 1`,
+        WHERE s.stream_source_id=$1 AND d.frame_storage_key IS NOT NULL
+        ORDER BY j.captured_to DESC, d.selected_order DESC LIMIT 1`,
         [id],
       )
     ).rows[0];
-    if (!frame) throw new NotFoundException('No frame from this camera yet; run a session first.');
+    if (!frame) {
+      res.status(204).end();
+      return;
+    }
     res.sendFile(await this.storage.file(frame.frame_storage_key));
   }
 

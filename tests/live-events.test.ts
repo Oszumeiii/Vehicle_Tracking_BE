@@ -351,7 +351,7 @@ test('cameras expose an embeddable player and their latest frame for drawing zon
   assert.equal(source.embed_url, 'https://www.youtube-nocookie.com/embed/5Xl6pSgiy3A');
   const listed = await api.get('/api/v2/stream-sources').set(as('owner')).expect(200);
   assert.ok(listed.body.items.every((item: any) => item.embed_url));
-  await api.get(`/api/v2/stream-sources/${source.id}/snapshot`).set(as('owner')).expect(404);
+  await api.get(`/api/v2/stream-sources/${source.id}/snapshot`).set(as('owner')).expect(204);
   await ingest(session, 'e000-t000001', 'SNP1234');
   const frame = await api
     .get(`/api/v2/stream-sources/${source.id}/snapshot`)
