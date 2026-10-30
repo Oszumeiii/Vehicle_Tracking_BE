@@ -394,3 +394,53 @@ test('old rolling recordings and cut videos are swept, a running epoch is kept',
   assert.ok(!(await exists(oldEpoch)) && (await exists(newEpoch)));
   assert.ok(!(await exists(join(cache, 'old.mp4'))) && (await exists(join(cache, 'new.mp4'))));
 });
+
+test('retention deletes sign-in sessions that expired or were revoked over a week ago', async () => {
+  const day = 24 * 3600_000;
+  const at = (offset: number) => new Date(Date.now() + offset);
+  const sessions = {
+    expired: [at(-8 * day), null],
+    revoked: [at(day), at(-8 * day)],
+    recentlyExpired: [at(-day), null],
+    recentlyRevoked: [at(day), at(-day)],
+  } as const;
+  for (const [name, [expires, revoked]] of Object.entries(sessions))
+    await db().query(
+      'INSERT INTO auth_sessions(id,user_id,token_hash,expires_at,revoked_at) VALUES($1,$2,$3,$4,$5)',
+      [name.padEnd(32, '0').slice(0, 32), users.owner.id, name.padEnd(64, '0'), expires, revoked],
+    );
+  const retention = new Retention(db(), workerOptions(), { intervalMs: 60_000, batch: 50 });
+  assert.equal((await retention.sweep()).sessions, 2);
+  const left = (
+    await db().query('SELECT token_hash FROM auth_sessions WHERE user_id=$1', [users.owner.id])
+  ).rows.map((row) => row.token_hash.replace(/0+$/, ''));
+  assert.deepEqual(left.filter((hash) => hash in sessions).sort(), [
+    'recentlyExpired',
+    'recentlyRevoked',
+  ]);
+  // The signed-in session is untouched.
+  await api.get('/api/v2/auth/me').set(as('owner')).expect(200);
+});
+
+test('snapshot skips keyframes pruned by retention', async () => {
+  const source = await camera();
+  const snapshot = () => api.get(`/api/v2/stream-sources/${source.id}/snapshot`).set(as('owner'));
+  const session = await finishedSession(source.id);
+  const job = await ingest(session, 'e000-t000001', {
+    capturedFrom: '2020-01-01T10:00:00.000Z',
+    capturedTo: '2020-01-01T10:00:04.000Z',
+  });
+  await snapshot().expect(200);
+  await api
+    .patch(`/api/v2/stream-sources/${source.id}`)
+    .set(as('owner'))
+    .send({ keyframe_retention_hours: 0, track_retention_days: null })
+    .expect(200);
+  await new Retention(db(), workerOptions(), { intervalMs: 60_000, batch: 50 }).sweep();
+  assert.ok(
+    (await db().query('SELECT evidence_pruned_at FROM recognition_jobs WHERE id=$1', [job])).rows[0]
+      .evidence_pruned_at,
+  );
+  // The last selected keyframe is gone; the kept middle one is served instead.
+  await snapshot().expect(200);
+});

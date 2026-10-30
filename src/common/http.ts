@@ -38,9 +38,16 @@ export function checkDates(from?: string, to?: string) {
 
 @Catch()
 export class ApiErrors implements ExceptionFilter {
-  catch(error: unknown, host: ArgumentsHost) {
+  catch(thrown: unknown, host: ArgumentsHost) {
     const res = host.switchToHttp().getResponse<Response>();
     if (res.headersSent) return;
+    // NestJS 12.3+ wraps http-errors (body parser, sendFile ranges) in an HttpException;
+    // map the original so they keep this API's messages.
+    const cause = thrown instanceof HttpException ? thrown.cause : undefined;
+    const error =
+      cause instanceof Error && typeof (cause as { statusCode?: unknown }).statusCode === 'number'
+        ? cause
+        : thrown;
     // sendFile may already have selected an image/video MIME before rejecting
     // a range. All API errors still use the JSON error contract.
     res.type('application/json');

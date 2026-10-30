@@ -514,3 +514,28 @@ Precision trên camera thật ước khoảng 86–93%, thấp hơn 96,9% trên 
 - Phần lớn track bị loại chỉ có 1–3 lần thấy, thường là biển xa hoặc bị che. Bật 4 frame gần như không thêm biển đọc được, nên `config/pipelines.kaggle.json` vẫn để 5.
 - Nên đo lại khi có camera gần hơn, nơi track ngắn do xe đi nhanh chứ không phải do biển nhỏ.
 
+## Thời gian truy vấn trên DB thật (2026-10-30)
+
+**Dữ liệu:** 1.903 job, 1.932 kết quả, 9.660 detection, 23 phiên live. API local, trung vị của 7 lần gọi (gồm cả HTTP và xác thực), `limit=100`.
+
+| Endpoint | Thời gian |
+|---|---|
+| `GET /recognition-results` (không lọc) | 24 ms |
+| Tìm biển khớp chính xác | 16 ms |
+| Tìm biển "chứa" (`LIKE '%…%'`) | 15 ms |
+| `group_by=sighting` | 51 ms |
+| `group_by=sighting` + "chứa" | 14 ms |
+| `GET /live-sessions` | 12 ms |
+| `GET /stream-sources/{id}/snapshot` | 15–20 ms |
+
+**Kết luận:** mọi truy vấn đều dưới 100 ms, nên **chưa cần** thêm index trigram cho tìm "chứa". Khi số kết quả tăng khoảng 50 lần thì đo lại.
+
+**Snapshot camera** (FE gọi 3 s một lần khi camera demo chạy). Thời gian thực thi trong PostgreSQL (`EXPLAIN ANALYZE`, trung vị 5 lần):
+
+| Camera | Track | Truy vấn cũ (mọi track) | Truy vấn mới (20 track mới nhất mỗi phiên) |
+|---|---|---|---|
+| Camboriú YouTube | 1.410 | 5,8 ms | 1,6 ms |
+| Demo Camboriú (ban ngày) | 460 | 3,6 ms | 1,5 ms |
+| Demo Camboriú (video) | 30 | 1,1 ms | 0,7 ms |
+
+Truy vấn mới bỏ qua keyframe đã bị retention xóa (trước đây có thể chọn trúng detection không còn file). Camera chưa có track trả `204` thay vì `404`, nên console của FE không còn lỗi lặp lại.
