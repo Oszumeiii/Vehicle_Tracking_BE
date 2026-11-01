@@ -1,0 +1,53 @@
+@startuml
+!include _style.iuml
+skinparam defaultFontSize 13
+autonumber
+title Hình 4.9 – Tuần tự: Phiên live từ lúc bật đến lúc dừng (mới)
+actor User
+participant "LiveController" as API
+participant "LiveEventsHub\n(SSE)" as HUB
+database PostgreSQL as DB
+participant "Worker\nLiveManager" as W
+participant "SharedLiveHost /\napp.live (Python)" as P
+participant "ffmpeg\n(đọc + ghi đệm)" as F
+participant "YouTube / RTSP" as S
+User -> API : GET /live-events/stream (Bearer, Last-Event-ID?)
+API -> HUB : đăng ký client, phát lại event có id > con trỏ
+User -> API : POST /stream-sources/{id}/sessions
+API -> DB : kiểm quyền camera; INSERT live_sessions(queued) + event status
+API --> User : 202 queued
+DB --> HUB : NOTIFY (id)
+HUB -> DB : đọc dòng event đã commit
+HUB --> User : event status queued
+W -> DB : claim phiên FOR UPDATE SKIP LOCKED → starting
+W -> P : spawn hoặc {"cmd":"start", session, payload}
+P -> P : nạp / dùng lại model, warm-up batch 1/4/16
+P -> S : yt-dlp lấy HLS / mở RTSP qua TCP
+P -> F : ffmpeg -re -copyts (+ output stream copy MP4 10 s)
+loop mỗi frame
+  F --> P : frame + showinfo PTS
+  P -> P : Pacer, LiveReader, TrackSession, model trên luồng live-gpu
+end
+P --> W : {"type":"status","status":"running"}, {stats}
+W -> DB : UPDATE status/stats + event
+DB --> HUB : NOTIFY
+HUB --> User : event session (running, stats)
+P --> W : {"type":"track", track: e000-t000042}
+W -> W : chuyển thư mục sang recognition/{job}, kiểm bằng chứng
+W -> DB : BEGIN; job succeeded, appearance, detection, prediction,\nsighting_id, event track (+ alert nếu khớp watchlist); COMMIT
+opt readable hoặc có alert
+  W -> P : "clip {track}"
+  P --> W : {"type":"clip"} khi bản ghi phủ track
+  W -> DB : UPDATE recognition_jobs.clip_storage_key
+end
+DB --> HUB : NOTIFY
+HUB --> User : event track / alert
+User -> API : POST /live-sessions/{id}/stop
+API -> DB : stop_requested_at = now(), always_on = false
+W -> P : "stop" / {"cmd":"stop", session}
+P -> P : chốt và OCR các track đang mở
+P -> F : "q" trên stdin (đóng đoạn MP4 cuối)
+P --> W : track cuối, {"type":"exit","code":0}
+W -> DB : status stopped + event
+HUB --> User : event status stopped
+@enduml

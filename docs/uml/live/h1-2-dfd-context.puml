@@ -1,0 +1,15 @@
+@startuml
+!include _dfd.iuml
+left to right direction
+title Hình 1.2 – DFD mức ngữ cảnh (cập nhật: thêm nguồn video live và các luồng live)
+rectangle "Người dùng\n(User)" <<ext>> as U
+rectangle "Quản trị viên\n(Admin)" <<ext>> as A
+rectangle "Nguồn video live\nYouTube Live / camera IP RTSP\n/ video demo" <<ext>> as S
+usecase "0\nHệ thống nhận diện\nbiển số" <<proc>> as P
+U --> P : email, mật khẩu; file ảnh/video;\nyêu cầu tạo job; quyết định kiểm duyệt;\nđiều kiện tra cứu\n[mới] cấu hình camera, lệnh bật/dừng phiên,\nbiển số theo dõi, nhãn gán mù
+P --> U : token; trạng thái job; kết quả + bằng chứng;\ndanh sách, CSV\n[mới] sự kiện real-time (track, cảnh báo, trạng thái phiên),\nảnh snapshot, video clip của kết quả
+A --> P : thông tin tài khoản, phân quyền\n[mới] camera demo, bộ mẫu gán nhãn
+P --> A : danh sách người dùng\n[mới] báo cáo hiệu chỉnh ngưỡng
+S --> P : [mới] segment HLS / luồng RTSP / frame file\n(+ giờ phát #EXT-X-PROGRAM-DATE-TIME)
+P --> S : [mới] yêu cầu playlist (yt-dlp),\nkết nối RTSP qua TCP
+@enduml

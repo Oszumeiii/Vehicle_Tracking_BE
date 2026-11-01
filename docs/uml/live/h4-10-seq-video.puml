@@ -1,0 +1,33 @@
+@startuml
+!include _style.iuml
+autonumber
+title Hình 4.10 – Tuần tự: Xem lại video của một kết quả (mới)
+actor User
+participant VideoController as VC
+participant Ownership as OW
+database PostgreSQL as DB
+participant "clips.ts /\napp.live.clips" as CL
+collections "Storage\n(recording, clip)" as FS
+User -> VC : GET /recognition-results/{id}/video-info
+VC -> OW : kiểm quyền appearance
+OW -> DB : appearance → job → media hoặc live_session → camera
+OW --> VC : 404 nếu không có quyền
+VC -> DB : job.clip_storage_key, captured_from/to, source_type
+alt có clip lưu sẵn
+  VC --> User : {kind: clip, url, first_seen_offset}
+else track YouTube/RTSP còn trong bản ghi 240 phút
+  VC -> FS : đọc index.jsonl các đoạn
+  VC --> User : {kind: recording, url, first_seen_offset}
+else camera demo / upload
+  VC --> User : {kind: demo / media, url}
+else hết bản ghi
+  VC --> User : {available: false, kind: none}
+end
+User -> VC : GET /recognition-results/{id}/video?token=… (Range)
+alt kind = recording / demo
+  VC -> CL : cắt (concat demuxer inpoint/outpoint,\nbắt đầu tại keyframe trước mốc)
+  CL -> FS : đọc đoạn MP4
+  CL --> VC : file MP4 tạm
+end
+VC --> User : 200/206 MP4 + X-Plate-First-Seen-Seconds
+@enduml

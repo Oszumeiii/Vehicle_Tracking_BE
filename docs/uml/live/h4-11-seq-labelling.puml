@@ -1,0 +1,37 @@
+@startuml
+!include _style.iuml
+autonumber
+title Hình 4.11 – Tuần tự: Tạo bộ mẫu, gán nhãn mù và báo cáo ngưỡng (mới)
+actor Admin
+actor "Người gán" as L
+participant EvaluationController as API
+database PostgreSQL as DB
+collections Storage as FS
+== Tạo bộ mẫu ==
+Admin -> API : POST /evaluation-sets {name, stream_source_id | live_session_id,\nper_bin, min_crop_width?}
+API -> DB : sampleLiveTracks: track có confidence, crop ≥ min_crop_width,\nngẫu nhiên tối đa per_bin mỗi khoảng 0–0,5 ... 0,95–1
+API -> DB : BEGIN; INSERT evaluation_sets, evaluation_items; COMMIT
+API --> Admin : 201 (hoặc 422 nếu không có track đủ rộng)
+== Gán nhãn mù ==
+loop tới khi hết mẫu
+  L -> API : GET /evaluation-sets/{id}/next?exclude=…
+  API -> DB : mẫu chưa có nhãn của người này,\nORDER BY md5(labeler_id || item_id)
+  API --> L : {remaining, item}: chỉ 5 crop + keyframe
+  L -> API : GET …/items/{item}/artifacts/{order}/crop
+  API -> FS : đọc crop
+  API --> L : ảnh
+  alt đọc được
+    L -> API : PUT …/label {plate_text}
+  else không đọc được
+    L -> API : PUT …/label {plate_text: null}
+  else bỏ qua
+    L -> L : thêm id vào exclude
+  end
+  API -> DB : INSERT … ON CONFLICT (item_id, labeler_id) DO UPDATE
+end
+== Báo cáo ==
+Admin -> API : GET /evaluation-sets/{id}/report?target=0.95&min_labels=2
+API -> DB : mẫu + biển máy đọc + confidence + nhãn
+API -> API : nhãn đồng thuận (loại mẫu bất đồng);\nprecision, coverage, khoảng tin cậy cho ngưỡng 0,50–0,99
+API --> Admin : ngưỡng đề xuất, bảng ngưỡng, độ chính xác theo khoảng
+@enduml
