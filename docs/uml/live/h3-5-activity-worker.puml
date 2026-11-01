@@ -1,0 +1,51 @@
+@startuml
+!include _style.iuml
+skinparam defaultFontSize 13
+title Hình 3.5 – Hoạt động: Worker (cập nhật: vòng live, host chung, dọn dữ liệu)
+start
+:Giành advisory lock;
+if (Giành được?) then (không)
+  :Dừng: đã có worker khác;
+  stop
+endif
+:Phục hồi job running cũ thành failed;
+:Phục hồi phiên live đang chạy thành interrupted;
+fork
+  partition "Slot job (1..N)" {
+    repeat
+      if (Có host live dùng chung và GpuGate cho 'host'?) then (có)
+        :Claim job video pipeline joint\n(chạy trong host, dùng chung model);
+      endif
+      if (Chưa có việc và GpuGate cho 'jobs'?) then (có)
+        :Tắt host đang rảnh để nhả VRAM;
+        :Claim job khác, spawn tiến trình Python riêng;
+      endif
+      :Kiểm toàn vẹn, chạy pipeline,\nkiểm kết quả, lưu hoặc ghi failed;
+    repeat while (Worker chưa dừng?) is (có)
+  }
+fork again
+  partition "Vòng live" {
+    repeat
+      :Tạo phiên queued cho camera 24/7\n(chờ lùi 1–30 phút nếu phiên chết nhanh);
+      :Claim phiên queued khi GPU rảnh\n(tối đa PLATE_LIVE_MAX_SESSIONS);
+      :Spawn app.live hoặc gửi 'start' tới host;
+      :Đọc JSON lines: status, stats, track, clip;
+      :Nhập từng track thành job + event;
+      :Gửi 'stop' khi có stop_requested_at;
+      if (Im lặng quá PLATE_LIVE_STALL_SECONDS?) then (có)
+        :Phiên failed (LIVE_STALLED), kill tiến trình;
+      endif
+    repeat while (Worker chưa dừng?) is (có)
+  }
+fork again
+  partition "Dọn dữ liệu" {
+    repeat
+      :Sau N giờ: giữ 1 keyframe mỗi track;
+      :Sau M ngày: xóa track chưa duyệt,\nkhông cảnh báo, không trong bộ mẫu;
+      :Xóa phiên đăng nhập hết hạn/thu hồi > 7 ngày;
+    repeat while (Worker chưa dừng?) is (có)
+  }
+end fork
+:Dừng host đang rảnh, nhả advisory lock;
+stop
+@enduml

@@ -1,0 +1,16 @@
+!include _style.iuml
+skinparam usecase {
+  BackgroundColor<<proc>> #DCFCE7
+  BorderColor<<proc>> #166534
+  BackgroundColor<<newproc>> #DBEAFE
+  BorderColor<<newproc>> #1D4ED8
+}
+skinparam rectangle {
+  BackgroundColor<<ext>> #FFEDD5
+  BorderColor<<ext>> #C2410C
+  BackgroundColor<<store>> #F1F5F9
+  BorderColor<<store>> #475569
+  BackgroundColor<<newstore>> #E0E7FF
+  BorderColor<<newstore>> #1D4ED8
+}
+hide stereotype

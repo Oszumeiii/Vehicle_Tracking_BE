@@ -1,0 +1,82 @@
+@startuml
+!include _style.iuml
+skinparam defaultFontSize 12
+skinparam class {
+  BackgroundColor<<new>> #DBEAFE
+  BorderColor<<new>> #1D4ED8
+}
+hide empty members
+title Hình 6.2 – Lớp thiết kế (cập nhật: lớp xanh dương là phần mới)
+package "Controller" {
+  class AuthController <<controller>>
+  class MediaController <<controller>>
+  class JobsController <<controller>>
+  class ResultsController <<controller>>
+  class LiveController <<controller>> <<new>>
+  class WatchlistController <<controller>> <<new>>
+  class VideoController <<controller>> <<new>>
+  class EvaluationController <<controller>> <<new>>
+}
+package "Guard / Service" {
+  class AuthGuard
+  class LoginThrottle <<new>>
+  class Ownership
+  class Storage
+  class JobOperations
+  class PipelineRegistry
+  class LiveEventsHub <<new>> {
+    LISTEN live_session_events
+    +stream(filter, lastEventId)
+  }
+}
+package "Infrastructure" {
+  class Database {
+    +query(); +transaction()
+  }
+}
+package "Worker (tiến trình riêng)" {
+  class Worker
+  class Engine
+  class LiveManager <<new>> {
+    +recover(); +run()
+  }
+  class GpuGate <<new>> {
+    +enter(kind); +leave(kind)
+  }
+  class SharedLiveHost <<new>> {
+    +spawn(); +runJob(); +stopIdle()
+  }
+  class Retention <<new>>
+}
+package "Python" {
+  class "app.recognition" as PyRec
+  class "app.live\nLiveRunner, Host, Recorder, RtspFrames" as PyLive <<new>>
+}
+AuthController ..> LoginThrottle
+AuthController ..> AuthGuard
+MediaController ..> Ownership
+JobsController ..> JobOperations
+JobsController ..> PipelineRegistry
+ResultsController ..> Ownership
+LiveController ..> Ownership
+LiveController ..> LiveEventsHub
+LiveController ..> PipelineRegistry
+WatchlistController ..> Database
+VideoController ..> Ownership
+VideoController ..> Storage
+EvaluationController ..> Ownership
+Ownership ..> Database
+JobOperations ..> Storage
+LiveEventsHub ..> Database
+Worker ..> Engine
+Worker ..> LiveManager
+Worker ..> Retention
+Worker ..> GpuGate
+LiveManager ..> GpuGate
+LiveManager ..> SharedLiveHost
+LiveManager ..> Database
+Engine ..> Database
+Engine ..> PyRec : subprocess
+SharedLiveHost ..> PyLive : stdin/stdout JSON lines
+Retention ..> Database
+@enduml

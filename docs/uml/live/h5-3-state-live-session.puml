@@ -1,0 +1,39 @@
+@startuml
+!include _style.iuml
+hide empty description
+title Hình 5.3 – Trạng thái: Phiên live (mới)
+state "queued" as queued
+state "starting" as starting
+state "running" as running
+state "reconnecting" as reconnecting
+state "stopping" as stopping
+state "stopped" as stopped
+state "ended" as ended #FEF3C7
+state "failed" as failed #FEE2E2
+state "interrupted" as interrupted #FEE2E2
+[*] --> queued : POST phiên / worker tự tạo (24/7)
+queued --> starting : Worker claim (GPU rảnh, chưa đủ MAX_SESSIONS)
+queued --> stopped : Dừng khi còn chờ
+starting --> running : Frame đầu tiên
+running --> reconnecting : Mất frame 15 s / lỗi luồng / RTSP 404
+reconnecting --> running : Kết nối lại được
+starting --> stopping : Yêu cầu dừng
+running --> stopping : Yêu cầu dừng
+reconnecting --> stopping : Yêu cầu dừng
+stopping --> stopped : Chốt + OCR track đang mở,\nđóng đoạn ghi cuối, thoát
+running --> ended : Hết live / video bị gỡ / RTSP 401, 403
+reconnecting --> failed : Quá số lần kết nối lại
+starting --> failed : Lỗi khởi động (model, CUDA, bộ nhớ)
+running --> failed : LIVE_STALLED / thoát bất thường
+running --> interrupted : Worker dừng / khởi động lại
+stopped --> [*] : Xóa phiên
+ended --> [*] : Xóa phiên
+failed --> [*] : Xóa phiên
+interrupted --> [*] : Xóa phiên
+note right of interrupted
+  Camera always_on: worker tạo phiên mới;
+  phiên sống dưới 2 phút thì lần sau chờ 1, 2, 4… tối đa 30 phút.
+  Mỗi camera chỉ có một phiên hoạt động (unique index một phần).
+  Mỗi lần đổi trạng thái ghi một dòng live_session_events.
+end note
+@enduml

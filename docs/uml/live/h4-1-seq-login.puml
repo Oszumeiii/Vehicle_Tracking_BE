@@ -1,0 +1,33 @@
+@startuml
+!include _style.iuml
+autonumber
+title Hình 4.1 – Tuần tự: Đăng nhập, xác thực, đăng xuất (cập nhật: LoginThrottle)
+actor User
+participant AuthController as AC
+participant "LoginThrottle\n(email+IP, IP)" as TH
+participant AuthGuard as AG
+database PostgreSQL as DB
+User -> AC : POST /auth/login {email, password}
+AC -> TH : retryAfter(email|IP), retryAfter(IP)
+alt đã sai ≥ 5 (email+IP) hoặc ≥ 30 (IP) trong 15 phút
+  AC --> User : 429 + Retry-After
+else còn được thử
+  AC -> DB : SELECT user theo email
+  AC -> AC : verify scrypt (dummy hash nếu không có)
+  alt sai mật khẩu / bị khóa
+    AC -> TH : fail(email|IP), fail(IP)
+    AC --> User : 401
+  else hợp lệ
+    AC -> TH : succeed(email|IP)
+    AC -> DB : BEGIN; SELECT ... FOR UPDATE; INSERT auth_sessions(token_hash); COMMIT
+    AC --> User : 200 {access_token, expires_at}
+  end
+end
+User -> AG : request + Bearer token
+AG -> DB : tìm phiên theo SHA-256(token), chưa hết hạn, chưa thu hồi
+AG --> User : 401 hoặc chuyển tiếp request
+User -> AC : POST /auth/logout
+AC -> DB : UPDATE auth_sessions SET revoked_at = now()
+AC --> User : 204
+note over TH : Bộ đếm trong bộ nhớ tiến trình API;\nkhởi động lại API thì về 0.
+@enduml

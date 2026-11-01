@@ -1,0 +1,59 @@
+@startuml
+!include _dfd.iuml
+skinparam defaultFontSize 13
+title Hình 1.3 – DFD mức đỉnh (cập nhật: tiến trình 7.0, 8.0 và kho D7–D11 là phần mới)
+left to right direction
+rectangle "User" <<ext>> as U
+rectangle "Admin" <<ext>> as A
+rectangle "Nguồn video live" <<ext>> as S
+usecase "1.0\nQuản lý tài khoản" <<proc>> as P1
+usecase "2.0\nQuản lý media" <<proc>> as P2
+usecase "3.0\nQuản lý job" <<proc>> as P3
+usecase "4.0\nXử lý nhận diện" <<proc>> as P4
+usecase "5.0\nKiểm duyệt\n(+ xem video)" <<proc>> as P5
+usecase "6.0\nTra cứu, báo cáo" <<proc>> as P6
+usecase "7.0\nNhận diện live" <<newproc>> as P7
+usecase "8.0\nGán nhãn,\nhiệu chỉnh ngưỡng" <<newproc>> as P8
+rectangle "D1 | Người dùng, phiên" <<store>> as D1
+rectangle "D2 | Media" <<store>> as D2
+rectangle "D3 | Job (hàng đợi)" <<store>> as D3
+rectangle "D4 | Kết quả nhận diện" <<store>> as D4
+rectangle "D5 | Lịch sử kiểm duyệt" <<store>> as D5
+rectangle "D6 | Mô hình, pipeline" <<store>> as D6
+rectangle "D7 | Camera, phiên live" <<newstore>> as D7
+rectangle "D8 | Sự kiện live" <<newstore>> as D8
+rectangle "D9 | Watchlist" <<newstore>> as D9
+rectangle "D10 | Bộ mẫu, nhãn" <<newstore>> as D10
+rectangle "D11 | Bản ghi video, clip" <<newstore>> as D11
+U --> P1 : đăng nhập
+P1 --> D1
+U --> P2 : file
+P2 --> D2
+U --> P3 : media_id, pipeline
+P3 --> D3 : job queued
+D3 --> P4 : job chờ
+D2 --> P4 : tệp nguồn
+D6 --> P4 : checkpoint
+P4 --> D4 : appearance, crop, OCR
+U --> P5 : quyết định
+D4 --> P5
+P5 --> D5
+D11 --> P5 : clip / đoạn ghi
+U --> P6 : biển số, bộ lọc
+D4 --> P6
+U --> P7 : camera, bật/dừng,\nbiển theo dõi
+S --> P7 : luồng video
+P7 --> D7 : trạng thái, thống kê
+D6 --> P7 : snapshot model
+P7 --> D3 : 1 job / track
+P7 --> D4 : appearance live
+P7 --> D8 : track, alert, status
+D9 --> P7 : biển theo dõi
+P7 --> D11 : đoạn MP4, clip
+D8 --> U : SSE
+A --> P8 : tạo bộ mẫu
+U --> P8 : nhãn
+D4 --> P8 : track live
+P8 --> D10
+P8 --> A : báo cáo ngưỡng
+@enduml

@@ -1,0 +1,73 @@
+@startwbs
+!include _style.iuml
+skinparam defaultFontSize 13
+title Hình 1.1 – Sơ đồ phân rã chức năng (cập nhật 01/11/2026: nhóm 8, 9 và các chức năng đánh dấu [mới] là phần bổ sung)
+<style>
+wbsDiagram {
+  node { BackgroundColor #F8FAFC; LineColor #334155; RoundCorner 6 }
+  .new { BackgroundColor #DBEAFE; LineColor #1D4ED8 }
+  .grp { BackgroundColor #E2E8F0 }
+}
+</style>
+* Hệ thống nhận diện biển số
+** 1. Tài khoản và xác thực <<grp>>
+***_ Đăng nhập
+***_ Giới hạn đăng nhập sai (429) [mới]
+***_ Đăng xuất, thu hồi phiên
+***_ Xem tài khoản
+***_ Xác thực token mỗi yêu cầu
+***_ Danh sách, tạo người dùng
+***_ Cập nhật, phân quyền, khóa
+***_ Tạo Admin ban đầu (CLI)
+** 2. Quản lý media <<grp>>
+***_ Upload ảnh/video
+***_ Kiểm tra định dạng, dung lượng
+***_ Đọc metadata, SHA-256
+***_ Xem, tải, xóa media
+** 3. Quản lý job <<grp>>
+***_ Xem pipeline sẵn sàng
+***_ Tạo job, kiểm ràng buộc
+***_ Danh sách, theo dõi tiến độ
+***_ Xem kết quả, xóa job
+** 4. Xử lý nhận diện (Worker) <<grp>>
+***_ Khóa worker, phục hồi job dở
+***_ Nhận job, kiểm toàn vẹn
+***_ Lấy mẫu, lọc cảnh trống
+***_ YOLO11l + BoT-SORT
+***_ Chọn 5 crop bỏ biển bị che/cụt [mới]
+***_ OCR joint 5 frame
+***_ Chạy job trong host live [mới]
+***_ Lưu kết quả, ghi lỗi
+** 5. Kiểm duyệt <<grp>>
+***_ Xem chi tiết, bằng chứng
+***_ Xác nhận / sửa / không đọc được / từ chối
+***_ Lưu lịch sử kiểm duyệt
+***_ Xem lại video của kết quả [mới]
+** 6. Tra cứu và báo cáo <<grp>>
+***_ Tra cứu theo biển số
+***_ Lọc theo nguồn, camera, thời gian
+***_ Gom lượt xuất hiện (sighting) [mới]
+***_ Xuất CSV
+** 7. Quản trị vận hành <<grp>>
+***_ Migration, health/readiness
+***_ Cấu hình pipeline
+***_ Docker Compose, start-all [mới]
+***_ Smoke test trước demo [mới]
+** 8. Camera live [mới] <<new>>
+***_ Thêm camera YouTube / RTSP / demo
+***_ Sửa vùng loại trừ, 24/7, thời hạn lưu
+***_ Bật / dừng phiên
+***_ Đọc luồng (yt-dlp, ffmpeg)
+***_ Tracking, OCR từng track
+***_ Nhập track thành job
+***_ Watchlist và cảnh báo
+***_ Sự kiện real-time (SSE)
+***_ Ghi đệm video, cắt clip
+***_ Tự bật lại camera 24/7
+***_ Dọn bằng chứng, xóa phiên
+** 9. Gán nhãn và hiệu chỉnh ngưỡng [mới] <<new>>
+***_ Tạo bộ mẫu theo khoảng confidence
+***_ Gán nhãn mù
+***_ Báo cáo precision / coverage
+***_ Xóa bộ mẫu
+@endwbs
