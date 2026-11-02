@@ -68,10 +68,33 @@ def test_track_with_only_four_valid_frames_is_reported_and_not_duplicated(tmp_pa
         "sampling": SAMPLING, "tracking": TRACKING, "empty_scene_gate": GATE}}
     folder = tmp_path / "recognition"
     folder.mkdir()
-    appearances, stats = _video_detections(payload, BoxFixture(), folder, tmp_path)
+    reports = []
+    appearances, stats = _video_detections(payload, BoxFixture(), folder, tmp_path, progress=reports.append)
     assert appearances == []
     assert stats["rejected_tracks"] == {"fewer_than_five_valid_frames": 1}
     assert stats["rejected_track_count"] == 1
+    # The counter-only report of the next step (tracking reports come every 2 s, not here).
+    assert reports[-1] == {"step": "exporting_crops", "candidates": 0}
+
+
+def test_track_session_counts_detector_work_and_queues_rejected_tracks(tmp_path):
+    from app.recognition.video_tracking import TrackSession, video_config
+    video = tmp_path / "short.avi"
+    writer = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*"MJPG"), 10., (320, 180))
+    for _ in range(4):
+        writer.write(np.full((180, 320, 3), 180, np.uint8))
+    writer.release()
+    cfg = video_config(video, {"device": "cpu", "sampling": SAMPLING, "tracking": TRACKING,
+                               "empty_scene_gate": GATE})
+    with TrackSession(BoxFixture(), cfg) as session:
+        for index in range(4):
+            session.push(index, index / 10, np.full((180, 320, 3), 180, np.uint8))
+        assert session.close() == []
+    assert session.detect["frames"] == session.sampled > 0
+    assert session.detect["boxes"] == session.detect["frames"]  # the fixture finds one plate per frame
+    assert session.detect["batches"] >= 1 and session.detect["seconds"] > 0
+    assert list(session.rejections) == [dict(track_id="1", reason="fewer_than_five_valid_frames",
+                                             observations=4, seconds=.3)]
 
 
 def test_prepare_runs_real_video_tracking_without_loading_ocr(tmp_path, monkeypatch):
@@ -106,7 +129,7 @@ def test_prepare_runs_real_video_tracking_without_loading_ocr(tmp_path, monkeypa
     assert len(appearance["detections"]) == 5
     assert all(d["predictions"] == [] for d in appearance["detections"])
     assert len({d["frame_index"] for d in appearance["detections"]}) == 5
-    assert json.loads((folder / "progress.json").read_text())["stage"] == "persisting"
+    assert json.loads((folder / "progress.json").read_text()) == {"stage": "persisting"}
 
 
 @pytest.mark.parametrize("raw_text, expected_status", [("abc-1234", "readable"), ("", "unreadable")])

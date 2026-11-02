@@ -84,7 +84,7 @@ export function liveSettings(): LiveSettings {
     throw new Error('PLATE_LIVE_EXCLUSIVE_GPU must be true or false');
   return {
     maxSessions,
-    statsSeconds: read('PLATE_LIVE_STATS_SECONDS', 5, 0.1, 3600),
+    statsSeconds: read('PLATE_LIVE_STATS_SECONDS', 2, 0.1, 3600),
     stopSeconds: read('PLATE_LIVE_STOP_SECONDS', 120, 1, 3600),
     // The live process reports stats every second; silence means it hangs (e.g. GPU memory thrash).
     stallSeconds: read('PLATE_LIVE_STALL_SECONDS', 180, 10, 3600),
@@ -118,6 +118,9 @@ const STARTUP_CODES = [
   'PIPELINE_FAILED',
 ];
 
+/** Trace events relayed per session and second; a burst of dropped tracks beyond it is skipped. */
+const TRACES_PER_SECOND = 20;
+
 interface Run {
   session: Row;
   child: ChildProcess;
@@ -127,6 +130,8 @@ interface Run {
   lastError?: { code: string; message: string };
   stats?: Row;
   statsDirty: boolean;
+  /** Trace events relayed in the current second (rate limit) and dropped in all. */
+  traces: { second: number; count: number; dropped: number };
   stopSent: boolean;
   interrupted: boolean;
   killed: boolean;
@@ -392,6 +397,7 @@ export class LiveManager {
       status: 'starting',
       queue: Promise.resolve(),
       statsDirty: false,
+      traces: { second: 0, count: 0, dropped: 0 },
       stopSent: false,
       interrupted: false,
       killed: false,
@@ -499,8 +505,10 @@ export class LiveManager {
       }
     } else if (event.type === 'stats') {
       const { type: _type, ...stats } = event;
-      run.stats = stats;
+      run.stats = { ...stats, traces_dropped: run.traces.dropped };
       run.statsDirty = true;
+    } else if (event.type === 'trace') {
+      await this.relayTrace(run, event);
     } else if (event.type === 'error') {
       run.lastError = { code: String(event.code), message: String(event.message ?? '') };
       const { type: _type, time: _time, ...payload } = event;
@@ -548,6 +556,30 @@ export class LiveManager {
         message: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  /**
+   * What the live process did with one track (dropped by crop selection, or read by OCR),
+   * for the pipeline view. Not stored: a NOTIFY the API turns into an SSE `trace` event.
+   */
+  private async relayTrace(run: Run, event: Row) {
+    const second = Math.floor(Date.now() / 1000);
+    const traces = run.traces;
+    if (traces.second !== second) Object.assign(traces, { second, count: 0 });
+    if (traces.count >= TRACES_PER_SECOND) {
+      traces.dropped++;
+      return;
+    }
+    traces.count++;
+    const { type: _type, time, ...payload } = event;
+    const message = JSON.stringify({
+      live_session_id: run.session.id,
+      stream_source_id: run.session.stream_source_id,
+      created_at: time ?? new Date().toISOString(),
+      payload,
+    });
+    if (message.length > 7000) return; // NOTIFY payloads are limited to 8000 bytes
+    await this.database.query("SELECT pg_notify('live_trace', $1)", [message]);
   }
 
   private async flushStats(run: Run) {

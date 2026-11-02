@@ -178,14 +178,17 @@ def build_appearance(candidate, manifest_rows, out, data_dir, start_seconds, end
                 detections=detections)
 
 
-def _video_detections(payload, model, folder, data_dir, stop=None, throttle=None):
+def _video_detections(payload, model, folder, data_dir, stop=None, throttle=None, progress=None):
     from app.recognition.video_tracking import export_crops, track_video, video_config, write_json as dump
     video = Path(payload["input_path"])
     cfg = video_config(video, payload["pipeline_snapshot"])
     out = folder / "tracking"
     out.mkdir(exist_ok=False)
     dump(out / "config.json", cfg)
-    pts, frames, candidates, summary = track_video(video, model, cfg, out, stop=stop, throttle=throttle)
+    pts, frames, candidates, summary = track_video(video, model, cfg, out, stop=stop, throttle=throttle,
+                                                   progress=progress)
+    if progress:
+        progress(dict(step="exporting_crops", candidates=len(candidates)))
     manifest = export_crops(video, cfg, out, pts, frames, candidates)
     grouped = defaultdict(list)
     for row in manifest:
@@ -245,8 +248,9 @@ def execute(payload, models=None, stop=None, throttle=None):
     if not prepare and snapshot["recognizer"]["module_root"] not in sys.path:
         sys.path.insert(0, snapshot["recognizer"]["module_root"])
     folder, data_dir = Path(payload["output_dir"]), Path(payload["data_dir"])
-    def stage(name):
-        write_json(folder / "progress.json", {"stage": name})
+    def stage(name, **details):
+        # details: counters of the running stage, read by the worker for the job's `progress`.
+        write_json(folder / "progress.json", {"stage": name, **details})
     stage("validating")
     # Runtime versions are evidence; they are not replaced with claimed config versions.
     versions = {}
@@ -260,11 +264,16 @@ def execute(payload, models=None, stop=None, throttle=None):
     if payload["media_type"] == "image":
         appearances, statistics = _image_detections(payload, model, folder, data_dir)
     else:
-        appearances, statistics = _video_detections(payload, model, folder, data_dir, stop=stop, throttle=throttle)
+        appearances, statistics = _video_detections(payload, model, folder, data_dir, stop=stop, throttle=throttle,
+                                                    progress=lambda counts: stage("detection_tracking", **counts))
     if not prepare:
-        stage("recognition")
-    for appearance in appearances:
+        stage("recognition", done=0, total=len(appearances))
+    reported = time.perf_counter()
+    for done, appearance in enumerate(appearances):
         check_stop(stop)
+        if not prepare and time.perf_counter() - reported >= 1:
+            stage("recognition", done=done, total=len(appearances))
+            reported = time.perf_counter()
         appearance["predictions"] = []
         if joint:
             detections = appearance["detections"]

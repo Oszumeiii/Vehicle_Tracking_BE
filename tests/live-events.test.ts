@@ -322,6 +322,33 @@ test('the event stream replays by id, follows commits, keeps alerts private and 
   for (const stream of [owner, admin, all]) stream.close();
 });
 
+test('trace events reach open streams that may see the session, once and unstored', async () => {
+  const { source, session } = await liveSession();
+  await settle();
+  const owner = await openStream('/api/v2/live-events/stream', 'owner');
+  const admin = await openStream(
+    `/api/v2/live-events/stream?stream_source_id=${source.id}`,
+    'admin',
+  );
+  const stranger = await openStream('/api/v2/live-events/stream', 'stranger');
+  const trace = {
+    live_session_id: session.id,
+    stream_source_id: source.id,
+    created_at: new Date().toISOString(),
+    payload: { stage: 'track_ocr', track: 'e000-t000001', text: 'ABC1234', confidence: 0.97 },
+  };
+  await fixture.database.query("SELECT pg_notify('live_trace', $1)", [JSON.stringify(trace)]);
+  for (const stream of [owner, admin]) {
+    const event = await stream.next((e) => e.event === 'trace', 'trace event');
+    assert.deepEqual(event.data, trace);
+    assert.equal(event.id, undefined); // not replayable
+  }
+  await settle();
+  assert.ok(!stranger.events.some((e) => e.event === 'trace'));
+  for (const stream of [owner, admin, stranger]) stream.close();
+  await settle();
+});
+
 test('open streams are limited per API process', async () => {
   await settle();
   const streams = [];

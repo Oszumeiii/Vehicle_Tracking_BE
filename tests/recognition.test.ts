@@ -7,6 +7,7 @@ import * as path from 'node:path';
 import {
   claim,
   executeRecognition,
+  followProgress,
   persistResult,
   processOne,
   recover,
@@ -511,6 +512,56 @@ test('PostgreSQL worker claims once, persists immutable evidence atomically, rej
         const prediction = (await database.query('SELECT * FROM ocr_predictions')).rows[0];
         assert.equal(prediction.raw_text, 'abc-1234');
         assert.equal(prediction.ocr_score, null);
+      },
+    );
+    await t.test('stage counters are stored as the job progress while it runs', async () => {
+      const jobId = await enqueue();
+      let seen: unknown;
+      await processOne(database, options, async (job, folder, _options, stage) => {
+        await stage('detection_tracking', {
+          step: 'tracking',
+          decoded_frames: 50,
+          expected_frames: 100,
+        });
+        seen = (
+          await database.query('SELECT stage, progress FROM recognition_jobs WHERE id=$1', [jobId])
+        ).rows[0];
+        return evidence(job.id, folder);
+      });
+      assert.deepEqual(seen, {
+        stage: 'detection_tracking',
+        progress: { step: 'tracking', decoded_frames: 50, expected_frames: 100 },
+      });
+      // Persisting has no counters.
+      const done = (
+        await database.query('SELECT status, progress FROM recognition_jobs WHERE id=$1', [jobId])
+      ).rows[0];
+      assert.deepEqual(done, { status: 'succeeded', progress: null });
+    });
+    await t.test(
+      'progress.json: a new stage at once, new counters of a stage at most every 2 s',
+      async () => {
+        const folder = await mkdtemp(path.join(tmpdir(), 'plate-progress-'));
+        const calls: unknown[][] = [];
+        const write = (value: object) =>
+          writeFile(path.join(folder, 'progress.json'), JSON.stringify(value));
+        const wait = () => new Promise((resolve) => setTimeout(resolve, 700));
+        await write({ stage: 'detection_tracking', decoded_frames: 1 });
+        const stop = followProgress(folder, async (...args) => void calls.push(args));
+        try {
+          await wait();
+          await write({ stage: 'detection_tracking', decoded_frames: 2 });
+          await wait();
+          await write({ stage: 'recognition', done: 0, total: 3 });
+          await wait();
+        } finally {
+          stop();
+          await rm(folder, { recursive: true, force: true });
+        }
+        assert.deepEqual(calls, [
+          ['detection_tracking', { decoded_frames: 1 }],
+          ['recognition', { done: 0, total: 3 }],
+        ]);
       },
     );
     await t.test(

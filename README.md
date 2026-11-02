@@ -105,7 +105,7 @@ Vì mỗi track là một job, review, xem crop, xuất CSV và tra cứu biển
    - `max_track_seconds` (mặc định 30): chốt track của xe đỗ hoặc xe chờ đèn.
 3. Theo dõi real-time qua `GET /api/v2/live-events/stream` (SSE: trạng thái, stats, từng biển số vừa đọc, cảnh báo watchlist; xem [API.md](docs/API.md#sự-kiện-real-time-sse)), hoặc poll `GET /api/v2/live-sessions/{id}`:
    - `status` đi từ `queued`, `starting`, `running` (`reconnecting` khi rớt mạng), qua `stopping`, đến một trong `stopped`, `ended`, `failed`, `interrupted`;
-   - `stats` (frame đọc/bỏ, độ trễ, track đang mở) cập nhật mỗi `PLATE_LIVE_STATS_SECONDS`;
+   - `stats` (frame đọc/bỏ, độ trễ, track đang mở, và `stages`: số liệu từng bước của pipeline) cập nhật mỗi `PLATE_LIVE_STATS_SECONDS` (mặc định 2 s);
    - `tracks_count`.
    Lịch sử nằm ở `GET /api/v2/live-sessions/{id}/events`.
 4. Kết quả xem bằng `GET /api/v2/recognition-results?live_session_id=...` (hoặc `origin=live`, `stream_source_id`, `captured_from/to`, `confidence_status`, `exclude_duplicates=true`). Tra cứu theo `plate` trả cả video upload lẫn live.
@@ -114,8 +114,9 @@ Vì mỗi track là một job, review, xem crop, xuất CSV và tra cứu biển
 
 Hỗ trợ cho UI:
 - camera có `embed_url` để nhúng trình phát YouTube;
+- `GET /api/v2/stream-sources/{id}/live-view` cho biết cách xem camera dạng video: HLS từ bản ghi đệm (camera IP), file demo đồng bộ vị trí, hoặc YouTube;
 - `GET /api/v2/stream-sources/{id}/snapshot` trả keyframe mới nhất để vẽ vùng loại trừ (`204` khi camera chưa có track);
-- muốn stats trên UI mượt hơn thì đặt `PLATE_LIVE_STATS_SECONDS=1`–`2` (đổi lại ghi DB nhiều hơn).
+- sự kiện SSE `trace` cho biết từng track đi qua pipeline thế nào (bị bỏ vì thiếu frame, hay OCR đọc ra gì với độ tin cậy bao nhiêu); job upload có `progress` (số frame đã giải mã trên tổng, số track đã OCR).
 
 Lưu ý khi vận hành:
 - `confidence_status` (`readable`, `low_confidence`, `unreadable`) và `duplicate_of_job_id` (track nối tiếp của cùng xe) chỉ để tham khảo; không track nào bị loại. Ngưỡng cần hiệu chỉnh thêm.

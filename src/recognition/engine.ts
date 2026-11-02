@@ -20,7 +20,7 @@ export type Runner = (
   job: Row,
   folder: string,
   options: WorkerOptions,
-  stage: (name: string) => Promise<void>,
+  stage: (name: string, progress?: Row) => Promise<void>,
 ) => Promise<Row>;
 const id = () => randomUUID().replace(/-/g, '');
 
@@ -174,19 +174,32 @@ export async function writeRecognitionInput(job: Row, folder: string, options: W
   return input;
 }
 
-/** Forward stage changes the ML side writes to progress.json; returns a function that stops polling. */
-export function followProgress(folder: string, stage: (name: string) => Promise<void>) {
+/** Counter-only updates of one stage are written at most this often. */
+const PROGRESS_MS = 2000;
+
+/**
+ * Forward what the ML side writes to progress.json (stage plus its counters): a new stage at
+ * once, new counters of the same stage at most every 2 s. Returns a function that stops polling.
+ */
+export function followProgress(
+  folder: string,
+  stage: (name: string, progress?: Row) => Promise<void>,
+) {
   let checking = false;
   let last = '';
+  let lastDetails = '';
+  let lastAt = 0;
   const poll = setInterval(() => {
     if (checking) return;
     checking = true;
     void readFile(path.join(folder, 'progress.json'), 'utf8')
       .then(JSON.parse)
-      .then(async (progress) => {
-        if (progress.stage !== last) {
-          await stage(progress.stage);
-          last = progress.stage;
+      .then(async ({ stage: name, ...details }) => {
+        const counters = JSON.stringify(details);
+        const changed = name !== last;
+        if (changed || (counters !== lastDetails && Date.now() - lastAt >= PROGRESS_MS)) {
+          await stage(name, Object.keys(details).length ? details : undefined);
+          [last, lastDetails, lastAt] = [name, counters, Date.now()];
         }
       })
       .catch(() => {})
@@ -706,11 +719,11 @@ export async function processOne(
     if ((await sha256(job.input_path).catch(() => '')) !== job.sha256)
       throw Object.assign(new Error('Input changed'), { code: 'INPUT_CHANGED' });
     checkInterrupted(options);
-    const stage = async (name: string) => {
+    const stage = async (name: string, progress?: Row) => {
       if (['validating', 'detection_tracking', 'recognition', 'persisting'].includes(name))
         await database.query(
-          "UPDATE recognition_jobs SET stage=$2 WHERE id=$1 AND status='running'",
-          [job.id, name],
+          "UPDATE recognition_jobs SET stage=$2, progress=$3 WHERE id=$1 AND status='running'",
+          [job.id, name, progress ? JSON.stringify(progress) : null],
         );
     };
     const result = await runner(job, folder, options, stage);

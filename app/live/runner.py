@@ -129,6 +129,8 @@ class LiveRunner:
         # rolling segments (OUT/record/eNNN) and cuts clips of tracks (OUT/clips); None: off.
         self.recording = recording
         self.clips, self.spans = None, {}
+        # OCR work of the whole session, for the pipeline view (stats.stages.ocr).
+        self.ocr = dict(tracks=0, seconds=0., readable=0, low_confidence=0, unreadable=0, duplicates=0)
 
     def _warm_up(self, cfg):
         """First CUDA calls take seconds; make them before frames start to arrive.
@@ -217,6 +219,7 @@ class LiveRunner:
                         last_frame = now
                         for candidate in session.push(index, pts, image, gray):
                             self._record(epoch, candidate, cfg, clock)
+                        self._report_rejections(epoch, session)
                     if now - last_stats >= self.stats_interval:
                         lag = (datetime.now(timezone.utc) - item[4]).total_seconds() if isinstance(item, tuple) else None
                         pacer = getattr(connection, "pacer", None)
@@ -233,7 +236,8 @@ class LiveRunner:
                                        sampling_scale=self.sampling_scale,
                                        position_seconds=None if position is None else round(position, 3),
                                        source_duration=info.get("duration"),
-                                       fps=round(processed_since / (now - last_stats), 2)))
+                                       fps=round(processed_since / (now - last_stats), 2),
+                                       stages=self._stages(reader, session, frames)))
                         last_stats, processed_since = now, 0
                 if stop.is_set():
                     outcome, reason = "stopped", None
@@ -244,12 +248,36 @@ class LiveRunner:
             # Tracks seen before a failure or stop are still finished and recognized.
             for candidate in session.close():
                 self._record(epoch, candidate, cfg, clock)
+            self._report_rejections(epoch, session)
         if recorder:
             recorder.stop()
         if self.clips:
             self.clips.finish()
             self.clips = None
         return outcome, reason, frames
+
+    def _report_rejections(self, epoch, session):
+        """A trace event per track that crop selection dropped (too few usable frames)."""
+        while session.rejections:
+            item = session.rejections.popleft()
+            self.emit(dict(type="trace", stage="track_rejected", epoch=epoch, **item))
+
+    def _stages(self, reader, session, frames):
+        """Counters of each pipeline step for this epoch (OCR: the whole session)."""
+        gate, detect, ocr = session.gate.counts, session.detect, self.ocr
+        return dict(
+            decode=dict(read=reader.read, dropped=reader.dropped, processed=frames),
+            sampling=dict(candidates=gate["adaptive_candidates"], kept=gate["kept"], skipped=gate["skipped"],
+                          reasons={k: gate[k] for k in ("warmup", "live_track", "confirm_scene", "motion",
+                                                        "periodic_probe", "idle_skip", "disabled") if gate[k]}),
+            detect=dict(batches=detect["batches"], frames=detect["frames"], boxes=detect["boxes"],
+                        frames_without_plate=gate["detector_frames_without_plate"],
+                        ms_per_frame=round(1000 * detect["seconds"] / detect["frames"], 1) if detect["frames"] else None),
+            tracking=dict(active=len(session.active), finished=self.tracks,
+                          rejected=dict(session.rejected)),
+            ocr=dict(tracks=ocr["tracks"], readable=ocr["readable"], low_confidence=ocr["low_confidence"],
+                     unreadable=ocr["unreadable"], duplicates=ocr["duplicates"], threshold=self.min_confidence,
+                     ms_per_track=round(1000 * ocr["seconds"] / ocr["tracks"], 1) if ocr["tracks"] else None))
 
     def _start_recording(self, info, connection, clock):
         """Recorder and clip maker of an epoch: a network stream records itself; a demo video is its own recording."""
@@ -291,9 +319,11 @@ class LiveRunner:
         appearance = build_appearance(candidate, manifest, folder, self.data_dir, candidate["first_seconds"],
                                       candidate["last_seconds"], "live_pts")
         detections = appearance["detections"]
+        started = time.perf_counter()
         prediction = _predict_joint(self.recognizer,
                                     ocr_inputs(self.data_dir / d["crop_storage_key"] for d in detections),
                                     self.data_dir)
+        ocr_seconds = time.perf_counter() - started
         for detection in detections:
             detection["predictions"] = []
         text = prediction["normalized_text"] or None
@@ -320,6 +350,14 @@ class LiveRunner:
             policy = self.recording.get("clip_policy", "readable")
             if self.clips is not None and (policy == "all" or (policy == "readable" and status == "readable")):
                 self.clips.request(key, candidate["first_seconds"], candidate["last_seconds"])
+        self.ocr["tracks"] += 1
+        self.ocr["seconds"] += ocr_seconds
+        self.ocr[status] = self.ocr.get(status, 0) + 1
+        self.ocr["duplicates"] += duplicate_of is not None
+        self.emit(dict(type="trace", stage="track_ocr", epoch=epoch, track=key, observations=candidate["observations"],
+                       seconds=round(candidate["last_seconds"] - candidate["first_seconds"], 2), frames=len(detections),
+                       text=text, confidence=confidence, status=status, threshold=round(threshold, 6),
+                       duplicate_of=duplicate_of, ocr_ms=round(1000 * ocr_seconds, 1)))
         self.emit(dict(type="track", track=key, epoch=epoch, text=text, status=status, confidence=confidence,
                        frames=len(detections), duplicate_of=duplicate_of, captured_from=record["captured_from"],
                        captured_to=record["captured_to"],
