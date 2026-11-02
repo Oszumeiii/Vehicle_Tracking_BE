@@ -123,6 +123,14 @@ export class JobResponse extends LiveTrackFields {
   @ApiProperty({ enum: ['queued', 'running', 'succeeded', 'failed'] }) status!: string;
   @ApiProperty({ description: 'Current processing stage; no estimated percentage is implied.' })
   stage!: string;
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: true,
+    nullable: true,
+    description:
+      'Counters of the running stage, e.g. detection_tracking `{step, decoded_frames, expected_frames, sampled_frames, candidates, active_tracks, rejected}` or recognition `{done, total}`; updated about every 2 s.',
+  })
+  progress!: Record<string, unknown> | null;
   @ApiProperty({ type: 'object', additionalProperties: true }) statistics!: Record<string, unknown>;
   @ApiProperty(dateTime) created_at!: string;
   @ApiProperty(nullableDateTime) started_at!: string | null;

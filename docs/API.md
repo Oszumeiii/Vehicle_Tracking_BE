@@ -26,6 +26,9 @@ Mặc định `http://127.0.0.1:3000`. Ngoại trừ login và health, gửi `Au
 - `POST /api/v2/recognition-jobs`: `{media_id,pipeline_id,input_mode}` → `202 {job_id,status,status_url}`. `input_mode` mặc định `scene`; `plate_crop` chỉ áp dụng ảnh.
 - `GET /api/v2/recognition-jobs`: lọc `origin` (`upload` mặc định, `live`, `all`), `media_id`, `live_session_id`, `status`, `created_from`, `created_to`, phân trang.
 - `GET /api/v2/recognition-jobs/{id}`: trạng thái `queued|running|succeeded|failed`, stage, `pipeline_task`, thống kê, lỗi an toàn.
+  - `progress`: số liệu của bước đang chạy, cập nhật khoảng 2 s một lần; `null` khi chưa có hoặc đã xong.
+    - `detection_tracking`: `{step:"tracking", decoded_frames, expected_frames, sampled_frames, candidates, active_tracks, rejected}`, rồi `{step:"exporting_crops", candidates}`;
+    - `recognition`: `{done, total}` (số track đã OCR trên tổng).
 - `GET /api/v2/recognition-jobs/{id}/results`: các lần xuất hiện; `409` nếu chưa succeeded.
 - `DELETE /api/v2/recognition-jobs/{id}`: xóa job kết thúc và bằng chứng phát sinh, giữ source; job chưa kết thúc trả `409`.
 
@@ -116,6 +119,20 @@ Các loại sự kiện:
   - `alert`: biển đọc được khớp watchlist (giống hệt, hoặc lệch 1 ký tự khi biển dài ít nhất 5 ký tự). Payload gồm `watch_plate`, `plate`, `distance`, `job_id`, `result_id`, `stream_source_id`, `confidence_status`, `captured_from`. Chỉ người đặt watchlist nhận được, kể cả khi người đó là admin.
 - **`session`** (không có id): dạng `GET /live-sessions/{id}`, gửi khi kết nối (các phiên đang hoạt động, hoặc phiên được lọc) và mỗi khi phiên đổi trạng thái hoặc stats.
 - **`end`**: stream lọc theo `live_session_id` gửi `end` rồi đóng sau trạng thái kết thúc của phiên.
+- **`trace`** (không có id, không lưu, không phát lại): từng track đi qua pipeline thế nào, để giao diện hiển thị quá trình xử lý. `data` cùng dạng `{live_session_id, stream_source_id, created_at, payload}`, với `payload.stage`:
+  - `track_rejected`: bước chọn crop bỏ track: `track_id`, `reason` (`fewer_than_five_valid_frames`…), `observations` (số lần detector thấy biển), `seconds`;
+  - `track_ocr`: track đã chốt và OCR: `track`, `observations`, `seconds`, `frames` (số crop), `text`, `confidence`, `status`, `threshold`, `duplicate_of`, `ocr_ms`.
+  
+  Mỗi phiên gửi tối đa 20 trace/giây; phần vượt bị bỏ và đếm trong `stats.traces_dropped`.
+
+`stats` của phiên (trong `session` và `GET /live-sessions/{id}`) có thêm `stages`, số liệu từng bước của epoch hiện tại:
+- `decode`: `read`, `dropped`, `processed` (frame nhận, bị bỏ vì xử lý không kịp, đã xử lý);
+- `sampling`: `candidates`, `kept`, `skipped`, `reasons` (vì sao frame được đưa vào detector: `motion`, `live_track`, `periodic_probe`…; `idle_skip` là cảnh tĩnh bị bỏ qua);
+- `detect`: `batches`, `frames`, `boxes`, `frames_without_plate`, `ms_per_frame`;
+- `tracking`: `active`, `finished` (cả phiên), `rejected` (theo lý do);
+- `ocr` (cả phiên): `tracks`, `readable`, `low_confidence`, `unreadable`, `duplicates`, `threshold`, `ms_per_track`.
+
+`stats.position_seconds` là giờ luồng của frame vừa xử lý; `source_duration` là độ dài file của camera demo.
 
 Dòng `: ping` là heartbeat (mỗi `PLATE_SSE_HEARTBEAT_SECONDS`, mặc định 20 s). Mỗi tiến trình API mở tối đa `PLATE_SSE_MAX_CLIENTS` stream (mặc định 100); vượt thì trả `503`.
 

@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from app.live.runner import DuplicateLinker, LiveRunner, classify
+from app.live import DEFAULT_MIN_CONFIDENCE
 from app.live.source import FfmpegFrames, FileFrames, LiveReader, SourceError, StreamEnded, resolve_youtube
 from test_ml_adapter import GATE, SAMPLING, TRACKING, BoxFixture, _plate_video
 
@@ -152,6 +153,12 @@ def test_runner_records_each_track_with_evidence_ocr_and_events(tmp_path):
             path = tmp_path / "live" / detection[key]
             assert path.is_file() and folder in path.parents
     assert appearance["predictions"][0]["input_storage_keys"] == [d["crop_storage_key"] for d in detections]
+    # The pipeline view: one trace per OCR'd track, before its track event.
+    traces = [e for e in events if e["type"] == "trace"]
+    assert [t["stage"] for t in traces] == ["track_ocr"]
+    assert traces[0]["track"] == "e000-t000001" and traces[0]["text"] == "ABC1234"
+    assert traces[0]["status"] == "readable" and traces[0]["frames"] == 5 and traces[0]["ocr_ms"] >= 0
+    assert events.index(traces[0]) < events.index(tracks[0])
 
 
 def test_sampling_scale_lowers_detector_rates_and_is_recorded(tmp_path):
@@ -167,6 +174,12 @@ def test_sampling_scale_lowers_detector_rates_and_is_recorded(tmp_path):
     # Where a viewer of the source should be: the newest processed frame, increasing.
     positions = [e["position_seconds"] for e in stats if e["position_seconds"] is not None]
     assert positions and positions == sorted(positions) and all(0 <= p <= 30 for p in positions)
+    stages = stats[-1]["stages"]
+    assert set(stages) == {"decode", "sampling", "detect", "tracking", "ocr"}
+    assert stages["decode"]["processed"] <= stages["decode"]["read"]
+    assert stages["sampling"]["kept"] + stages["sampling"]["skipped"] == stages["sampling"]["candidates"]
+    assert stages["detect"]["frames"] <= stages["sampling"]["kept"]  # a batch may still be pending
+    assert stages["ocr"]["threshold"] == DEFAULT_MIN_CONFIDENCE
     runner = LiveRunner(SNAPSHOT, tmp_path / "x", None, print, BoxFixture(), recognizer, sampling_scale=.5)
     assert runner.tracking_snapshot["sampling"]["high_fps"] == SNAPSHOT["sampling"]["high_fps"] * .5
     assert runner.snapshot is SNAPSHOT, "the pinned snapshot itself is unchanged"

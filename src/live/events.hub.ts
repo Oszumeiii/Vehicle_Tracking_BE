@@ -113,7 +113,8 @@ const EVENT_PAGE = 500;
  * Fans PostgreSQL notifications (sent by triggers at commit) out to SSE clients.
  *
  * One dedicated connection LISTENs; nothing is carried in the notification but ids,
- * so each stream re-reads committed rows after its own cursor. After a lost
+ * so each stream re-reads committed rows after its own cursor. The exception is
+ * `live_trace` (pipeline steps of a track): its payload is the event, sent once. After a lost
  * connection the hub reconnects with backoff and every stream catches up by id.
  */
 @Injectable()
@@ -227,6 +228,7 @@ export class LiveEventsHub implements OnModuleDestroy {
         await client.connect();
         await client.query('LISTEN live_session_events');
         await client.query('LISTEN live_sessions');
+        await client.query('LISTEN live_trace');
       } catch (error) {
         client.end().catch(() => {});
         throw error;
@@ -288,6 +290,13 @@ export class LiveEventsHub implements OnModuleDestroy {
         if (!meta) return;
         for (const subscriber of this.subscribers)
           if (subscriber.concerns(sessionId, meta)) void subscriber.pull();
+      } else if (note.channel === 'live_trace') {
+        // Not stored and never replayed: only streams open right now see it.
+        const trace = JSON.parse(note.payload);
+        const meta = await this.meta(String(trace.live_session_id));
+        if (!meta) return;
+        for (const subscriber of this.subscribers)
+          if (subscriber.concerns(trace.live_session_id, meta)) subscriber.send('trace', trace);
       } else if (note.channel === 'live_sessions') {
         const session = (
           await this.db.query<SessionMeta & Record<string, any>>(

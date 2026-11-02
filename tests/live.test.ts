@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { after, before, test } from 'node:test';
+import { Client } from 'pg';
 import request from 'supertest';
 import type { INestApplication } from '@nestjs/common';
 import { createApp } from '../src/main';
@@ -1029,4 +1030,81 @@ test('a camera is watched as HLS from its recording, a demo camera as its file',
     .expect(206);
   await api.get(`${demoBase}/demo-video`).set(as('owner')).expect(404);
   await api.get(`${base}/demo-video`).set(as('owner')).expect(404); // not a demo camera
+  // Leave no queued session for the manager tests that follow.
+  await fixture.database.query("UPDATE live_sessions SET status='stopped' WHERE id=$1", [
+    demoSession.id,
+  ]);
+});
+
+test('the manager relays trace events as notifications, at most 20 per second', async () => {
+  const source = await camera('Trace');
+  const queued = await session(source.id);
+  const spawned: { args: string[]; child: Fake }[] = [];
+  const live = manager(spawned, (child) => {
+    child.line({ type: 'status', status: 'stopped', reason: null, tracks: 0 });
+    child.exit(0);
+  });
+  const listener = new Client({ connectionString: fixture.url });
+  await listener.connect();
+  const notes: any[] = [];
+  listener.on('notification', (note) => notes.push(JSON.parse(note.payload!)));
+  await listener.query('LISTEN live_trace');
+  try {
+    await live.tick();
+    const { child } = spawned[0];
+    child.line({ type: 'status', status: 'running', epoch: 0, width: 1, height: 1, fps: 1 });
+    for (let i = 0; i < 25; i++)
+      child.line({
+        type: 'trace',
+        time: '2026-11-02T00:00:00.000Z',
+        stage: 'track_rejected',
+        epoch: 0,
+        track_id: String(i),
+        reason: 'fewer_than_five_valid_frames',
+        observations: 2,
+        seconds: 0.1,
+      });
+    child.line({ type: 'stats', epoch: 0, frames_read: 1 });
+    const row = await until(
+      () => sessionRow(queued.id),
+      (value) => value.stats?.traces_dropped !== undefined,
+      'stats with the dropped trace count',
+    );
+    await until(
+      async () => notes.length,
+      (count) => count + row.stats.traces_dropped === 25,
+      'relayed traces',
+    );
+    // A burst within one second is cut at 20 (a second boundary may let a few more through).
+    assert.ok(notes.length >= 20, String(notes.length));
+    assert.deepEqual(notes[0], {
+      live_session_id: queued.id,
+      stream_source_id: source.id,
+      created_at: '2026-11-02T00:00:00.000Z',
+      payload: {
+        stage: 'track_rejected',
+        epoch: 0,
+        track_id: '0',
+        reason: 'fewer_than_five_valid_frames',
+        observations: 2,
+        seconds: 0.1,
+      },
+    });
+    // Nothing is stored.
+    const stored = await fixture.database.query(
+      'SELECT count(*)::int AS n FROM live_session_events WHERE session_id=$1 AND payload ? $2',
+      [queued.id, 'track_id'],
+    );
+    assert.equal(stored.rows[0].n, 0);
+    await api.post(`/api/v2/live-sessions/${queued.id}/stop`).set(as('owner')).expect(202);
+    await live.tick();
+    await until(
+      async () => live.active,
+      (active) => active === 0,
+      'finished run',
+    );
+  } finally {
+    await listener.end();
+    if (live.active) spawned[0]?.child.exit(0); // a failed assertion must not leave a run behind
+  }
 });

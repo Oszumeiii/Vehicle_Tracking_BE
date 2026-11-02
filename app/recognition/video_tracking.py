@@ -7,7 +7,7 @@ are omitted; crops, keyframes and logs are kept as review evidence.
 TrackSession is the incremental core: it accepts decoded frames in PTS order from
 any source, so an uploaded file and a live stream share the same tracking logic.
 """
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 import csv
@@ -512,6 +512,10 @@ class TrackSession:
             raise ValueError("max_track_seconds must be finite and non-negative")
         self.active, self.closed, self.rejected = {}, set(), Counter()
         self.frames, self.sampled, self.kept = [], 0, 0
+        # Observability only (live "pipeline" view): detector work and the tracks dropped
+        # by crop selection, newest last; a consumer drains `rejections`.
+        self.detect = dict(batches=0, frames=0, boxes=0, seconds=0.)
+        self.rejections = deque(maxlen=1000)
         self.retain_images, self._jpeg_bytes = retain_images, {}
         self._pending, self._finished = [], []
         self._files = [f for f in (detections_file, gate_file) if f is not None]
@@ -588,6 +592,8 @@ class TrackSession:
             self._finished.append(candidate)
         else:
             self.rejected[reason] += 1
+            self.rejections.append(dict(track_id=str(tid), reason=reason, observations=len(rows),
+                                        seconds=round(rows[-1]["timestamp_seconds"] - rows[0]["timestamp_seconds"], 2)))
 
     def _prune(self):
         """Keep JPEG bytes only for frames an active track can still select."""
@@ -605,9 +611,14 @@ class TrackSession:
             infos.append(dict(frame_index=frame["frame_index"], timestamp_seconds=frame["timestamp_seconds"]))
             orders.append(frame["selected_order"])
         self._pending.clear()
+        started = time.perf_counter()
         detected = detect_plates(self.model, images, self.cfg)
         if len(detected) != len(images):
             raise RuntimeError("Detector returned a different number of frames")
+        self.detect["batches"] += 1
+        self.detect["frames"] += len(images)
+        self.detect["boxes"] += sum(len(boxes) for boxes in detected)
+        self.detect["seconds"] += time.perf_counter() - started
         for image, info, order, boxes in zip(images, infos, orders, detected):
             tracks = self.clock.update(boxes, image, info["timestamp_seconds"])
             for track in tracks:
@@ -652,9 +663,10 @@ def check_stop(stop):
         raise JobStopped("Job stopped")
 
 
-def track_video(video, model, cfg, out, stop=None, throttle=None):
+def track_video(video, model, cfg, out, stop=None, throttle=None, progress=None):
+    """progress(counts), when given, is called about every 2 s with the tracking counters."""
     pts, candidates = [], []
-    started = last_progress = time.perf_counter()
+    started = last_progress = last_report = time.perf_counter()
     with (out / "tracking_detections.csv").open("w", newline="", encoding="utf-8") as det_file, \
          (out / "frame_gate.csv").open("w", newline="", encoding="utf-8") as gate_file, \
          TrackSession(model, cfg, det_file, gate_file) as session, \
@@ -666,6 +678,11 @@ def track_video(video, model, cfg, out, stop=None, throttle=None):
             pts.append(timestamp)
             candidates += session.push(index, timestamp, image, gray)
             now = time.perf_counter()
+            if progress is not None and now - last_report >= 2:
+                progress(dict(step="tracking", decoded_frames=len(pts), expected_frames=cfg["declared_frames"],
+                              sampled_frames=session.sampled, candidates=len(candidates),
+                              active_tracks=len(session.active), rejected=sum(session.rejected.values())))
+                last_report = now
             if now - last_progress >= 20:
                 # stderr: inside the shared live host, stdout carries its JSON events.
                 print(json.dumps(dict(stage="tracking", decoded_frames=len(pts),
