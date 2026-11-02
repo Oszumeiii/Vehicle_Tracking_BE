@@ -89,6 +89,16 @@ Action `confirm` chấp nhận text máy; `correct` bắt buộc text mới; `un
   - Phiên `queued` dừng ngay; phiên đang chạy chốt và OCR các track đang mở rồi chuyển `stopped`.
   - Phiên đã kết thúc trả `409`.
 - `GET /api/v2/live-sessions/{id}/events`: lịch sử bền vững theo `id` tăng dần (`status`, `error`, `track_rejected`, `track`, `alert`).
+- **Xem camera dạng video:**
+  - `GET /api/v2/stream-sources/{id}/live-view` cho biết cách hiển thị camera:
+    - `{kind:"hls", url, delay_seconds}`: camera RTSP đang có phiên. `url` là playlist HLS lấy từ bản ghi đệm, chạy sau camera khoảng `delay_seconds` (thường 15–25 s).
+    - `{kind:"demo", url, duration, position_seconds, position_at}`: camera demo. Phát file `url` theo vòng lặp tại `(position_seconds + (now − position_at)) mod duration`, khớp với vị trí nhận diện vừa báo.
+    - `{kind:"youtube", embed_url}`: dùng trình phát YouTube.
+    - `{kind:"snapshot"}`: chưa có video (camera không chạy, chưa ghi được đoạn nào, hoặc tắt ghi hình); dùng `snapshot`.
+  - `GET /api/v2/stream-sources/{id}/live.m3u8`: playlist HLS gồm 6 đoạn 10 s mới nhất của phiên gần nhất; phiên đã kết thúc có `#EXT-X-ENDLIST`; chưa có đoạn nào thì `404`.
+  - `GET /api/v2/stream-sources/{id}/live/{session}/{epoch}/{nnnnnn}.ts`: một đoạn MPEG-TS. API chuyển đoạn MP4 của bản ghi sang TS khi được gọi (không mã hóa lại) và cache 1 giờ. Chỉ phục vụ đoạn đã đóng.
+  - `GET /api/v2/stream-sources/{id}/demo-video`: file video của camera demo (hỗ trợ Range).
+  - Ba endpoint trên nhận `?token=` cho trình phát không gửi được header; playlist tải bằng `?token=` sẽ gắn token vào URL các đoạn.
 - `GET /api/v2/stream-sources/{id}/snapshot`: keyframe mới nhất của camera (JPEG), để vẽ `exclude_zones` theo tọa độ chuẩn hóa trên khung hình thật. Camera chưa có track trả `204` (không có nội dung).
 - Camera trả về có thêm `video_id` và `embed_url` (`https://www.youtube-nocookie.com/embed/{id}`) để nhúng trình phát cạnh danh sách biển số. Trình phát chạy lệch nhận diện vài giây. Link kênh (`/@x/live`) có `embed_url=null`.
 

@@ -11,6 +11,7 @@ import { MediaController } from './media/media.controller';
 import { JobsController, JobOperations } from './jobs/jobs.controller';
 import { ResultsController } from './results/results.controller';
 import { LiveController } from './live/live.controller';
+import { LiveViewController } from './live/live-view.controller';
 import { VideoController } from './live/video.controller';
 import { WatchlistController } from './live/watchlist.controller';
 import { EvaluationController } from './evaluation/evaluation.controller';
@@ -84,6 +85,7 @@ class HealthController {
     ResultsController,
     LiveController,
     VideoController,
+    LiveViewController,
     WatchlistController,
     EvaluationController,
   ],

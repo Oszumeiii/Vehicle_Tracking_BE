@@ -132,6 +132,72 @@ export async function cutDemoVideo(
   return runClips(options, [...args, '--pad', String(pad), '--out', out], out);
 }
 
+let ffmpeg: Promise<string> | null = null;
+
+/** The ffmpeg the live process uses (imageio-ffmpeg's), or PLATE_FFMPEG; resolved once. */
+export function ffmpegPath(python: string) {
+  if (process.env.PLATE_FFMPEG) return Promise.resolve(process.env.PLATE_FFMPEG);
+  ffmpeg ??= new Promise<string>((resolve, reject) => {
+    const child = spawn(
+      python,
+      ['-c', 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())'],
+      { windowsHide: true, env: pythonEnv() },
+    );
+    let stdout = '';
+    child.stdout?.on('data', (chunk) => (stdout += String(chunk)));
+    child.stderr?.resume();
+    child.once('error', reject);
+    child.once('close', (code) =>
+      code === 0 && stdout.trim()
+        ? resolve(stdout.trim().split('\n').pop()!.trim())
+        : reject(new Error('ffmpeg was not found')),
+    );
+  }).catch((error) => {
+    ffmpeg = null; // retried on the next request
+    throw error;
+  });
+  return ffmpeg;
+}
+
+const remuxing = new Map<string, Promise<void>>();
+
+/**
+ * Copy a recorded MP4 segment into MPEG-TS for HLS (no re-encoding, timestamps kept so
+ * consecutive segments play continuously). Concurrent requests for one segment share a run.
+ */
+export function remuxSegment(python: string, source: string, out: string) {
+  let run = remuxing.get(out);
+  if (!run) {
+    run = (async () => {
+      await mkdir(path.dirname(out), { recursive: true });
+      const partial = `${out}.${process.pid}.tmp`;
+      const child = spawn(
+        await ffmpegPath(python),
+        [
+          ...['-hide_banner', '-loglevel', 'error', '-nostdin', '-y', '-copyts', '-i', source],
+          ...['-map', '0:v:0', '-c', 'copy', '-muxdelay', '0', '-muxpreload', '0'],
+          ...['-f', 'mpegts', partial],
+        ],
+        { windowsHide: true },
+      );
+      child.stdout?.resume();
+      child.stderr?.resume();
+      const timer = setTimeout(() => child.kill(), 30_000);
+      const code = await new Promise<number | null>((resolve, reject) => {
+        child.once('error', reject);
+        child.once('close', resolve);
+      }).finally(() => clearTimeout(timer));
+      if (code !== 0) {
+        await rm(partial, { force: true });
+        throw new Error('Remuxing the segment failed');
+      }
+      await rename(partial, out);
+    })().finally(() => remuxing.delete(out));
+    remuxing.set(out, run);
+  }
+  return run;
+}
+
 async function runClips(
   options: Pick<WorkerOptions, 'python'>,
   args: string[],
