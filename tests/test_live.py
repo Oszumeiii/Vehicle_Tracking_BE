@@ -157,12 +157,16 @@ def test_runner_records_each_track_with_evidence_ocr_and_events(tmp_path):
 def test_sampling_scale_lowers_detector_rates_and_is_recorded(tmp_path):
     video = tmp_path / "input.avi"
     _plate_video(video, 30)
-    status, events = run(tmp_path, [FileFrames(video)], sampling_scale=.5)
+    status, events = run(tmp_path, [FileFrames(video)], sampling_scale=.5, stats_interval=.001)
     assert status == "ended"
     record = json.loads((tmp_path / "live" / next(e for e in events if e["type"] == "track")["path"])
                         .read_text(encoding="utf-8"))
     assert record["sampling_scale"] == .5
-    assert all(e["sampling_scale"] == .5 for e in events if e["type"] == "stats")
+    stats = [e for e in events if e["type"] == "stats"]
+    assert all(e["sampling_scale"] == .5 for e in stats)
+    # Where a viewer of the source should be: the newest processed frame, increasing.
+    positions = [e["position_seconds"] for e in stats if e["position_seconds"] is not None]
+    assert positions and positions == sorted(positions) and all(0 <= p <= 30 for p in positions)
     runner = LiveRunner(SNAPSHOT, tmp_path / "x", None, print, BoxFixture(), recognizer, sampling_scale=.5)
     assert runner.tracking_snapshot["sampling"]["high_fps"] == SNAPSHOT["sampling"]["high_fps"] * .5
     assert runner.snapshot is SNAPSHOT, "the pinned snapshot itself is unchanged"

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { after, before, test } from 'node:test';
 import request from 'supertest';
@@ -855,4 +856,177 @@ test('a live track gets its clip, and a result shows where its video is', async 
     .set(as('stranger'))
     .expect(404);
   child.exit(0);
+});
+
+/** imageio-ffmpeg's binary from the project venv, or null where it is not installed. */
+function realFfmpeg() {
+  const python = resolve(
+    process.platform === 'win32' ? '.venv/Scripts/python.exe' : '.venv/bin/python',
+  );
+  try {
+    return execFileSync(
+      python,
+      ['-c', 'import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())'],
+      { encoding: 'utf8', windowsHide: true },
+    ).trim();
+  } catch {
+    return null;
+  }
+}
+
+test('a camera is watched as HLS from its recording, a demo camera as its file', async (t) => {
+  const ffmpeg = realFfmpeg();
+  if (!ffmpeg) return t.skip('imageio-ffmpeg is not installed in .venv');
+  process.env.PLATE_FFMPEG = ffmpeg;
+  ENV_KEYS.push('PLATE_FFMPEG');
+
+  const youtube = await camera('YouTube');
+  assert.deepEqual(
+    (await api.get(`/api/v2/stream-sources/${youtube.id}/live-view`).set(as('owner')).expect(200))
+      .body,
+    { kind: 'youtube', embed_url: 'https://www.youtube-nocookie.com/embed/5Xl6pSgiy3A' },
+  );
+
+  const gate = (
+    await api
+      .post('/api/v2/stream-sources')
+      .set(as('owner'))
+      .send({ name: 'Gate', source_type: 'rtsp', url: 'rtsp://10.0.0.9/stream' })
+      .expect(201)
+  ).body;
+  const base = `/api/v2/stream-sources/${gate.id}`;
+  await api.get(`${base}/live-view`).set(as('stranger')).expect(404);
+  assert.equal(
+    (await api.get(`${base}/live-view`).set(as('owner')).expect(200)).body.kind,
+    'snapshot',
+  );
+  await api.get(`${base}/live.m3u8`).set(as('owner')).expect(404);
+  const live = await session(gate.id);
+
+  // Two closed 2 s segments as the recorder leaves them (MP4, timestamps not reset).
+  const record = join(dataDir, 'live', live.id, 'record', 'e000');
+  await mkdir(record, { recursive: true });
+  execFileSync(
+    ffmpeg,
+    [
+      ...['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'testsrc=size=160x90:rate=10'],
+      ...['-t', '4', '-c:v', 'libx264', '-g', '20', '-f', 'segment', '-segment_time', '2'],
+      ...['-segment_format', 'mp4', '-reset_timestamps', '0'],
+      join(record, 'seg_%06d.mp4'),
+    ],
+    { windowsHide: true },
+  );
+  const now = Date.now();
+  await writeFile(
+    join(record, 'index.jsonl'),
+    [0, 1]
+      .map((n) =>
+        JSON.stringify({
+          file: `seg_00000${n}.mp4`,
+          pts_start: 2 * n,
+          pts_end: 2 * n + 2,
+          utc_start: new Date(now - 4000 + 2000 * n).toISOString(),
+          utc_end: new Date(now - 2000 + 2000 * n).toISOString(),
+          keyframes: [2 * n],
+        }),
+      )
+      .join('\n') + '\n',
+  );
+  const view = (await api.get(`${base}/live-view`).set(as('owner')).expect(200)).body;
+  assert.equal(view.kind, 'hls');
+  assert.equal(view.url, `${base}/live.m3u8`);
+  assert.ok(view.delay_seconds >= 2 && view.delay_seconds <= 4, String(view.delay_seconds));
+
+  const playlist = await api.get(`${base}/live.m3u8`).set(as('owner')).expect(200);
+  assert.match(playlist.headers['content-type'], /mpegurl/);
+  assert.deepEqual(playlist.text.trim().split('\n'), [
+    '#EXTM3U',
+    '#EXT-X-VERSION:3',
+    '#EXT-X-TARGETDURATION:2',
+    '#EXT-X-MEDIA-SEQUENCE:0',
+    '#EXTINF:2.000,',
+    `live/${live.id}/e000/000000.ts`,
+    '#EXTINF:2.000,',
+    `live/${live.id}/e000/000001.ts`,
+  ]);
+  await api.get(`${base}/live.m3u8`).set(as('stranger')).expect(404);
+  // A player without headers: the token goes on to the segments.
+  const tokened = await api.get(`${base}/live.m3u8?token=${tokens.owner}`).expect(200);
+  assert.ok(tokened.text.includes(`000001.ts?token=${tokens.owner}`));
+
+  const segment = await api
+    .get(`${base}/live/${live.id}/e000/000001.ts?token=${tokens.owner}`)
+    .buffer(true)
+    .parse((res, done) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk: Buffer) => chunks.push(chunk));
+      res.on('end', () => done(null, Buffer.concat(chunks)));
+    })
+    .expect(200);
+  assert.equal(segment.headers['content-type'], 'video/mp2t');
+  assert.equal((segment.body as Buffer)[0], 0x47); // MPEG-TS sync byte
+  assert.ok(await exists(join(dataDir, 'live', live.id, 'cache', 'hls-e000-000001.ts')));
+  for (const bad of [
+    `live/${live.id}/e000/000002.ts`, // not closed (not in the index)
+    `live/${live.id}/e000/x.ts`,
+    `live/${live.id}/e00/000001.ts`,
+    `live/${youtube.id}/e000/000001.ts`, // another camera's id, not a session of this one
+  ])
+    await api.get(`${base}/${bad}`).set(as('owner')).expect(404);
+  await api.get(`${base}/live/${live.id}/e000/000001.ts`).set(as('stranger')).expect(404);
+
+  // A finished session: the playlist ends, the view falls back to the snapshot.
+  await fixture.database.query("UPDATE live_sessions SET status='stopped' WHERE id=$1", [live.id]);
+  assert.ok(
+    (await api.get(`${base}/live.m3u8`).set(as('owner')).expect(200)).text.includes(
+      '#EXT-X-ENDLIST',
+    ),
+  );
+  assert.equal(
+    (await api.get(`${base}/live-view`).set(as('owner')).expect(200)).body.kind,
+    'snapshot',
+  );
+
+  // A demo camera: the file itself, at the position the live process reported.
+  const videos = join(dataDir, 'demo-videos');
+  await mkdir(videos, { recursive: true });
+  await writeFile(join(videos, 'loop.mp4'), 'demo-bytes');
+  const demo = (
+    await api
+      .post('/api/v2/stream-sources')
+      .set(as('admin'))
+      .send({ name: 'Loop', source_type: 'file', path: 'loop.mp4' })
+      .expect(201)
+  ).body;
+  const demoBase = `/api/v2/stream-sources/${demo.id}`;
+  const demoSession = (
+    await api
+      .post(`${demoBase}/sessions`)
+      .set(as('admin'))
+      .send({ pipeline_id: 'joint' })
+      .expect(202)
+  ).body;
+  assert.equal(
+    (await api.get(`${demoBase}/live-view`).set(as('admin')).expect(200)).body.kind,
+    'snapshot',
+  );
+  const at = new Date().toISOString();
+  await fixture.database.query('UPDATE live_sessions SET stats=$2 WHERE id=$1', [
+    demoSession.id,
+    JSON.stringify({ time: at, position_seconds: 125.5, source_duration: 60 }),
+  ]);
+  assert.deepEqual((await api.get(`${demoBase}/live-view`).set(as('admin')).expect(200)).body, {
+    kind: 'demo',
+    url: `${demoBase}/demo-video`,
+    duration: 60,
+    position_seconds: 125.5,
+    position_at: at,
+  });
+  await api.get(`${demoBase}/demo-video`).set(as('admin')).expect(200);
+  await api
+    .get(`${demoBase}/demo-video?token=${tokens.admin}`)
+    .set('Range', 'bytes=0-3')
+    .expect(206);
+  await api.get(`${demoBase}/demo-video`).set(as('owner')).expect(404);
+  await api.get(`${base}/demo-video`).set(as('owner')).expect(404); // not a demo camera
 });

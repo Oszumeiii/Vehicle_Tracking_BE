@@ -188,6 +188,7 @@ class LiveRunner:
         outcome, reason, frames = "error", None, 0
         last_frame = last_stats = time.monotonic()
         processed_since = 0
+        position = None  # PTS of the newest processed frame (where a viewer of the source should be)
         with TrackSession(self.model, cfg, retain_images=True) as session:
             try:
                 while True:
@@ -212,6 +213,7 @@ class LiveRunner:
                                            width=info["width"], height=info["height"], fps=info["fps"]))
                         frames += 1
                         processed_since += 1
+                        position = pts
                         last_frame = now
                         for candidate in session.push(index, pts, image, gray):
                             self._record(epoch, candidate, cfg, clock)
@@ -229,6 +231,8 @@ class LiveRunner:
                                        source_lag_seconds=pacer and round(pacer.lag, 2),
                                        skipped_seconds=pacer and round(pacer.skipped_seconds, 1),
                                        sampling_scale=self.sampling_scale,
+                                       position_seconds=None if position is None else round(position, 3),
+                                       source_duration=info.get("duration"),
                                        fps=round(processed_since / (now - last_stats), 2)))
                         last_stats, processed_since = now, 0
                 if stop.is_set():
