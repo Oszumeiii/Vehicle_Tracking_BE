@@ -1,7 +1,0 @@
-!include _style.iuml
-skinparam usecase {
-  BackgroundColor<<new>> #DBEAFE
-  BorderColor<<new>> #1D4ED8
-}
-hide stereotype
-skinparam packageStyle rectangle
