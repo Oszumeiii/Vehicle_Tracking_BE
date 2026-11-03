@@ -16,7 +16,7 @@ Mặc định `http://127.0.0.1:3000`. Ngoại trừ login và health, gửi `Au
   - Hành động được ghi:
     - `auth.login`, `auth.login_failed` (`details.email`, `reason`: `invalid` | `inactive` | `throttled`), `auth.logout`;
     - `user.create`, `user.update` (chỉ ghi tên các trường đã đổi);
-    - `results.search` (chỉ khi có `plate`), `result.view`, `result.review`, `journey.view`, `job.export`;
+    - `results.search` (chỉ khi có `plate`), `result.review`, `journey.view`, `job.export`. Không ghi mỗi lần tải chi tiết một kết quả (`GET /recognition-results/{id}`): các trang tự tải chi tiết của mọi dòng đang hiển thị, nên ghi lại sẽ làm nhật ký đầy những lượt xem không có chủ đích;
     - `camera.create|update|delete`, `session.start|stop|delete`, `watchlist.add|delete`, `media.update|delete`, `job.delete`.
   - Không ghi mật khẩu, token hay các request tải ảnh/video. Lỗi khi ghi log không làm hỏng request. Worker xóa dòng cũ hơn `PLATE_AUDIT_RETENTION_DAYS` (mặc định 365).
 - Biển số do người dùng gõ (watchlist, sửa khi review, tìm kiếm) được chuẩn hóa: chữ hoa, bỏ khoảng trắng, `-` và `.`.
