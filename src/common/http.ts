@@ -17,7 +17,8 @@ export const pagination = z.object({
 export const instant = z.iso.datetime({ offset: true }).optional();
 export const id = z.string().regex(/^[0-9a-f]{32}$/);
 export const newId = () => randomUUID().replaceAll('-', '');
-export const normalizePlate = (text: string) => text.toUpperCase().replace(/[\s-]+/g, '');
+/** Plate text typed by a user, as stored: uppercase without spaces, hyphens or dots ("43A-123.45"). */
+export const normalizePlate = (text: string) => text.toUpperCase().replace(/[\s.-]+/g, '');
 export type Actor = {
   id: string;
   email: string;

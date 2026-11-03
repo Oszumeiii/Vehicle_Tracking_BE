@@ -147,7 +147,8 @@ Lưu ý khi vận hành:
   - track đã review hoặc đã có cảnh báo watchlist được giữ;
   - đặt `null` để giữ mãi;
   - thư mục mồ côi và thùng rác cũng được dọn;
-  - phiên đăng nhập (`auth_sessions`) hết hạn hoặc đã đăng xuất quá 7 ngày bị xóa.
+  - phiên đăng nhập (`auth_sessions`) hết hạn hoặc đã đăng xuất quá 7 ngày bị xóa;
+  - nhật ký truy cập (`audit_log`) cũ hơn `PLATE_AUDIT_RETENTION_DAYS` (mặc định 365 ngày) bị xóa.
 - **Xóa phiên:** `DELETE /api/v2/live-sessions/{id}` cho phiên đã kết thúc (xóa track, bằng chứng và lịch sử). Xóa hết phiên thì xóa được camera. `GET /live-sessions/{id}` có `evidence_bytes`.
 - **Lượt xuất hiện:** các track cùng biển (hoặc lệch 1 ký tự) trên một camera trong vòng `PLATE_LIVE_SIGHTING_MINUTES` (mặc định 5) có chung `sighting_id`. `GET /recognition-results?group_by=sighting` trả mỗi lượt một dòng, kèm `sighting_count`, `first_seen`, `last_seen`; `GET /api/v2/sightings/{id}/results` liệt kê các track của lượt đó.
 - **Truy vết hành trình:** camera có thể có vị trí (`location`: tọa độ, tên địa điểm, hướng quay). `GET /api/v2/plates/{plate}/journey` ghép các lượt xuất hiện của một biển trên mọi camera theo thời gian, tính khoảng cách, thời gian và tốc độ giữa hai camera liên tiếp, đánh dấu chặng vô lý (vượt `PLATE_JOURNEY_MAX_KMH`, mặc định 150 km/h, hoặc hai camera thấy cùng lúc). `match=fuzzy` theo được cả biển bị đọc sai 1–2 ký tự dễ nhầm (`0/D/O`, `8/B`, `5/S`, `1/I`, `2/Z`, `6/G`); tìm kiếm `GET /recognition-results` cũng có `match=fuzzy`.
@@ -186,7 +187,7 @@ node dist/src/cli.js live-payload --pipeline pbl6-resnet34c-joint5-v1 --url "htt
 
 ## Dữ liệu và migration
 
-15 bảng nghiệp vụ: `users`, `auth_sessions`, `media_assets`, `recognition_jobs`, `plate_appearances`, `plate_detections`, `ocr_predictions`, `recognition_reviews`, cùng `stream_sources`, `live_sessions`, `live_session_events`, `plate_watchlist` cho live, và `evaluation_sets`, `evaluation_items`, `evaluation_labels` cho gán nhãn độc lập. Tìm biển gần đúng dùng extension `fuzzystrmatch` (có sẵn trong PostgreSQL contrib; migration 0013 tạo nó, nên user DB cần quyền tạo extension) và hàm `plate_skeleton()` có index. Trigger trên `live_session_events` và `live_sessions` gửi `NOTIFY` khi commit; API nghe để đẩy SSE. Thêm bảng kỹ thuật `schema_migrations` lưu checksum migration. Schema SQL nằm ở `src/database/migrations/`.
+16 bảng nghiệp vụ: `users`, `auth_sessions`, `audit_log` (nhật ký truy cập: đăng nhập, tra cứu biển, xem hành trình và bằng chứng, xuất dữ liệu, thay đổi camera/watchlist/tài khoản; chỉ Admin đọc qua `GET /api/v2/audit-logs`), `media_assets`, `recognition_jobs`, `plate_appearances`, `plate_detections`, `ocr_predictions`, `recognition_reviews`, cùng `stream_sources`, `live_sessions`, `live_session_events`, `plate_watchlist` cho live, và `evaluation_sets`, `evaluation_items`, `evaluation_labels` cho gán nhãn độc lập. Tìm biển gần đúng dùng extension `fuzzystrmatch` (có sẵn trong PostgreSQL contrib; migration 0013 tạo nó, nên user DB cần quyền tạo extension) và hàm `plate_skeleton()` có index. Trigger trên `live_session_events` và `live_sessions` gửi `NOTIFY` khi commit; API nghe để đẩy SSE. Thêm bảng kỹ thuật `schema_migrations` lưu checksum migration. Schema SQL nằm ở `src/database/migrations/`.
 
 - PostgreSQL giữ metadata; `data/media/{id}` giữ nguồn; `data/recognition/{job_id}` giữ crop/keyframe/log, kể cả job của track live; `data/live/{session_id}` giữ payload, log và track chưa nhập.
 - Job có đúng một nguồn: `media_id` (upload) hoặc `live_session_id` (live).

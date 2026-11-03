@@ -37,6 +37,7 @@ import {
 import { ResultDetailResponse, ReviewResponse, SearchResultResponse } from '../common/api-models';
 import { Storage } from '../media/storage';
 import { AuthGuard } from '../auth/auth.guard';
+import { AuditLog } from '../audit/audit';
 
 const search = pagination
   .extend({
@@ -89,6 +90,7 @@ export class ResultsController {
     private db: Database,
     private owner: Ownership,
     private storage: Storage,
+    private audit: AuditLog,
   ) {}
   @Get('recognition-results')
   @ApiPageResponse(SearchResultResponse)
@@ -152,8 +154,20 @@ export class ResultsController {
     let fields = RESULT_FIELDS,
       nearest = '';
     if (f.plate !== undefined) {
-      const { where, distance } = plateClause(f.match, plateQuery(f.plate), values);
+      const plate = plateQuery(f.plate);
+      const { where, distance } = plateClause(f.match, plate, values);
       clauses.push(where);
+      // Searching a plate is what the log is for; browsing without one is not recorded.
+      await this.audit.record(req, 'results.search', {
+        details: {
+          plate,
+          match: f.match,
+          captured_from: f.captured_from,
+          captured_to: f.captured_to,
+          stream_source_id: f.stream_source_id,
+          origin: f.origin,
+        },
+      });
       if (distance) {
         fields += `,${distance} AS match_distance`;
         nearest = 'match_distance,';
@@ -240,6 +254,11 @@ export class ResultsController {
   @ApiFailures(404)
   async detail(@Req() req: { user: Actor }, @Param('id') id: string) {
     const appearance = await this.owner.result(req.user, id);
+    await this.audit.record(req, 'result.view', {
+      targetType: 'result',
+      targetId: id,
+      details: { plate: appearance.effective_text },
+    });
     const detections = (
       await this.db.query(
         'SELECT * FROM plate_detections WHERE appearance_id=$1 ORDER BY selected_order,id',
@@ -331,7 +350,7 @@ export class ResultsController {
   })
   async review(@Req() req: { user: Actor }, @Param('id') id: string, @Body() input: unknown) {
     const body = review.parse(input);
-    return this.db.transaction(async (c) => {
+    const reviewed = await this.db.transaction(async (c) => {
       const result = await this.owner.result(req.user, id, c, true);
       if (result.revision !== body.expected_revision)
         throw new ConflictException('Result revision changed; reload before editing.');
@@ -372,6 +391,12 @@ export class ResultsController {
         )
       ).rows[0];
     });
+    await this.audit.record(req, 'result.review', {
+      targetType: 'result',
+      targetId: id,
+      details: { action: body.action, corrected_text: reviewed.corrected_text },
+    });
+    return reviewed;
   }
 
   @Get('detections/:id/artifacts/:kind')
@@ -417,6 +442,7 @@ export class ResultsController {
       .strict()
       .parse(input);
     await this.owner.job(req.user, id, true);
+    await this.audit.record(req, 'job.export', { targetType: 'job', targetId: id });
     // Joint OCR decoder evidence, matching the notebook's ocr_predictions.csv columns.
     const rows = (
       await this.db.query(

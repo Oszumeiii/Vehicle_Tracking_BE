@@ -33,6 +33,7 @@ import {
 } from '../common/api-models';
 import { Storage } from '../media/storage';
 import { AuthGuard } from '../auth/auth.guard';
+import { AuditLog } from '../audit/audit';
 import { PipelineRegistry } from '../recognition/registry';
 
 const createSchema = z
@@ -107,6 +108,7 @@ export class JobsController {
     private owner: Ownership,
     private registry: PipelineRegistry,
     private operations: JobOperations,
+    private audit: AuditLog,
   ) {}
   @Get('pipelines')
   @ApiCollectionResponse(PipelineResponse)
@@ -245,7 +247,8 @@ export class JobsController {
     description: 'Finished job and derived evidence deleted; source retained.',
   })
   @ApiFailures(404, 409)
-  remove(@Req() req: { user: Actor }, @Param('id') id: string) {
-    return this.operations.remove(req.user, id);
+  async remove(@Req() req: { user: Actor }, @Param('id') id: string) {
+    await this.operations.remove(req.user, id);
+    await this.audit.record(req, 'job.delete', { targetType: 'job', targetId: id });
   }
 }

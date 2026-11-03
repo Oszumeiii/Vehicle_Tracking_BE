@@ -1,6 +1,7 @@
 import { recordMinutes } from './clips';
 import { readdir, rm, stat } from 'node:fs/promises';
 import * as path from 'node:path';
+import { auditRetentionDays } from '../audit/audit';
 import { Database } from '../database/database';
 import { safeStorage, WorkerOptions } from '../recognition/engine';
 import { folderBytes, removeFolder } from './files';
@@ -60,7 +61,17 @@ export class Retention {
       orphans: await this.sweepOrphans(),
       recordings: await this.sweepRecordings(),
       sessions: await this.deleteSignIns(),
+      audit: await this.deleteAuditLog(),
     };
+  }
+
+  /** Audit rows older than PLATE_AUDIT_RETENTION_DAYS (default 365). */
+  private async deleteAuditLog() {
+    const { rowCount } = await this.database.query(
+      `DELETE FROM audit_log WHERE created_at < now() - make_interval(days => $1)`,
+      [auditRetentionDays()],
+    );
+    return rowCount ?? 0;
   }
 
   /** Sign-in sessions expired or signed out more than a week ago; they only grow otherwise. */

@@ -21,6 +21,7 @@ import { Ownership } from '../common/ownership';
 import { ApiFailures, ApiRangedFileResponse, ApiPage, ApiPageResponse } from '../common/openapi';
 import { MediaResponse } from '../common/api-models';
 import { AuthGuard } from '../auth/auth.guard';
+import { AuditLog } from '../audit/audit';
 import { Storage, MediaUploadInterceptor } from './storage';
 
 export const mediaView = (row: any) => {
@@ -43,6 +44,7 @@ export class MediaController {
     private db: Database,
     private owner: Ownership,
     private storage: Storage,
+    private audit: AuditLog,
   ) {}
   @Post()
   @ApiResponse({ status: 201, type: MediaResponse })
@@ -121,9 +123,10 @@ export class MediaController {
   @ApiFailures(404, 409)
   async remove(@Req() req: { user: Actor }, @Param('id') id: string) {
     let quarantined: Awaited<ReturnType<Storage['quarantine']>> | undefined;
+    let name: string | undefined;
     try {
       await this.db.transaction(async (c) => {
-        await this.owner.media(req.user, id, c, true);
+        name = (await this.owner.media(req.user, id, c, true)).original_name;
         if (
           (await c.query('SELECT id FROM recognition_jobs WHERE media_id=$1 LIMIT 1', [id]))
             .rowCount
@@ -136,6 +139,11 @@ export class MediaController {
       await quarantined?.restore();
       throw error;
     }
+    await this.audit.record(req, 'media.delete', {
+      targetType: 'media',
+      targetId: id,
+      details: { name },
+    });
     // The committed deletion stays successful if filesystem cleanup must be retried.
     await quarantined?.purge().catch(() => {});
   }

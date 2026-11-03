@@ -45,6 +45,7 @@ import {
   streamZones,
 } from '../common/api-models';
 import { AuthGuard } from '../auth/auth.guard';
+import { AuditLog } from '../audit/audit';
 import { PipelineRegistry } from '../recognition/registry';
 import { Storage } from '../media/storage';
 import { LiveEventsHub } from './events.hub';
@@ -199,6 +200,7 @@ export class LiveController {
     private registry: PipelineRegistry,
     private storage: Storage,
     private hub: LiveEventsHub,
+    private audit: AuditLog,
   ) {}
 
   private async withActive(rows: Record<string, any>[]) {
@@ -279,6 +281,11 @@ export class LiveController {
         ],
       )
     ).rows[0];
+    await this.audit.record(req, 'camera.create', {
+      targetType: 'camera',
+      targetId: row.id,
+      details: { name: row.name, source_type: row.source_type },
+    });
     return { ...sourceView(row), active_session: null };
   }
 
@@ -507,6 +514,11 @@ export class LiveController {
         )
       ).rows[0];
     });
+    await this.audit.record(req, 'camera.update', {
+      targetType: 'camera',
+      targetId: id,
+      details: { name: row.name, changed: Object.keys(body).sort() },
+    });
     return (await this.withActive([row]))[0];
   }
 
@@ -515,8 +527,8 @@ export class LiveController {
   @ApiResponse({ status: 204, description: 'Camera without sessions deleted.' })
   @ApiFailures(404, 409)
   async removeSource(@Req() req: { user: Actor }, @Param('id') id: string) {
-    await this.db.transaction(async (c) => {
-      await this.owner.streamSource(req.user, id, c, true);
+    const source = await this.db.transaction(async (c) => {
+      const found = await this.owner.streamSource(req.user, id, c, true);
       if (
         (await c.query('SELECT 1 FROM live_sessions WHERE stream_source_id=$1 LIMIT 1', [id]))
           .rowCount
@@ -525,6 +537,12 @@ export class LiveController {
           'This camera has sessions and their results; it cannot be deleted.',
         );
       await c.query('DELETE FROM stream_sources WHERE id=$1', [id]);
+      return found;
+    });
+    await this.audit.record(req, 'camera.delete', {
+      targetType: 'camera',
+      targetId: id,
+      details: { name: source.name, source_type: source.source_type },
     });
   }
 
@@ -567,7 +585,7 @@ export class LiveController {
         'Live recognition needs a five-frame joint OCR pipeline.',
       );
     try {
-      return await this.db.transaction(async (c) => {
+      const started = await this.db.transaction(async (c) => {
         const source = await this.owner.streamSource(req.user, id, c, true);
         const settings = {
           min_confidence: body.min_confidence,
@@ -585,6 +603,12 @@ export class LiveController {
         await recordEvent(c, row.id, 'status', { status: 'queued' });
         return sessionView(row);
       });
+      await this.audit.record(req, 'session.start', {
+        targetType: 'session',
+        targetId: (started as Record<string, any>).id,
+        details: { camera: id, pipeline_id: body.pipeline_id },
+      });
+      return started;
     } catch (error) {
       if ((error as any)?.code === '23505')
         throw new ConflictException('This camera already has an active session.');
@@ -661,6 +685,11 @@ export class LiveController {
       return deleted.rows.map((row) => row.id as string);
     });
     // Rows are gone; folders that fail to delete are swept by retention as orphans.
+    await this.audit.record(req, 'session.delete', {
+      targetType: 'session',
+      targetId: id,
+      details: { results: jobs.length },
+    });
     for (const job of jobs) await removeFolder(this.storage.path(`recognition/${job}`));
     await removeFolder(this.storage.path(`live/${id}`));
   }
@@ -675,7 +704,7 @@ export class LiveController {
   })
   @ApiFailures(404, 409)
   async stopSession(@Req() req: { user: Actor }, @Param('id') id: string) {
-    return this.db.transaction(async (c) => {
+    const stopped = await this.db.transaction(async (c) => {
       const session = await this.owner.liveSession(req.user, id, c, true);
       if (!ACTIVE_STATUSES.includes(session.status))
         throw new ConflictException('This session has already finished.');
@@ -694,6 +723,12 @@ export class LiveController {
       ]);
       return sessionView(row);
     });
+    await this.audit.record(req, 'session.stop', {
+      targetType: 'session',
+      targetId: id,
+      details: { camera: (stopped as Record<string, any>).stream_source_id },
+    });
+    return stopped;
   }
 
   @Get('live-sessions/:id/events')

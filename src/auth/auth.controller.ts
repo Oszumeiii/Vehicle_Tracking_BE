@@ -28,6 +28,7 @@ import { LoginResponse, UserResponse } from '../common/api-models';
 import { AuthGuard } from './auth.guard';
 import { hashPassword, verifyPassword, makeToken, hashToken } from './security';
 import { LoginThrottle } from './throttle';
+import { AuditLog } from '../audit/audit';
 
 const email = z.string().trim().toLowerCase().pipe(z.email().max(254));
 const loginSchema = z.object({ email, password: z.string().min(1).max(1024) }).strict();
@@ -62,7 +63,10 @@ export class AuthController {
     this.window,
   );
 
-  constructor(private readonly db: Database) {}
+  constructor(
+    private readonly db: Database,
+    private readonly audit: AuditLog,
+  ) {}
 
   @Post('auth/login')
   @HttpCode(200)
@@ -92,6 +96,10 @@ export class AuthController {
     const account = `${body.email}|${address}`;
     const wait = Math.max(this.perAccount.retryAfter(account), this.perAddress.retryAfter(address));
     if (wait) {
+      await this.audit.record(req, 'auth.login_failed', {
+        userId: null,
+        details: { email: body.email, reason: 'throttled' },
+      });
       res.setHeader('Retry-After', String(wait));
       throw new HttpException(
         `Too many failed sign-ins. Try again in ${Math.ceil(wait / 60)} min.`,
@@ -103,6 +111,10 @@ export class AuthController {
     if (!valid || !user?.is_active) {
       this.perAccount.fail(account);
       this.perAddress.fail(address);
+      await this.audit.record(req, 'auth.login_failed', {
+        userId: user?.id ?? null,
+        details: { email: body.email, reason: user && !user.is_active ? 'inactive' : 'invalid' },
+      });
       throw new UnauthorizedException('Invalid email or password.');
     }
     this.perAccount.succeed(account);
@@ -120,6 +132,7 @@ export class AuthController {
         [newId(), user.id, hashToken(token), expiry],
       );
     });
+    await this.audit.record(req, 'auth.login', { userId: user.id });
     return { access_token: token, token_type: 'bearer', expires_at: expiry };
   }
 
@@ -132,6 +145,7 @@ export class AuthController {
     await this.db.query('UPDATE auth_sessions SET revoked_at=now() WHERE id=$1', [
       req.user.session_id,
     ]);
+    await this.audit.record(req, 'auth.logout');
   }
 
   @Get('auth/me')
@@ -183,12 +197,18 @@ export class AuthController {
   async create(@Req() req: { user: Actor }, @Body() input: unknown) {
     admin(req.user);
     const body = userSchema.parse(input);
-    return (
+    const created = (
       await this.db.query(
         `INSERT INTO users(id,email,password_hash,display_name,role) VALUES($1,$2,$3,$4,$5) RETURNING ${publicFields}`,
         [newId(), body.email, await hashPassword(body.password), body.display_name, body.role],
       )
     ).rows[0];
+    await this.audit.record(req, 'user.create', {
+      targetType: 'user',
+      targetId: created.id,
+      details: { email: created.email, role: created.role },
+    });
+    return created;
   }
 
   @Patch('users/:id')
@@ -213,7 +233,7 @@ export class AuthController {
     admin(req.user);
     const body = patchSchema.parse(input);
     const password = body.password ? await hashPassword(body.password) : null;
-    return this.db.transaction(async (c) => {
+    const updated = await this.db.transaction(async (c) => {
       await c.query('SELECT pg_advisory_xact_lock(781921)');
       const target = (await c.query('SELECT * FROM users WHERE id=$1 FOR UPDATE', [targetId]))
         .rows[0];
@@ -238,5 +258,16 @@ export class AuthController {
         );
       return result.rows[0];
     });
+    await this.audit.record(req, 'user.update', {
+      targetType: 'user',
+      targetId: targetId,
+      details: {
+        email: updated.email,
+        changed: Object.keys(body).sort(), // names only: a new password is never logged
+        role: body.role,
+        is_active: body.is_active,
+      },
+    });
+    return updated;
   }
 }
