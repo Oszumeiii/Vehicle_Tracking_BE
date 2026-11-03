@@ -308,7 +308,16 @@ export class StreamSourceResponse {
   @ApiProperty() id!: string;
   @ApiProperty() owner_id!: string;
   @ApiProperty() name!: string;
-  @ApiProperty({ enum: ['youtube', 'file', 'rtsp'] }) source_type!: string;
+  @ApiProperty({ enum: ['youtube', 'file', 'rtsp', 'media'] }) source_type!: string;
+  @ApiProperty({
+    ...nullableText,
+    description: 'source_type media: the uploaded video the camera replays as if live.',
+  })
+  media_id!: string | null;
+  @ApiProperty({
+    description: 'source_type media: replay forever; otherwise a session ends after one pass.',
+  })
+  replay_loop!: boolean;
   @ApiProperty({
     description:
       'YouTube link; for a demo camera the video path under demo-videos; for an IP camera the RTSP URL with its password replaced by ***.',
@@ -371,8 +380,9 @@ export class TrackEventPayload {
   @ApiProperty(nullableText) duplicate_of_job_id!: string | null;
   @ApiProperty() sighting_id!: string;
   @ApiProperty({
-    enum: ['stream', 'received'],
-    description: 'stream: broadcast clock (HLS program date-time); received: when frames arrived.',
+    enum: ['stream', 'received', 'recorded'],
+    description:
+      'stream: broadcast clock (HLS program date-time); received: when frames arrived; recorded: an uploaded video replayed as live, at its filming time (recorded_at) + offset.',
   })
   capture_clock!: string;
   @ApiProperty({

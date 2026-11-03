@@ -17,11 +17,12 @@ import { attachClip } from './clips';
 import { ingestTrack } from './ingest';
 import {
   DEFAULT_MIN_CONFIDENCE,
-  demoVideoFile,
   isLivePipeline,
+  LiveSource,
   livePayload,
   redactUrl,
 } from './payload';
+import { isReplay, replaySource } from './replay';
 import { ACTIVE_SQL, recordEvent } from './sessions';
 
 type Row = Record<string, any>;
@@ -339,12 +340,13 @@ export class LiveManager {
       ).rows[0];
       if (!session) return undefined;
       const source = (
-        await c.query('SELECT url,source_type FROM stream_sources WHERE id=$1', [
-          session.stream_source_id,
-        ])
+        await c.query(
+          'SELECT url,source_type,media_id,replay_loop FROM stream_sources WHERE id=$1',
+          [session.stream_source_id],
+        )
       ).rows[0];
       await recordEvent(c, session.id, 'status', { status: 'starting' });
-      return { ...session, url: source.url, source_type: source.source_type };
+      return { ...session, ...source };
     });
   }
 
@@ -355,14 +357,27 @@ export class LiveManager {
       await verifySnapshot(session.pipeline_snapshot, this.options);
       await mkdir(folder, { recursive: true });
       const payload = path.join(folder, 'payload.json');
+      let source: LiveSource;
+      if (isReplay(session)) {
+        const replay = await replaySource(this.database, this.options.dataDir, session);
+        if (!replay)
+          throw Object.assign(new Error('The video this camera replays is no longer available.'), {
+            code: 'SOURCE_MISSING',
+          });
+        source = {
+          type: 'file',
+          path: replay.path,
+          loop: replay.loop,
+          startTime: replay.recordedAt,
+        };
+      } else
+        source = { type: session.source_type === 'rtsp' ? 'rtsp' : 'youtube', url: session.url };
       await writeFile(
         payload,
         JSON.stringify(
           livePayload(
             session.pipeline_snapshot,
-            session.source_type === 'file'
-              ? { type: 'file', path: demoVideoFile(this.options.dataDir, session.url) }
-              : { type: session.source_type === 'rtsp' ? 'rtsp' : 'youtube', url: session.url },
+            source,
             session.settings.exclude_zones ?? [],
             session.settings.max_height ?? 1080,
           ),

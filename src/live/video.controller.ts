@@ -21,7 +21,7 @@ import { Ownership } from '../common/ownership';
 import { Database } from '../database/database';
 import { safeStorage } from '../recognition/engine';
 import { coverage, cutDemoVideo, cutRecording, NotRecorded, recordingIndexes } from './clips';
-import { demoVideoFile } from './payload';
+import { isReplay, replaySource } from './replay';
 
 type Row = Record<string, any>;
 const PAD_SECONDS = 3;
@@ -78,17 +78,14 @@ export class VideoController {
       };
     const camera = (
       await this.db.query(
-        `SELECT c.source_type, c.url FROM live_sessions s JOIN stream_sources c ON c.id=s.stream_source_id
-         WHERE s.id=$1`,
+        `SELECT c.source_type, c.url, c.media_id, c.replay_loop FROM live_sessions s
+         JOIN stream_sources c ON c.id=s.stream_source_id WHERE s.id=$1`,
         [job.live_session_id],
       )
     ).rows[0];
-    if (camera?.source_type === 'file' && result.start_seconds !== null) {
-      const video = await Promise.resolve()
-        .then(() => demoVideoFile(settings().dataDir, camera.url))
-        .catch(() => null);
-      if (video && (await stat(video).catch(() => null))?.isFile())
-        return { kind: 'demo', first_seen_offset: null, job, result, video };
+    if (isReplay(camera) && result.start_seconds !== null) {
+      const video = (await replaySource(this.db, settings().dataDir, camera))?.path;
+      if (video) return { kind: 'demo', first_seen_offset: null, job, result, video };
       return { kind: 'none', first_seen_offset: null, job, result };
     }
     const recorded = await coverage(

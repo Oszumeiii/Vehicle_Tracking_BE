@@ -1022,6 +1022,7 @@ test('a camera is watched as HLS from its recording, a demo camera as its file',
     duration: 60,
     position_seconds: 125.5,
     position_at: at,
+    loop: true,
   });
   await api.get(`${demoBase}/demo-video`).set(as('admin')).expect(200);
   await api

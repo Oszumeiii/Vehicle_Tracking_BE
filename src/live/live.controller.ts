@@ -128,6 +128,16 @@ const createSource = z.union([
       location: location.optional(),
     })
     .strict(),
+  z
+    .object({
+      name,
+      source_type: z.literal('media'),
+      media_id: z.string().min(1).max(32),
+      loop: z.boolean().default(false),
+      exclude_zones: excludeZones.default([]),
+      location: location.optional(),
+    })
+    .strict(),
 ]);
 const runSettings = {
   min_confidence: z.number().min(0).max(1).default(DEFAULT_MIN_CONFIDENCE),
@@ -153,6 +163,7 @@ const updateSource = z
     keyframe_retention_hours: retention.optional(),
     track_retention_days: retention.optional(),
     location: location.optional(),
+    loop: z.boolean().optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, { message: 'Nothing to update.' });
@@ -233,11 +244,22 @@ export class LiveController {
         },
         source_type: {
           type: 'string',
-          enum: ['file', 'rtsp'],
+          enum: ['file', 'rtsp', 'media'],
           description:
-            '`file`: demo camera (administrators) replaying `path`. `rtsp`: IP camera at `url`; a password in it is never returned.',
+            '`file`: demo camera (administrators) replaying `path`. `rtsp`: IP camera at `url`; a password in it is never returned. `media`: an uploaded video (`media_id`) replayed as if live.',
         },
         path: { type: 'string', description: 'Video under PLATE_DATA_DIR/demo-videos' },
+        media_id: {
+          type: 'string',
+          description:
+            'source_type media: an uploaded video (yours, or any for administrators) replayed at its frame rate through the live pipeline.',
+        },
+        loop: {
+          type: 'boolean',
+          default: false,
+          description:
+            'source_type media: replay forever instead of ending the session after one pass.',
+        },
         exclude_zones: streamZones,
         location: locationSchema,
       },
@@ -246,11 +268,26 @@ export class LiveController {
   async createSource(@Req() req: { user: Actor }, @Body() input: unknown) {
     const body = createSource.parse(input);
     let type = 'youtube',
-      url: string;
+      url: string,
+      mediaId: string | null = null,
+      loop = false,
+      where = locationColumns(body.location ?? null);
     if (!('source_type' in body)) url = body.url;
     else if (body.source_type === 'rtsp') {
       type = 'rtsp';
       url = body.url;
+    } else if (body.source_type === 'media') {
+      // The user's own uploaded video (any video an administrator can see), played as if live.
+      const media = await this.owner.media(req.user, body.media_id);
+      if (media.media_type !== 'video')
+        throw new UnprocessableEntityException('Only a video can be replayed as a live camera.');
+      type = 'media';
+      url = media.original_name;
+      mediaId = media.id;
+      loop = body.loop;
+      // Where the footage was filmed, unless the camera is given its own place.
+      if (body.location === undefined && media.latitude !== null)
+        where = [media.latitude, media.longitude, media.location_name, media.heading];
     } else {
       if (req.user.role !== 'admin')
         throw new ForbiddenException('Only administrators can add demo cameras.');
@@ -268,8 +305,8 @@ export class LiveController {
     const row = (
       await this.db.query(
         `INSERT INTO stream_sources(id,owner_id,name,source_type,url,exclude_zones,
-           latitude,longitude,location_name,heading)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+           latitude,longitude,location_name,heading,media_id,replay_loop)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
         [
           newId(),
           req.user.id,
@@ -277,7 +314,9 @@ export class LiveController {
           type,
           url,
           JSON.stringify(body.exclude_zones),
-          ...locationColumns(body.location ?? null),
+          ...where,
+          mediaId,
+          loop,
         ],
       )
     ).rows[0];
@@ -491,13 +530,16 @@ export class LiveController {
       // Only an IP camera's URL can change (new credentials); a YouTube or demo camera is its URL.
       if (body.url !== undefined && source.source_type !== 'rtsp')
         throw new UnprocessableEntityException('Only an RTSP camera URL can be changed.');
+      if (body.loop !== undefined && source.source_type !== 'media')
+        throw new UnprocessableEntityException('Only a camera replaying an upload can loop.');
       const pick = <K extends keyof typeof body>(key: K) =>
         body[key] === undefined ? source[key] : body[key];
       return (
         await c.query(
           `UPDATE stream_sources SET name=$2,exclude_zones=$3,always_on=$4,auto_settings=$5,
           keyframe_retention_hours=$6,track_retention_days=$7,url=$8,
-          latitude=$9,longitude=$10,location_name=$11,heading=$12,updated_at=now() WHERE id=$1 RETURNING *`,
+          latitude=$9,longitude=$10,location_name=$11,heading=$12,replay_loop=$13,updated_at=now()
+          WHERE id=$1 RETURNING *`,
           [
             id,
             pick('name'),
@@ -510,6 +552,7 @@ export class LiveController {
             ...(body.location === undefined
               ? [source.latitude, source.longitude, source.location_name, source.heading]
               : locationColumns(body.location)),
+            body.loop ?? source.replay_loop,
           ],
         )
       ).rows[0];

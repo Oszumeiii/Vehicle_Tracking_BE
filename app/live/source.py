@@ -386,13 +386,22 @@ class FileFrames:
     consumer instead of dropping frames, so results match the file pipeline.
     loop=True replays the file forever (demo cameras); PTS keep increasing across
     passes, so tracking and capture times see one continuous stream.
+    start_time (aware datetime of the first frame, an uploaded video whose filming time is
+    known) gives the file its own clock: stream_time(pts) = start_time + pts, trusted as is
+    (recorded_clock) rather than checked against receive time like a broadcast clock.
     """
 
-    def __init__(self, path, realtime=False, clock=time.monotonic, loop=False):
+    def __init__(self, path, realtime=False, clock=time.monotonic, loop=False, start_time=None):
         self.path, self.realtime, self.clock, self.loop = path, realtime, clock, loop
         self.lossless = not realtime
         self.finite = not loop
+        self.start_time = start_time
+        self.recorded_clock = start_time is not None
         self._closed = threading.Event()
+
+    def stream_time(self, pts):
+        """Wall clock (UTC) of a frame when the video's filming time is known, else None."""
+        return None if self.start_time is None else self.start_time + timedelta(seconds=pts)
 
     def __iter__(self):
         start, offset = None, 0.

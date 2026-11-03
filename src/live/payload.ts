@@ -69,7 +69,11 @@ export const excludeZones = z
 
 /** Where a live process reads from: a YouTube link, an IP camera, or a demo video replayed in a loop. */
 export type LiveSource =
-  { type: 'youtube'; url: string } | { type: 'rtsp'; url: string } | { type: 'file'; path: string };
+  | { type: 'youtube'; url: string }
+  | { type: 'rtsp'; url: string }
+  // loop: replay forever (demo cameras); startTime: wall clock of the first frame (an upload
+  // played once whose filming time is known), so track times are that clock + PTS.
+  | { type: 'file'; path: string; loop?: boolean; startTime?: Date | string | null };
 
 /** Payload for `python -m app.live`: the same pinned snapshot a job gets, plus the source. */
 export function livePayload(
@@ -83,7 +87,14 @@ export function livePayload(
     source:
       source.type === 'file'
         ? // Paced at its frame rate and looped, so it behaves like a camera that never ends.
-          { type: 'file', path: source.path, realtime: true, loop: true, exclude_zones: zones }
+          {
+            type: 'file',
+            path: source.path,
+            realtime: true,
+            loop: source.loop ?? true,
+            ...(source.startTime ? { start_time: new Date(source.startTime).toISOString() } : {}),
+            exclude_zones: zones,
+          }
         : { type: source.type, url: source.url, exclude_zones: zones, max_height: maxHeight },
   };
 }

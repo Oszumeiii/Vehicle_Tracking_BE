@@ -127,7 +127,10 @@ export async function ingestTrack(
       (Number.isFinite(record.confidence) && record.confidence >= 0)
     ) ||
     !(record.duplicate_of === null || TRACK_KEY.test(record.duplicate_of)) ||
-    !(record.capture_clock === undefined || ['stream', 'received'].includes(record.capture_clock))
+    !(
+      record.capture_clock === undefined ||
+      ['stream', 'received', 'recorded'].includes(record.capture_clock)
+    )
   )
     throw new Error('Invalid live track record');
   const capturedFrom = instant(record.captured_from);
