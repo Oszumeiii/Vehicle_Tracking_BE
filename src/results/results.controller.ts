@@ -25,6 +25,7 @@ import type { Response } from 'express';
 import { z } from 'zod';
 import { Database } from '../database/database';
 import { Actor, checkDates, instant, newId, normalizePlate, pagination } from '../common/http';
+import { plateClause, plateMatch, plateQuery } from './plate-match';
 import { APPEARANCE_MEDIA_FIELDS, JOB_OWNER, JOB_SOURCES, Ownership } from '../common/ownership';
 import {
   ApiFailures,
@@ -40,7 +41,7 @@ import { AuthGuard } from '../auth/auth.guard';
 const search = pagination
   .extend({
     plate: z.string().max(128).optional(),
-    match: z.enum(['exact', 'contains']).default('exact'),
+    match: plateMatch.default('exact'),
     origin: z.enum(['upload', 'live']).optional(),
     media_id: z.string().optional(),
     stream_source_id: z.string().optional(),
@@ -102,8 +103,9 @@ export class ResultsController {
   @ApiQuery({
     name: 'match',
     required: false,
-    enum: ['exact', 'contains'],
-    description: 'Plate matching; exact by default.',
+    enum: ['exact', 'contains', 'fuzzy'],
+    description:
+      'Plate matching; exact by default. `fuzzy` folds look-alike characters (O/D/Q=0, I/L=1, Z=2, S=5, B=8, G=6) and allows 1 edit from 5 characters, 2 from 8; nearest first, with match_distance.',
   })
   @ApiQuery({ name: 'origin', required: false, enum: ['upload', 'live'] })
   @ApiQuery({ name: 'media_id', required: false, type: String })
@@ -141,17 +143,21 @@ export class ResultsController {
     // Uploads count only their latest successful run; every live track is its own run.
     const values: unknown[] = [req.user.role === 'admin', req.user.id],
       clauses = [JOB_OWNER, '(j.live_session_id IS NOT NULL OR latest.id IS NOT NULL)'];
-    if (f.plate !== undefined && !normalizePlate(f.plate))
-      throw new UnprocessableEntityException('Plate query cannot be empty.');
     if (f.origin)
       clauses.push(
         f.origin === 'live' ? 'j.live_session_id IS NOT NULL' : 'j.media_id IS NOT NULL',
       );
     if (f.exclude_duplicates) clauses.push('j.duplicate_of_job_id IS NULL');
+    // Fuzzy matches carry their edit distance and come nearest first.
+    let fields = RESULT_FIELDS,
+      nearest = '';
     if (f.plate !== undefined) {
-      const plate = normalizePlate(f.plate);
-      values.push(f.match === 'contains' ? `%${plate}%` : plate);
-      clauses.push(`a.effective_text ${f.match === 'contains' ? 'LIKE' : '='} $${values.length}`);
+      const { where, distance } = plateClause(f.match, plateQuery(f.plate), values);
+      clauses.push(where);
+      if (distance) {
+        fields += `,${distance} AS match_distance`;
+        nearest = 'match_distance,';
+      }
     }
     for (const [value, sql] of [
       [f.media_id, 'm.id='],
@@ -180,14 +186,14 @@ export class ResultsController {
       const count = await this.db.query(`SELECT count(DISTINCT ${SIGHTING}) ${from}`, values);
       const items = await this.db.query(
         `SELECT * FROM (
-          SELECT DISTINCT ON (${SIGHTING}) ${RESULT_FIELDS},
+          SELECT DISTINCT ON (${SIGHTING}) ${fields},
             count(*) OVER w AS sighting_count, min(j.captured_from) OVER w AS first_seen,
             max(j.captured_to) OVER w AS last_seen
           ${from}
           WINDOW w AS (PARTITION BY ${SIGHTING})
-          ORDER BY ${SIGHTING}, (a.review_status <> 'pending') DESC,
+          ORDER BY ${SIGHTING}, (a.review_status <> 'pending') DESC, ${nearest}
             (j.statistics->>'confidence')::float DESC NULLS LAST, a.id
-        ) grouped ORDER BY coalesce(grouped.first_seen, grouped.captured_from, grouped.uploaded_at) DESC, grouped.id
+        ) grouped ORDER BY ${nearest && 'grouped.match_distance,'}coalesce(grouped.first_seen, grouped.captured_from, grouped.uploaded_at) DESC, grouped.id
         ${page}`,
         [...values, f.limit, f.offset],
       );
@@ -200,7 +206,7 @@ export class ResultsController {
     }
     const count = await this.db.query(`SELECT count(*) ${from}`, values);
     const items = await this.db.query(
-      `SELECT ${RESULT_FIELDS} ${from} ORDER BY coalesce(j.captured_from,m.uploaded_at) DESC,a.id ${page}`,
+      `SELECT ${fields} ${from} ORDER BY ${nearest}coalesce(j.captured_from,m.uploaded_at) DESC,a.id ${page}`,
       [...values, f.limit, f.offset],
     );
     return {

@@ -40,13 +40,19 @@ Job Kaggle joint-frame lưu `recognition_method=joint_multiframe`, `agreement_co
 
 ## Kết quả
 
-- `GET /api/v2/recognition-results`: query `plate`, `origin` (`upload`/`live`), `media_id`, `stream_source_id`, `live_session_id`, `review_status`, `confidence_status`, `exclude_duplicates`, `uploaded_from`, `uploaded_to`, `captured_from`, `captured_to`, phân trang.
-  - Tra cứu khớp chính xác text đã chuẩn hóa; không tự thay `O/0`.
+- `GET /api/v2/recognition-results`: query `plate`, `match` (`exact` mặc định, `contains`, `fuzzy`), `origin` (`upload`/`live`), `media_id`, `stream_source_id`, `live_session_id`, `review_status`, `confidence_status`, `exclude_duplicates`, `uploaded_from`, `uploaded_to`, `captured_from`, `captured_to`, phân trang.
+  - `plate` được chuẩn hóa: chữ hoa, bỏ khoảng trắng, `-` và `.` (`43A-123.45` thành `43A12345`). `exact` khớp chính xác và không tự thay `O/0`.
+  - `match=fuzzy` dùng cho biển bị OCR đọc sai: trước khi so, gộp các ký tự dễ nhầm (`O/D/Q` thành `0`, `I/L` thành `1`, `Z` thành `2`, `S` thành `5`, `B` thành `8`, `G` thành `6`), rồi cho phép lệch 1 ký tự với biển 5–7 ký tự, 2 ký tự với biển từ 8 ký tự; biển dưới 5 ký tự phải khớp đúng. Mỗi kết quả có `match_distance` (số ký tự khác so với chuỗi gõ, tính trên text gốc); sắp xếp theo `match_distance`, rồi theo thời gian.
   - Với video/ảnh upload: dùng job v2 prepare/recognize succeeded mới nhất theo thời điểm tạo và ID của mỗi nguồn; job queued/failed hoặc extraction v1 không che kết quả v2 succeeded cũ.
   - Với live: mọi track đều được tính.
   - Kết quả có `origin`, `captured_from/to`, `confidence_status`, `duplicate_of_job_id`, `sighting_id`; sắp xếp theo giờ chụp (live) hoặc giờ upload.
   - `group_by=sighting`: mỗi lượt xuất hiện một dòng (ưu tiên track đã review, rồi track có confidence cao nhất), kèm `sighting_count`, `first_seen`, `last_seen`. Kết quả upload không gộp.
 - `GET /api/v2/sightings/{id}/results`: các track của một lượt xuất hiện, theo thời gian.
+- `GET /api/v2/plates/{plate}/journey`: **hành trình** của một biển qua các camera live, query `match` (`exact` | `fuzzy`), `captured_from`, `captured_to`, `limit` (1–1000, mặc định 500).
+  - `points`: mỗi lượt xuất hiện (sighting) là một điểm, theo `first_seen`. Mỗi điểm gồm `camera` (`id`, `name`, `location`), `first_seen`, `last_seen`, `reads` (số track), `plate`, `result_id` và `primary_detection_id` để mở bằng chứng, `confidence_status`, `review_status`, `match_distance`. Chỉ tính kết quả user được xem, bỏ kết quả đã review `rejected` hoặc `unreadable`; text đã sửa khi review được dùng thay text máy.
+  - `legs[i]` nối `points[i]` với `points[i+1]`, gồm `gap_seconds` (từ lúc rời camera trước đến lúc tới camera sau), `distance_m` (đường chim bay, `null` nếu một camera chưa có vị trí), `speed_kmh`. `implausible=true` kèm `reasons`: `too_fast` khi vượt `PLATE_JOURNEY_MAX_KMH` (mặc định 150), `overlap` khi hai camera khác nhau thấy biển cùng lúc (hai xe trùng biển hoặc đọc sai).
+  - `summary`: `sightings`, `cameras`, `first_seen`, `last_seen`, `plates` (các biển đã gộp khi `fuzzy`), `implausible_legs`, `max_speed_kmh`, `truncated` (còn điểm sau `limit`).
+  - Kết quả từ video upload không có vị trí nên không nằm trong hành trình.
 - `GET /api/v2/recognition-results/{id}`: dự đoán tổng hợp, từng crop/prediction, URL bằng chứng và lịch sử review.
 - `GET /api/v2/detections/{id}/artifacts/{kind}`: `crop|frame|enhanced`. Loại bằng chứng không tồn tại trả `404`; MIME theo file. Nhánh enhanced chỉ có khi thực sự được model/worker hỗ trợ, không sinh giả.
 - `POST /api/v2/recognition-results/{id}/reviews`: `201`. Ví dụ:
@@ -65,6 +71,7 @@ Action `confirm` chấp nhận text máy; `correct` bắt buộc text mới; `un
   - `url` phải là link YouTube.
   - **Camera IP** (owner hoặc admin): `{name,source_type:"rtsp",url,exclude_zones?}`, với `url` là `rtsp://` hoặc `rtsps://`, có thể kèm `user:mật-khẩu@`. Mọi response đều trả `url` đã che mật khẩu (`rtsp://user:***@host/...`); sự kiện và `error_message` cũng được che. Camera không có `embed_url`; xem bằng snapshot.
   - **Camera demo** (chỉ admin): `{name,source_type:"file",path,exclude_zones?}`. `path` là file video (`.mp4`, `.mov`, `.mkv`, `.avi`, `.webm`) nằm trong `PLATE_DATA_DIR/demo-videos/`; đường dẫn ra ngoài thư mục đó hoặc file không tồn tại trả `422`, user thường trả `403`. Phiên phát lại video theo vòng lặp với tốc độ thật; camera không có `embed_url`.
+  - `location` (tùy chọn, mọi loại camera): `{latitude, longitude, name?, heading?}` theo WGS84, `heading` là hướng camera quay (0–359°). Response luôn có `location`, là `null` khi chưa đặt.
   - `exclude_zones` gồm tối đa 16 hình chữ nhật `[x1,y1,x2,y2]` chuẩn hóa 0..1; detection có tâm nằm trong vùng bị bỏ.
 - `GET /api/v2/demo-videos` (admin): `{items:[{path,size_bytes}]}`, các video dùng được cho camera demo.
 - `GET /api/v2/stream-sources`, `GET /api/v2/stream-sources/{id}`: camera của mình (admin thấy tất cả), kèm `active_session`.
@@ -79,7 +86,7 @@ Action `confirm` chấp nhận text máy; `correct` bắt buộc text mới; `un
 - **Bản ghi camera:**
   - `GET /api/v2/stream-sources/{id}/recording/coverage` → `{items:[{from,to}]}`, các khoảng còn bản ghi.
   - `GET /api/v2/stream-sources/{id}/recording?from=ISO&to=ISO` (tối đa 600 s) → `video/mp4`. Sai khoảng thời gian trả `400`, không còn bản ghi trả `404`.
-- `PATCH /api/v2/stream-sources/{id}`: `url` (chỉ camera RTSP, để đổi mật khẩu; loại khác trả `422`), `name`, `exclude_zones`, `always_on`, `auto_settings` (`{pipeline_id, min_confidence?, max_track_seconds?, max_height?}`; `always_on` cần `pipeline_id` của profile joint), `keyframe_retention_hours`, `track_retention_days` (`null` là giữ mãi). Áp dụng từ phiên kế tiếp.
+- `PATCH /api/v2/stream-sources/{id}`: `url` (chỉ camera RTSP, để đổi mật khẩu; loại khác trả `422`), `name`, `exclude_zones`, `always_on`, `auto_settings` (`{pipeline_id, min_confidence?, max_track_seconds?, max_height?}`; `always_on` cần `pipeline_id` của profile joint), `keyframe_retention_hours`, `track_retention_days` (`null` là giữ mãi), `location` (`null` để xóa vị trí). Áp dụng từ phiên kế tiếp.
 - `DELETE /api/v2/stream-sources/{id}`: `204`; camera đã có phiên trả `409`.
 - `POST /api/v2/stream-sources/{id}/sessions`: `{pipeline_id,min_confidence?,max_track_seconds?,max_height?}` → `202`, phiên `queued`. `min_confidence` mặc định 0.96 (hiệu chỉnh trên ICPR, xem [EVALUATION.md](EVALUATION.md#kết-quả-hiệu-chỉnh-offline-trên-icpr-26102026)). `max_height` là 480, 720 hoặc 1080 (mặc định).
   - Chỉ profile `five_frame_joint`, nếu không thì trả `422`.
@@ -195,6 +202,6 @@ Lỗi: `401` thiếu/hết phiên, `403` thiếu vai trò, `404` không có/khô
 
 ## FinalV1 integration
 
-- Result search accepts `match=exact|contains`; the default remains `exact`. Partial matching uses the reviewed effective plate text, so rejected plates do not reappear through machine predictions.
+- Result search accepts `match=exact|contains|fuzzy`; the default remains `exact`. Partial matching uses the reviewed effective plate text, so rejected plates do not reappear through machine predictions.
 - Job and result responses include upload media metadata (`media_type`, `media_duration_seconds`, `media_original_name`). Live sources have null upload metadata. Result summaries also expose the primary detection ID and bounding boxes for evidence previews.
 - Browser media elements may send `?token=<access_token>` only on GET/HEAD requests to `/api/v2/media/{id}/content` and `/api/v2/detections/{id}/artifacts/{crop|frame|enhanced}`. Session expiry and ownership checks still apply. An Authorization header takes precedence; other endpoints require the header.

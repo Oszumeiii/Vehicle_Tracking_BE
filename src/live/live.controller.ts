@@ -63,6 +63,7 @@ import {
   redactUrl,
 } from './payload';
 import { ACTIVE_SQL, ACTIVE_STATUSES, recordEvent, sessionView } from './sessions';
+import { location, locationColumns, locationSchema, locationView } from './location';
 
 const name = z.string().trim().min(1).max(200);
 const eventId = z.string().regex(/^\d{1,18}$/, 'Event ids are non-negative integers.');
@@ -76,8 +77,10 @@ const streamFilter = z
 
 function sourceView(row: Record<string, any>) {
   const videoId = row.source_type === 'youtube' ? youtubeVideoId(row.url) : null;
+  const { latitude: _lat, longitude: _lng, location_name: _name, heading: _heading, ...rest } = row;
   return {
-    ...row,
+    ...rest,
+    location: locationView(row),
     url: redactUrl(row.url), // camera credentials never leave the server
     video_id: videoId,
     embed_url: videoId ? `https://www.youtube-nocookie.com/embed/${videoId}` : null,
@@ -103,6 +106,7 @@ const createSource = z.union([
         .max(2000)
         .refine(isYoutubeUrl, { message: 'Provide a YouTube watch or live URL.' }),
       exclude_zones: excludeZones.default([]),
+      location: location.optional(),
     })
     .strict(),
   z
@@ -111,6 +115,7 @@ const createSource = z.union([
       source_type: z.literal('file'),
       path: demoPath,
       exclude_zones: excludeZones.default([]),
+      location: location.optional(),
     })
     .strict(),
   z
@@ -119,6 +124,7 @@ const createSource = z.union([
       source_type: z.literal('rtsp'),
       url: rtspUrl,
       exclude_zones: excludeZones.default([]),
+      location: location.optional(),
     })
     .strict(),
 ]);
@@ -145,6 +151,7 @@ const updateSource = z
       .optional(),
     keyframe_retention_hours: retention.optional(),
     track_retention_days: retention.optional(),
+    location: location.optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, { message: 'Nothing to update.' });
@@ -230,6 +237,7 @@ export class LiveController {
         },
         path: { type: 'string', description: 'Video under PLATE_DATA_DIR/demo-videos' },
         exclude_zones: streamZones,
+        location: locationSchema,
       },
     },
   })
@@ -257,9 +265,18 @@ export class LiveController {
     }
     const row = (
       await this.db.query(
-        `INSERT INTO stream_sources(id,owner_id,name,source_type,url,exclude_zones)
-         VALUES($1,$2,$3,$4,$5,$6) RETURNING *`,
-        [newId(), req.user.id, body.name, type, url, JSON.stringify(body.exclude_zones)],
+        `INSERT INTO stream_sources(id,owner_id,name,source_type,url,exclude_zones,
+           latitude,longitude,location_name,heading)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+        [
+          newId(),
+          req.user.id,
+          body.name,
+          type,
+          url,
+          JSON.stringify(body.exclude_zones),
+          ...locationColumns(body.location ?? null),
+        ],
       )
     ).rows[0];
     return { ...sourceView(row), active_session: null };
@@ -420,6 +437,7 @@ export class LiveController {
       properties: {
         name: { type: 'string', minLength: 1, maxLength: 200 },
         exclude_zones: streamZones,
+        location: locationSchema,
         always_on: {
           type: 'boolean',
           description:
@@ -471,7 +489,8 @@ export class LiveController {
       return (
         await c.query(
           `UPDATE stream_sources SET name=$2,exclude_zones=$3,always_on=$4,auto_settings=$5,
-          keyframe_retention_hours=$6,track_retention_days=$7,url=$8,updated_at=now() WHERE id=$1 RETURNING *`,
+          keyframe_retention_hours=$6,track_retention_days=$7,url=$8,
+          latitude=$9,longitude=$10,location_name=$11,heading=$12,updated_at=now() WHERE id=$1 RETURNING *`,
           [
             id,
             pick('name'),
@@ -481,6 +500,9 @@ export class LiveController {
             pick('keyframe_retention_hours'),
             pick('track_retention_days'),
             pick('url'),
+            ...(body.location === undefined
+              ? [source.latitude, source.longitude, source.location_name, source.heading]
+              : locationColumns(body.location)),
           ],
         )
       ).rows[0];
