@@ -619,3 +619,24 @@ def test_four_crop_live_tracks_repeat_one_crop_and_need_more_confidence(tmp_path
     assert record["frames"] == 4 and len(crops) == 4 and len(keys) == 5 and sorted(set(keys)) == sorted(crops)
     assert live(tmp_path / "b", short, .965)[0]["status"] == "low_confidence"
     assert live(tmp_path / "c", SNAPSHOT, .96) == [], "without min_frames 4 the track is dropped"
+
+
+def test_uploaded_video_replay_uses_its_filming_clock(tmp_path):
+    import json
+    from datetime import datetime, timedelta, timezone
+    video = tmp_path / "input.avi"
+    _plate_video(video, 30)
+    start = datetime(2026, 3, 1, 14, 0, tzinfo=timezone.utc)
+    frames = FileFrames(video, realtime=False, start_time=start)
+    assert frames.recorded_clock and frames.stream_time(2.5) == start + timedelta(seconds=2.5)
+    assert not FileFrames(video).recorded_clock and FileFrames(video).stream_time(1) is None
+    status, events = run(tmp_path, [frames])
+    assert status == "ended"
+    tracks = [e for e in events if e["type"] == "track"]
+    assert tracks
+    record = json.loads((tmp_path / "live" / tracks[0]["path"]).read_text())
+    assert record["capture_clock"] == "recorded"
+    begin = datetime.fromisoformat(record["captured_from"].replace("Z", "+00:00"))
+    end = datetime.fromisoformat(record["captured_to"].replace("Z", "+00:00"))
+    # Days-old footage keeps its own clock (a broadcast clock that far from receive time is refused).
+    assert start <= begin <= end < start + timedelta(seconds=5)

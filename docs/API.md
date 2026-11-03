@@ -80,6 +80,7 @@ Action `confirm` chấp nhận text máy; `correct` bắt buộc text mới; `un
   - `url` phải là link YouTube.
   - **Camera IP** (owner hoặc admin): `{name,source_type:"rtsp",url,exclude_zones?}`, với `url` là `rtsp://` hoặc `rtsps://`, có thể kèm `user:mật-khẩu@`. Mọi response đều trả `url` đã che mật khẩu (`rtsp://user:***@host/...`); sự kiện và `error_message` cũng được che. Camera không có `embed_url`; xem bằng snapshot.
   - **Camera demo** (chỉ admin): `{name,source_type:"file",path,exclude_zones?}`. `path` là file video (`.mp4`, `.mov`, `.mkv`, `.avi`, `.webm`) nằm trong `PLATE_DATA_DIR/demo-videos/`; đường dẫn ra ngoài thư mục đó hoặc file không tồn tại trả `422`, user thường trả `403`. Phiên phát lại video theo vòng lặp với tốc độ thật; camera không có `embed_url`.
+  - **Phát lại video upload như livestream** (owner của video hoặc admin): `{name,source_type:"media",media_id,loop?,exclude_zones?,location?}`. Chỉ nhận video (`422` với ảnh; video của người khác `404`). Worker phát file theo đúng tốc độ khung hình qua **cùng pipeline với luồng live** (lọc khung, phát hiện, bám vết, chọn 5 crop, OCR, SSE, watchlist, lịch sử, hành trình). `loop=false` (mặc định): phát một lần, hết video thì phiên kết thúc (`ended`). `loop=true`: phát lặp như camera demo. Khi phát một lần và video đã khai `recorded_at`, giờ của track là `recorded_at` + vị trí trong video (`capture_clock=recorded`); nếu không thì là giờ lúc phát. Không truyền `location` thì camera lấy vị trí đã khai của video. Response có `media_id`, `replay_loop`. Video đang được camera phát lại không xóa được (`409`). Chức năng xử lý video upload theo lô (`POST /recognition-jobs`) không đổi; hai cách cho ra hai nhóm kết quả riêng.
   - `location` (tùy chọn, mọi loại camera): `{latitude, longitude, name?, heading?}` theo WGS84, `heading` là hướng camera quay (0–359°). Response luôn có `location`, là `null` khi chưa đặt.
   - `exclude_zones` gồm tối đa 16 hình chữ nhật `[x1,y1,x2,y2]` chuẩn hóa 0..1; detection có tâm nằm trong vùng bị bỏ.
 - `GET /api/v2/demo-videos` (admin): `{items:[{path,size_bytes}]}`, các video dùng được cho camera demo.
@@ -96,6 +97,7 @@ Action `confirm` chấp nhận text máy; `correct` bắt buộc text mới; `un
   - `GET /api/v2/stream-sources/{id}/recording/coverage` → `{items:[{from,to}]}`, các khoảng còn bản ghi.
   - `GET /api/v2/stream-sources/{id}/recording?from=ISO&to=ISO` (tối đa 600 s) → `video/mp4`. Sai khoảng thời gian trả `400`, không còn bản ghi trả `404`.
 - `PATCH /api/v2/stream-sources/{id}`: `url` (chỉ camera RTSP, để đổi mật khẩu; loại khác trả `422`), `name`, `exclude_zones`, `always_on`, `auto_settings` (`{pipeline_id, min_confidence?, max_track_seconds?, max_height?}`; `always_on` cần `pipeline_id` của profile joint), `keyframe_retention_hours`, `track_retention_days` (`null` là giữ mãi), `location` (`null` để xóa vị trí). Áp dụng từ phiên kế tiếp.
+  - Camera phát lại video upload còn đổi được `loop` (`true`/`false`); loại camera khác gửi `loop` trả `422`.
 - `DELETE /api/v2/stream-sources/{id}`: `204`; camera đã có phiên trả `409`.
 - `POST /api/v2/stream-sources/{id}/sessions`: `{pipeline_id,min_confidence?,max_track_seconds?,max_height?}` → `202`, phiên `queued`. `min_confidence` mặc định 0.96 (hiệu chỉnh trên ICPR, xem [EVALUATION.md](EVALUATION.md#kết-quả-hiệu-chỉnh-offline-trên-icpr-26102026)). `max_height` là 480, 720 hoặc 1080 (mặc định).
   - Chỉ profile `five_frame_joint`, nếu không thì trả `422`.
@@ -110,6 +112,7 @@ Action `confirm` chấp nhận text máy; `correct` bắt buộc text mới; `un
 - `GET /api/v2/live-sessions/{id}/events`: lịch sử bền vững theo `id` tăng dần (`status`, `error`, `track_rejected`, `track`, `alert`).
 - **Xem camera dạng video:**
   - `GET /api/v2/stream-sources/{id}/live-view` cho biết cách hiển thị camera:
+    - Camera demo và camera phát lại video upload trả `kind: "demo"` kèm `loop` (`false` khi video chỉ phát một lần); `GET /stream-sources/{id}/demo-video` trả chính file video đó (hỗ trợ `Range`).
     - `{kind:"hls", url, delay_seconds}`: camera RTSP đang có phiên. `url` là playlist HLS lấy từ bản ghi đệm, chạy sau camera khoảng `delay_seconds` (thường 15–25 s).
     - `{kind:"demo", url, duration, position_seconds, position_at}`: camera demo. Phát file `url` theo vòng lặp tại `(position_seconds + (now − position_at)) mod duration`, khớp với vị trí nhận diện vừa báo.
     - `{kind:"youtube", embed_url}`: dùng trình phát YouTube.

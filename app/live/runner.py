@@ -51,6 +51,10 @@ def capture_times(clock, first, last):
     """Wall-clock interval of a track: the broadcast's own clock when the source provides one
     (HLS program date-time), else receive time of the epoch's first frame plus PTS offsets."""
     stream_time = clock["stream_time"]
+    if stream_time is not None and clock.get("recorded"):
+        # An uploaded video's filming time (recorded_at + PTS): its own clock, not compared
+        # with receive time since the footage may be days old.
+        return "recorded", utc(stream_time(first)), utc(stream_time(last))
     if stream_time is not None:
         start, end = stream_time(first), stream_time(last)
         received = clock["started_at"] + timedelta(seconds=first - clock["first_pts"])
@@ -185,7 +189,8 @@ class LiveRunner:
         capacity = self.reader_capacity or max(8, math.ceil(self.buffer_seconds * info["fps"]))
         reader = LiveReader(connection, capacity).start()
         self.linker.reset()
-        clock = dict(started_at=None, first_pts=None, stream_time=getattr(connection, "stream_time", None))
+        clock = dict(started_at=None, first_pts=None, stream_time=getattr(connection, "stream_time", None),
+                     recorded=bool(getattr(connection, "recorded_clock", False)))
         recorder, self.clips = self._start_recording(info, connection, clock)
         outcome, reason, frames = "error", None, 0
         last_frame = last_stats = time.monotonic()

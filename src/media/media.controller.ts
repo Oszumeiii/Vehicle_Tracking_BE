@@ -188,6 +188,12 @@ export class MediaController {
             .rowCount
         )
           throw new ConflictException('Delete referencing jobs first.');
+        if (
+          (await c.query('SELECT 1 FROM stream_sources WHERE media_id=$1 LIMIT 1', [id])).rowCount
+        )
+          throw new ConflictException(
+            'A camera replays this video as live; delete that camera first.',
+          );
         quarantined = await this.storage.quarantine(`media/${id}`);
         await c.query('DELETE FROM media_assets WHERE id=$1', [id]);
       });

@@ -127,7 +127,10 @@ def source_factory(source):
                             duration=float(cap.get(cv2.CAP_PROP_FRAME_COUNT)) / fps if fps > 0 else 0.)
             finally:
                 cap.release()
-            return info, FileFrames(path, realtime=bool(source.get("realtime")), loop=bool(source.get("loop")))
+            start = source.get("start_time")
+            start = datetime.fromisoformat(start.replace("Z", "+00:00")) if start else None
+            return info, FileFrames(path, realtime=bool(source.get("realtime")), loop=bool(source.get("loop")),
+                                    start_time=start)
         return open_file
     if source.get("type") == "rtsp":
         def open_rtsp(record_dir=None):

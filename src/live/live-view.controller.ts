@@ -20,7 +20,8 @@ import { Ownership } from '../common/ownership';
 import { Database } from '../database/database';
 import { safeStorage } from '../recognition/engine';
 import { remuxSegment } from './clips';
-import { demoVideoFile, youtubeVideoId } from './payload';
+import { youtubeVideoId } from './payload';
+import { isReplay, replaySource } from './replay';
 import { ACTIVE_STATUSES } from './sessions';
 
 type Row = Record<string, any>;
@@ -120,7 +121,7 @@ export class LiveViewController {
         duration: {
           type: 'number',
           nullable: true,
-          description: 'demo: length of the looped file.',
+          description: 'demo: length of the replayed file.',
         },
         position_seconds: {
           type: 'number',
@@ -128,6 +129,12 @@ export class LiveViewController {
           description: 'demo: stream time the live process reached at position_at.',
         },
         position_at: { type: 'string', format: 'date-time', nullable: true },
+        loop: {
+          type: 'boolean',
+          nullable: true,
+          description:
+            'demo: the file wraps around (demo cameras, looping uploads); false for an upload played once.',
+        },
       },
     },
   })
@@ -144,7 +151,7 @@ export class LiveViewController {
     }
     const latest = await this.latest(id);
     const active = latest !== null && ACTIVE_STATUSES.includes(latest.session.status);
-    if (camera.source_type === 'file') {
+    if (isReplay(camera)) {
       const stats = latest?.session.stats ?? {};
       const position = Number(stats.position_seconds);
       const duration = Number(stats.source_duration);
@@ -155,6 +162,8 @@ export class LiveViewController {
           duration,
           position_seconds: position,
           position_at: stats.time,
+          // An upload played once stops at its end instead of wrapping around.
+          loop: camera.source_type === 'file' || Boolean(camera.replay_loop),
         };
       return { kind: 'snapshot' };
     }
@@ -246,12 +255,9 @@ export class LiveViewController {
   @ApiFailures(404)
   async demoVideo(@Req() req: { user: Actor }, @Param('id') id: string, @Res() response: Response) {
     const camera = await this.owner.streamSource(req.user, id);
-    if (camera.source_type !== 'file') throw new NotFoundException('Not a demo camera.');
-    const file = await Promise.resolve()
-      .then(() => demoVideoFile(settings().dataDir, camera.url))
-      .catch(() => null);
-    if (!file || !(await stat(file).catch(() => null))?.isFile())
-      throw new NotFoundException('The demo video is no longer available.');
-    response.sendFile(file);
+    if (!isReplay(camera)) throw new NotFoundException('Not a camera replaying a video.');
+    const replay = await replaySource(this.db, settings().dataDir, camera);
+    if (!replay) throw new NotFoundException('The video is no longer available.');
+    response.sendFile(replay.path);
   }
 }
