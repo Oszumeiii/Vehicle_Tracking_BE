@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import request from 'supertest';
@@ -12,11 +13,12 @@ import { seedUser, startTestDatabase, TestDatabase } from './helpers';
 import { livePipelines, writeTrack } from './live-fixtures';
 
 const URL = 'https://www.youtube.com/watch?v=5Xl6pSgiy3A';
-// Three cameras in Da Nang: the second ~2.7 km from the first, the third ~23 km away (Hoi An).
+// Balneário Camboriú (SC, Brazil), where the project's cameras are: Av. Brasil is ~0.8 km from
+// Av. Atlântica, Itajaí ~10 km away.
 const PLACES = {
-  bridge: { latitude: 16.061, longitude: 108.2272, name: 'Cầu Rồng', heading: 90 },
-  market: { latitude: 16.0544, longitude: 108.2022, name: 'Chợ Cồn' },
-  hoian: { latitude: 15.8801, longitude: 108.338, name: 'Hội An' },
+  atlantica: { latitude: -26.9925, longitude: -48.633, name: 'Av. Atlântica', heading: 180 },
+  brasil: { latitude: -26.987, longitude: -48.638, name: 'Av. Brasil' },
+  itajai: { latitude: -26.9078, longitude: -48.6619, name: 'Itajaí' },
 };
 let fixture: TestDatabase;
 let app: INestApplication;
@@ -65,6 +67,7 @@ after(async () => {
 
 const as = (role: keyof typeof users) => ({ Authorization: `Bearer ${users[role].token}` });
 const db = () => fixture.database;
+const id = () => randomUUID().replaceAll('-', '');
 
 async function camera(name: string, location?: unknown) {
   return (
@@ -100,33 +103,63 @@ async function track(live: Record<string, any>, key: string, text: string, at: s
   return ingestTrack(db(), workerOptions(), live, key);
 }
 
+/** An uploaded video with a succeeded recognition: results at [text, start, end] seconds. */
+async function upload(name: string, file: string, results: [string, number, number][]) {
+  const media = id();
+  await db().query(
+    `INSERT INTO media_assets(id,owner_id,original_name,media_type,storage_key,mime_type,size_bytes,sha256,duration_seconds)
+    VALUES($1,$2,$3,'video',$4,'video/mp4',1000,$5,1800)`,
+    [
+      media,
+      users.owner.id,
+      name,
+      `media/${media}`,
+      createHash('sha256').update(file).digest('hex'),
+    ],
+  );
+  const job = id();
+  await db().query(
+    `INSERT INTO recognition_jobs(id,media_id,job_kind,status,stage,started_at,finished_at)
+    VALUES($1,$2,'recognize','succeeded','complete',now(),now())`,
+    [job, media],
+  );
+  for (const [text, start, end] of results)
+    await db().query(
+      `INSERT INTO plate_appearances(id,job_id,start_seconds,end_seconds,machine_text,machine_status,effective_text)
+      VALUES($1,$2,$3,$4,$5,'readable',$5)`,
+      [id(), job, start, end, text],
+    );
+  return media;
+}
+
 test('plate queries drop separators; fuzzy edits grow with the plate length', () => {
-  assert.equal(plateQuery(' 43a-123.45 '), '43A12345');
+  assert.equal(plateQuery(' abc-1d23 '), 'ABC1D23');
+  assert.equal(plateQuery('abc-1234'), 'ABC1234');
   assert.throws(() => plateQuery(' -. '), /cannot be empty/);
-  assert.deepEqual(['ABCD', 'ABCDE', '43A1234', '43A12345'].map(fuzzyEdits), [0, 1, 1, 2]);
+  assert.deepEqual(['ABCD', 'ABC12', 'ABC1D23', 'ABC1D234'].map(fuzzyEdits), [0, 1, 1, 2]);
 });
 
 test('journey legs measure distance, time and speed and flag impossible ones', () => {
-  const cam = (id: string, location: any) => ({ id, name: id, location });
+  const cam = (cameraId: string, location: any) => ({ id: cameraId, name: cameraId, location });
   const at = (first: string, last: string) => ({ first_seen: first, last_seen: last });
-  const a = { ...PLACES.bridge, name: null, heading: null };
-  const b = { ...PLACES.market, name: null, heading: null };
+  const a = { ...PLACES.atlantica, name: null, heading: null };
+  const b = { ...PLACES.brasil, name: null, heading: null };
   const legs = journeyLegs(
     [
       { camera: cam('a', a), ...at('2026-01-01T10:00:00Z', '2026-01-01T10:00:04Z') },
-      { camera: cam('b', b), ...at('2026-01-01T10:05:04Z', '2026-01-01T10:05:08Z') },
-      { camera: cam('a', a), ...at('2026-01-01T10:05:10Z', '2026-01-01T10:05:12Z') },
-      { camera: cam('c', null), ...at('2026-01-01T10:05:11Z', '2026-01-01T10:05:20Z') },
+      { camera: cam('b', b), ...at('2026-01-01T10:02:04Z', '2026-01-01T10:02:08Z') },
+      { camera: cam('a', a), ...at('2026-01-01T10:02:10Z', '2026-01-01T10:02:12Z') },
+      { camera: cam('c', null), ...at('2026-01-01T10:02:11Z', '2026-01-01T10:02:20Z') },
     ],
     150,
   );
   const meters = haversineMeters(a, b);
-  assert.ok(meters > 2500 && meters < 3000, `${meters}`);
+  assert.ok(meters > 700 && meters < 900, `${meters}`);
   assert.equal(legs[0].distance_m, Math.round(meters));
-  assert.equal(legs[0].gap_seconds, 300);
-  assert.equal(legs[0].speed_kmh, Math.round((meters / 300) * 3.6 * 10) / 10);
+  assert.equal(legs[0].gap_seconds, 120);
+  assert.equal(legs[0].speed_kmh, Math.round((meters / 120) * 3.6 * 10) / 10);
   assert.equal(legs[0].implausible, false);
-  // ~2.7 km in 2 s.
+  // ~0.8 km in 2 s.
   assert.deepEqual(legs[1].reasons, ['too_fast']);
   // A camera without a location: no distance, but two cameras at once is still flagged.
   assert.equal(legs[2].distance_m, null);
@@ -134,19 +167,19 @@ test('journey legs measure distance, time and speed and flag impossible ones', (
 });
 
 test('cameras keep a location that can be changed and cleared; bad ones are refused', async () => {
-  const created = await camera('located', PLACES.bridge);
-  assert.deepEqual(created.location, PLACES.bridge);
+  const created = await camera('located', PLACES.atlantica);
+  assert.deepEqual(created.location, PLACES.atlantica);
   assert.equal(created.latitude, undefined);
   const plain = await camera('plain');
   assert.equal(plain.location, null);
   const moved = await api
     .patch(`/api/v2/stream-sources/${plain.id}`)
     .set(as('owner'))
-    .send({ location: { latitude: 16.05, longitude: 108.2 } })
+    .send({ location: { latitude: -26.99, longitude: -48.63 } })
     .expect(200);
   assert.deepEqual(moved.body.location, {
-    latitude: 16.05,
-    longitude: 108.2,
+    latitude: -26.99,
+    longitude: -48.63,
     name: null,
     heading: null,
   });
@@ -156,7 +189,7 @@ test('cameras keep a location that can be changed and cleared; bad ones are refu
     .set(as('owner'))
     .send({ name: 'renamed' })
     .expect(200);
-  assert.equal(renamed.body.location.latitude, 16.05);
+  assert.equal(renamed.body.location.latitude, -26.99);
   const cleared = await api
     .patch(`/api/v2/stream-sources/${plain.id}`)
     .set(as('owner'))
@@ -165,9 +198,9 @@ test('cameras keep a location that can be changed and cleared; bad ones are refu
   assert.equal(cleared.body.location, null);
   for (const location of [
     { latitude: 91, longitude: 0 },
-    { latitude: 16 },
-    { latitude: 16, longitude: 108, heading: 360 },
-    { latitude: 16, longitude: 108, extra: 1 },
+    { latitude: -26 },
+    { latitude: -26, longitude: -48, heading: 360 },
+    { latitude: -26, longitude: -48, extra: 1 },
   ])
     await api
       .post('/api/v2/stream-sources')
@@ -177,109 +210,190 @@ test('cameras keep a location that can be changed and cleared; bad ones are refu
   const listed = await api.get('/api/v2/stream-sources').set(as('owner')).expect(200);
   assert.deepEqual(
     listed.body.items.find((item: any) => item.id === created.id).location,
-    PLACES.bridge,
+    PLACES.atlantica,
   );
 });
 
-test('a plate is followed across cameras, misreads included when fuzzy', async () => {
-  const bridge = await session((await camera('bridge', PLACES.bridge)).id);
-  const market = await session((await camera('market', PLACES.market)).id);
-  const hoian = await session((await camera('hoian', PLACES.hoian)).id);
-  const unplaced = await session((await camera('unplaced')).id);
-  // Two tracks of one passage at the bridge, then the market 5 min later (~33 km/h),
-  // then Hoi An one minute after (impossible), read with Z for 2; another car too.
-  await track(bridge, 'e000-t000001', '43A12345', '2026-03-01T10:00:00Z');
-  await track(bridge, 'e000-t000002', '43A12345', '2026-03-01T10:00:10Z');
-  await track(market, 'e000-t000001', '43A12345', '2026-03-01T10:05:14Z');
-  await track(hoian, 'e000-t000001', '43A1Z345', '2026-03-01T10:06:18Z');
-  await track(unplaced, 'e000-t000001', '43A12345', '2026-03-01T11:00:00Z');
-  await track(market, 'e000-t000002', '43A99999', '2026-03-01T10:05:30Z');
+test('uploaded videos take a recording time and place; others cannot change them', async () => {
+  const media = await upload('bc.mp4', 'place-test', []);
+  const set = await api
+    .patch(`/api/v2/media/${media}`)
+    .set(as('owner'))
+    .send({ recorded_at: '2026-03-01T11:00:00-03:00', location: PLACES.atlantica })
+    .expect(200);
+  assert.equal(set.body.recorded_at, '2026-03-01T14:00:00.000Z');
+  assert.deepEqual(set.body.location, PLACES.atlantica);
+  assert.equal(set.body.latitude, undefined);
+  const kept = await api
+    .patch(`/api/v2/media/${media}`)
+    .set(as('owner'))
+    .send({ location: null })
+    .expect(200);
+  assert.equal(kept.body.recorded_at, '2026-03-01T14:00:00.000Z');
+  assert.equal(kept.body.location, null);
+  await api.patch(`/api/v2/media/${media}`).set(as('owner')).send({}).expect(422);
+  await api
+    .patch(`/api/v2/media/${media}`)
+    .set(as('owner'))
+    .send({ recorded_at: '01/03/2026' })
+    .expect(422);
+  await api
+    .patch(`/api/v2/media/${media}`)
+    .set(as('stranger'))
+    .send({ recorded_at: null })
+    .expect(404);
+  const listed = await api.get('/api/v2/media').set(as('owner')).expect(200);
+  assert.equal(
+    listed.body.items.find((item: any) => item.id === media).recorded_at,
+    set.body.recorded_at,
+  );
+});
 
-  const exact = (await api.get('/api/v2/plates/43A-123.45/journey').set(as('owner')).expect(200))
+test('a plate is followed across cameras and dated uploads, old/Mercosul plates when fuzzy', async () => {
+  const atlantica = await session((await camera('atlantica', PLACES.atlantica)).id);
+  const brasil = await session((await camera('brasil', PLACES.brasil)).id);
+  const itajai = await session((await camera('itajai', PLACES.itajai)).id);
+  const unplaced = await session((await camera('unplaced')).id);
+  // Two tracks of one passage on Av. Atlântica, Av. Brasil 2 min later (~24 km/h), Itajaí one
+  // minute after that (impossible) read as the old plate QJK0277 (Mercosul C = 2); another car too.
+  await track(atlantica, 'e000-t000001', 'QJK0C77', '2026-03-01T12:00:00Z');
+  await track(atlantica, 'e000-t000002', 'QJK0C77', '2026-03-01T12:00:10Z');
+  await track(brasil, 'e000-t000001', 'QJK0C77', '2026-03-01T12:02:14Z');
+  await track(itajai, 'e000-t000001', 'QJK0277', '2026-03-01T12:03:18Z');
+  await track(unplaced, 'e000-t000001', 'QJK0C77', '2026-03-01T13:00:00Z');
+  await track(brasil, 'e000-t000002', 'SXE6J35', '2026-03-01T12:02:30Z');
+  // Footage filmed on Av. Atlântica from 14:00: a passage at 0:30-0:52 (two tracks) and one at
+  // 15:00. The same file uploaded earlier counts once; a video without a time is left out.
+  const copy = await upload('bc_1400 (copy).mp4', 'bc-1400', [['QJK0C77', 30, 34]]);
+  await db().query("UPDATE media_assets SET uploaded_at=now() - interval '1 day' WHERE id=$1", [
+    copy,
+  ]);
+  const filmed = await upload('bc_1400.mp4', 'bc-1400', [
+    ['QJK0C77', 30, 34],
+    ['QJK0C77', 50, 52],
+    ['QJK0C77', 900, 903],
+    ['SXE6J35', 60, 62],
+  ]);
+  for (const media of [copy, filmed])
+    await api
+      .patch(`/api/v2/media/${media}`)
+      .set(as('owner'))
+      .send({ recorded_at: '2026-03-01T14:00:00Z', location: PLACES.atlantica })
+      .expect(200);
+  await upload('undated.mp4', 'undated', [['QJK0C77', 10, 12]]);
+
+  const exact = (await api.get('/api/v2/plates/qjk-0c77/journey').set(as('owner')).expect(200))
     .body;
-  assert.equal(exact.plate, '43A12345');
+  assert.equal(exact.plate, 'QJK0C77');
   assert.deepEqual(
-    exact.points.map((p: any) => [p.camera.name, p.reads]),
+    exact.points.map((p: any) => [p.source, p.camera.name, p.reads, p.first_seen.slice(11, 19)]),
     [
-      ['bridge', 2],
-      ['market', 1],
-      ['unplaced', 1],
+      ['live', 'atlantica', 2, '12:00:00'],
+      ['live', 'brasil', 1, '12:02:14'],
+      ['live', 'unplaced', 1, '13:00:00'],
+      ['upload', 'bc_1400.mp4', 2, '14:00:30'],
+      ['upload', 'bc_1400.mp4', 1, '14:15:00'],
     ],
   );
-  assert.equal(exact.points[0].first_seen, '2026-03-01T10:00:00.000Z');
-  assert.equal(exact.points[0].last_seen, '2026-03-01T10:00:14.000Z');
-  assert.deepEqual(exact.points[0].camera.location, PLACES.bridge);
-  assert.equal(exact.points[2].camera.location, null);
+  assert.equal(exact.points[0].last_seen, '2026-03-01T12:00:14.000Z');
+  assert.equal(exact.points[3].last_seen, '2026-03-01T14:00:52.000Z');
+  assert.equal(exact.points[3].camera.kind, 'upload');
+  assert.equal(exact.points[3].camera.id, filmed);
+  assert.deepEqual(exact.points[3].camera.location, PLACES.atlantica);
+  assert.equal(exact.points[0].camera.kind, 'camera');
   assert.ok(exact.points[0].primary_detection_id);
-  assert.equal(exact.legs[0].gap_seconds, 300);
+  assert.equal(exact.legs[0].gap_seconds, 120);
   assert.equal(exact.legs[0].implausible, false);
   assert.equal(exact.legs[1].distance_m, null);
-  assert.equal(exact.summary.cameras, 3);
+  assert.equal(exact.legs[3].distance_m, 0);
+  assert.equal(exact.legs[3].gap_seconds, 848);
+  assert.equal(exact.summary.cameras, 4);
+  assert.equal(exact.summary.undated_upload_results, 1);
   assert.equal(exact.summary.truncated, false);
 
   const fuzzy = (
-    await api.get('/api/v2/plates/43A12345/journey?match=fuzzy').set(as('owner')).expect(200)
+    await api.get('/api/v2/plates/QJK0C77/journey?match=fuzzy').set(as('owner')).expect(200)
   ).body;
   assert.deepEqual(
     fuzzy.points.map((p: any) => [p.camera.name, p.plate, p.match_distance]),
     [
-      ['bridge', '43A12345', 0],
-      ['market', '43A12345', 0],
-      ['hoian', '43A1Z345', 1],
-      ['unplaced', '43A12345', 0],
+      ['atlantica', 'QJK0C77', 0],
+      ['brasil', 'QJK0C77', 0],
+      ['itajai', 'QJK0277', 1],
+      ['unplaced', 'QJK0C77', 0],
+      ['bc_1400.mp4', 'QJK0C77', 0],
+      ['bc_1400.mp4', 'QJK0C77', 0],
     ],
   );
   assert.deepEqual(fuzzy.legs[1].reasons, ['too_fast']);
   assert.equal(fuzzy.summary.implausible_legs, 1);
-  assert.deepEqual(fuzzy.summary.plates, ['43A12345', '43A1Z345']);
+  assert.deepEqual(fuzzy.summary.plates, ['QJK0277', 'QJK0C77']);
 
+  const live = (
+    await api.get('/api/v2/plates/QJK0C77/journey?sources=live').set(as('owner')).expect(200)
+  ).body;
+  assert.equal(live.points.length, 3);
+  assert.equal(live.summary.undated_upload_results, 0);
+  const uploads = (
+    await api.get('/api/v2/plates/QJK0C77/journey?sources=upload').set(as('owner')).expect(200)
+  ).body;
+  assert.deepEqual(
+    uploads.points.map((p: any) => p.source),
+    ['upload', 'upload'],
+  );
   const window = (
     await api
-      .get('/api/v2/plates/43A12345/journey')
-      .query({ captured_from: '2026-03-01T10:01:00Z', captured_to: '2026-03-01T10:30:00Z' })
+      .get('/api/v2/plates/QJK0C77/journey')
+      .query({ captured_from: '2026-03-01T12:01:00Z', captured_to: '2026-03-01T14:10:00Z' })
       .set(as('owner'))
       .expect(200)
   ).body;
   assert.deepEqual(
     window.points.map((p: any) => p.camera.name),
-    ['market'],
+    ['brasil', 'unplaced', 'bc_1400.mp4'],
   );
   const limited = (
-    await api.get('/api/v2/plates/43A12345/journey?limit=2').set(as('owner')).expect(200)
+    await api.get('/api/v2/plates/QJK0C77/journey?limit=2').set(as('owner')).expect(200)
   ).body;
   assert.equal(limited.points.length, 2);
   assert.equal(limited.summary.truncated, true);
 
   // A rejected read leaves the journey.
-  const result = fuzzy.points[2].result_id;
-  await db().query("UPDATE plate_appearances SET review_status='rejected' WHERE id=$1", [result]);
+  await db().query("UPDATE plate_appearances SET review_status='rejected' WHERE id=$1", [
+    fuzzy.points[2].result_id,
+  ]);
   const afterReview = (
-    await api.get('/api/v2/plates/43A12345/journey?match=fuzzy').set(as('owner')).expect(200)
+    await api.get('/api/v2/plates/QJK0C77/journey?match=fuzzy').set(as('owner')).expect(200)
   ).body;
-  assert.equal(afterReview.points.length, 3);
+  assert.equal(afterReview.points.length, 5);
 
-  const stranger = (
-    await api.get('/api/v2/plates/43A12345/journey').set(as('stranger')).expect(200)
-  ).body;
+  const stranger = (await api.get('/api/v2/plates/QJK0C77/journey').set(as('stranger')).expect(200))
+    .body;
   assert.deepEqual(stranger.points, []);
   assert.equal(stranger.summary.first_seen, null);
+  assert.equal(stranger.summary.undated_upload_results, 0);
 
   await api.get('/api/v2/plates/%20-%20/journey').set(as('owner')).expect(422);
-  await api.get('/api/v2/plates/43A12345/journey?match=contains').set(as('owner')).expect(422);
+  await api.get('/api/v2/plates/QJK0C77/journey?match=contains').set(as('owner')).expect(422);
+  await api.get('/api/v2/plates/QJK0C77/journey?sources=media').set(as('owner')).expect(422);
   await api
-    .get('/api/v2/plates/43A12345/journey')
+    .get('/api/v2/plates/QJK0C77/journey')
     .query({ captured_from: '2026-03-02T00:00:00Z', captured_to: '2026-03-01T00:00:00Z' })
     .set(as('owner'))
     .expect(422);
-  await api.get('/api/v2/plates/43A12345/journey').expect(401);
+  await api.get('/api/v2/plates/QJK0C77/journey').expect(401);
 });
 
-test('result search matches look-alike misreads when fuzzy, nearest first', async () => {
+test('result search matches misreads and old/Mercosul plates when fuzzy, nearest first', async () => {
   const live = await session((await camera('search')).id);
-  await track(live, 'e000-t000001', '92B54321', '2026-04-01T08:00:00Z');
-  await track(live, 'e000-t000002', '92B5432I', '2026-04-01T08:01:00Z');
-  await track(live, 'e000-t000003', '92B5A3Z1', '2026-04-01T08:02:00Z');
-  await track(live, 'e000-t000004', '9285432', '2026-04-01T08:03:00Z');
+  // SXE6J35 (Mercosul) and its old plate SXE6935 (J = 9); S/5 confusion; one changed letter;
+  // a changed letter plus a confusion (2 raw edits, 1 after folding); and a different plate.
+  await track(live, 'e000-t000001', 'SXE6J35', '2026-04-01T08:00:00Z');
+  await track(live, 'e000-t000002', 'SXE6935', '2026-04-01T08:01:00Z');
+  await track(live, 'e000-t000003', 'SXE6J3S', '2026-04-01T08:02:00Z');
+  await track(live, 'e000-t000004', 'SXF6J35', '2026-04-01T08:03:00Z');
+  await track(live, 'e000-t000005', 'SXF6J3S', '2026-04-01T08:04:00Z');
+  await track(live, 'e000-t000006', 'SYF6J35', '2026-04-01T08:05:00Z');
   const search = async (query: Record<string, string>) =>
     (
       await api
@@ -288,31 +402,24 @@ test('result search matches look-alike misreads when fuzzy, nearest first', asyn
         .set(as('owner'))
         .expect(200)
     ).body;
-  const exact = await search({ plate: '92B-543.21' });
+  const exact = await search({ plate: 'SXE-6J35' });
   assert.deepEqual(
     exact.items.map((item: any) => item.effective_text),
-    ['92B54321'],
+    ['SXE6J35'],
   );
   assert.equal(exact.items[0].match_distance, undefined);
-  const fuzzy = await search({ plate: '92B54321', match: 'fuzzy' });
-  // I folds to 1 (skeleton equal); "9285432" drops a character after B->8; "92B5A3Z1" is 2 off.
+  const fuzzy = await search({ plate: 'SXE6J35', match: 'fuzzy' });
   // Equal distances: newest first.
   assert.deepEqual(
     fuzzy.items.map((item: any) => [item.effective_text, item.match_distance]),
     [
-      ['92B54321', 0],
-      ['92B5432I', 1],
-      ['9285432', 2],
-      ['92B5A3Z1', 2],
+      ['SXE6J35', 0],
+      ['SXF6J35', 1],
+      ['SXE6J3S', 1],
+      ['SXE6935', 1],
+      ['SXF6J3S', 2],
     ],
   );
-  const short = await search({ plate: '9285432', match: 'fuzzy' });
-  // 7 characters: one edit after folding; 92B54321 folds to 92854321 (one insertion).
-  assert.deepEqual(short.items.map((item: any) => item.effective_text).sort(), [
-    '9285432',
-    '92B54321',
-    '92B5432I',
-  ]);
-  const grouped = await search({ plate: '92B54321', match: 'fuzzy', group_by: 'sighting' });
+  const grouped = await search({ plate: 'SXE6J35', match: 'fuzzy', group_by: 'sighting' });
   assert.equal(grouped.items[0].match_distance, 0);
 });

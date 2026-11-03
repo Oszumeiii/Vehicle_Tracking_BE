@@ -32,6 +32,14 @@ export class LoginResponse {
   @ApiProperty(dateTime) expires_at!: string;
 }
 
+export class CameraLocationResponse {
+  @ApiProperty({ type: 'number', minimum: -90, maximum: 90 }) latitude!: number;
+  @ApiProperty({ type: 'number', minimum: -180, maximum: 180 }) longitude!: number;
+  @ApiProperty({ ...nullableText, description: 'Place name' }) name!: string | null;
+  @ApiProperty({ ...nullableInteger, description: 'Compass direction the camera faces (0-359)' })
+  heading!: number | null;
+}
+
 export class MediaResponse {
   @ApiProperty() id!: string;
   @ApiProperty({ description: 'Alias of id; use this value when creating a recognition job.' })
@@ -48,6 +56,18 @@ export class MediaResponse {
   @ApiProperty(dateTime) uploaded_at!: string;
   @ApiProperty({ description: 'Authenticated relative URL of the original image or video.' })
   content_url!: string;
+  @ApiProperty({
+    ...nullableDateTime,
+    description:
+      'When the footage was filmed (its first frame); with it, results join plate journeys.',
+  })
+  recorded_at!: string | null;
+  @ApiProperty({
+    type: CameraLocationResponse,
+    nullable: true,
+    description: 'Where the footage was filmed; null until set.',
+  })
+  location!: CameraLocationResponse | null;
 }
 
 export class AcceptedJobResponse {
@@ -282,14 +302,6 @@ export class LiveSessionResponse {
     description: 'Stored evidence of the session in bytes (single and list reads).',
   })
   evidence_bytes?: number;
-}
-
-export class CameraLocationResponse {
-  @ApiProperty({ type: 'number', minimum: -90, maximum: 90 }) latitude!: number;
-  @ApiProperty({ type: 'number', minimum: -180, maximum: 180 }) longitude!: number;
-  @ApiProperty({ ...nullableText, description: 'Place name' }) name!: string | null;
-  @ApiProperty({ ...nullableInteger, description: 'Compass direction the camera faces (0-359)' })
-  heading!: number | null;
 }
 
 export class StreamSourceResponse {
