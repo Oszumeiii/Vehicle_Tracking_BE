@@ -10,6 +10,7 @@ import { Storage } from './media/storage';
 import { MediaController } from './media/media.controller';
 import { JobsController, JobOperations } from './jobs/jobs.controller';
 import { ResultsController } from './results/results.controller';
+import { JourneyController } from './results/journey.controller';
 import { LiveController } from './live/live.controller';
 import { LiveViewController } from './live/live-view.controller';
 import { VideoController } from './live/video.controller';
@@ -83,6 +84,7 @@ class HealthController {
     MediaController,
     JobsController,
     ResultsController,
+    JourneyController,
     LiveController,
     VideoController,
     LiveViewController,

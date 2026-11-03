@@ -228,6 +228,12 @@ export class SearchResultResponse extends AppearanceResponse {
   first_seen?: string | null;
   @ApiProperty({ ...nullableDateTime, required: false, description: 'group_by=sighting only.' })
   last_seen?: string | null;
+  @ApiProperty({
+    ...integer,
+    required: false,
+    description: 'match=fuzzy only: characters changed from the query (0 = exact).',
+  })
+  match_distance?: number;
 }
 
 const sessionStatuses = [
@@ -278,6 +284,14 @@ export class LiveSessionResponse {
   evidence_bytes?: number;
 }
 
+export class CameraLocationResponse {
+  @ApiProperty({ type: 'number', minimum: -90, maximum: 90 }) latitude!: number;
+  @ApiProperty({ type: 'number', minimum: -180, maximum: 180 }) longitude!: number;
+  @ApiProperty({ ...nullableText, description: 'Place name' }) name!: string | null;
+  @ApiProperty({ ...nullableInteger, description: 'Compass direction the camera faces (0-359)' })
+  heading!: number | null;
+}
+
 export class StreamSourceResponse {
   @ApiProperty() id!: string;
   @ApiProperty() owner_id!: string;
@@ -289,6 +303,12 @@ export class StreamSourceResponse {
   })
   url!: string;
   @ApiProperty(zones) exclude_zones!: number[][];
+  @ApiProperty({
+    type: CameraLocationResponse,
+    nullable: true,
+    description: 'Where the camera is; null until set.',
+  })
+  location!: CameraLocationResponse | null;
   @ApiProperty({ ...nullableText, description: 'YouTube video id; null for channel links.' })
   video_id!: string | null;
   @ApiProperty({
