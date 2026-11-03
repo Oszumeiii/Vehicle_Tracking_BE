@@ -17,7 +17,7 @@ Mặc định `http://127.0.0.1:3000`. Ngoại trừ login và health, gửi `Au
     - `auth.login`, `auth.login_failed` (`details.email`, `reason`: `invalid` | `inactive` | `throttled`), `auth.logout`;
     - `user.create`, `user.update` (chỉ ghi tên các trường đã đổi);
     - `results.search` (chỉ khi có `plate`), `result.view`, `result.review`, `journey.view`, `job.export`;
-    - `camera.create|update|delete`, `session.start|stop|delete`, `watchlist.add|delete`, `media.delete`, `job.delete`.
+    - `camera.create|update|delete`, `session.start|stop|delete`, `watchlist.add|delete`, `media.update|delete`, `job.delete`.
   - Không ghi mật khẩu, token hay các request tải ảnh/video. Lỗi khi ghi log không làm hỏng request. Worker xóa dòng cũ hơn `PLATE_AUDIT_RETENTION_DAYS` (mặc định 365).
 - Biển số do người dùng gõ (watchlist, sửa khi review, tìm kiếm) được chuẩn hóa: chữ hoa, bỏ khoảng trắng, `-` và `.`.
 
@@ -25,6 +25,7 @@ Mặc định `http://127.0.0.1:3000`. Ngoại trừ login và health, gửi `Au
 
 - `POST /api/v2/media`: multipart `file` → `201` với `media_id` (cùng giá trị `id`) và metadata. Chỉ JPG/PNG/MP4/AVI/MOV; kiểm tra giải mã thực, tối đa `PLATE_MAX_UPLOAD_MIB` (mặc định 500), ảnh tối đa 25 megapixels. File không đọc được trả `422`; môi trường kiểm tra file chưa sẵn sàng trả `503`.
 - `GET /api/v2/media?limit=50&offset=0`: nguồn theo phạm vi quyền.
+- `PATCH /api/v2/media/{id}`: `{recorded_at?, location?}`: video được quay **lúc nào** (giờ của khung hình đầu tiên, ISO 8601 có múi giờ, ví dụ `2026-03-01T11:00:00-03:00` theo giờ Brasília) và **ở đâu** (cùng dạng `location` của camera); `null` để xóa. Có `recorded_at` thì kết quả của lần nhận diện mới nhất được đưa vào hành trình biển số. Response của media luôn có `recorded_at` và `location`.
 - `GET /api/v2/media/{id}/content`: file gốc, MIME theo nội dung đã kiểm tra. Hỗ trợ header `Range` để đọc từng phần (`206`); khoảng byte ngoài file trả `416` với JSON lỗi và `Content-Range: bytes */<size>`.
 - `DELETE /api/v2/media/{id}`: `204`; `409` nếu còn job tham chiếu.
 
@@ -50,17 +51,17 @@ Job Kaggle joint-frame lưu `recognition_method=joint_multiframe`, `agreement_co
 
 - `GET /api/v2/recognition-results`: query `plate`, `match` (`exact` mặc định, `contains`, `fuzzy`), `origin` (`upload`/`live`), `media_id`, `stream_source_id`, `live_session_id`, `review_status`, `confidence_status`, `exclude_duplicates`, `uploaded_from`, `uploaded_to`, `captured_from`, `captured_to`, phân trang.
   - `plate` được chuẩn hóa: chữ hoa, bỏ khoảng trắng, `-` và `.` (`43A-123.45` thành `43A12345`). `exact` khớp chính xác và không tự thay `O/0`.
-  - `match=fuzzy` dùng cho biển bị OCR đọc sai: trước khi so, gộp các ký tự dễ nhầm (`O/D/Q` thành `0`, `I/L` thành `1`, `Z` thành `2`, `S` thành `5`, `B` thành `8`, `G` thành `6`), rồi cho phép lệch 1 ký tự với biển 5–7 ký tự, 2 ký tự với biển từ 8 ký tự; biển dưới 5 ký tự phải khớp đúng. Mỗi kết quả có `match_distance` (số ký tự khác so với chuỗi gõ, tính trên text gốc); sắp xếp theo `match_distance`, rồi theo thời gian.
+  - `match=fuzzy` dùng cho biển bị OCR đọc sai: trước khi so, gộp các ký tự dễ nhầm (`O/D/Q` thành `0`, `I/L` thành `1`, `Z` thành `2`, `S` thành `5`, `B` thành `8`, `G` thành `6`), và với biển 7 ký tự coi chữ `A`–`J` ở vị trí 5 là chữ số `0`–`9` (luật đổi biển cũ `ABC1234` sang Mercosul `ABC1C34` của Brazil, nên hai biển của cùng một xe khớp nhau), rồi cho phép lệch 1 ký tự với biển 5–7 ký tự, 2 ký tự với biển từ 8 ký tự; biển dưới 5 ký tự phải khớp đúng. Mỗi kết quả có `match_distance` (số ký tự khác so với chuỗi gõ, tính trên text gốc); sắp xếp theo `match_distance`, rồi theo thời gian.
   - Với video/ảnh upload: dùng job v2 prepare/recognize succeeded mới nhất theo thời điểm tạo và ID của mỗi nguồn; job queued/failed hoặc extraction v1 không che kết quả v2 succeeded cũ.
   - Với live: mọi track đều được tính.
   - Kết quả có `origin`, `captured_from/to`, `confidence_status`, `duplicate_of_job_id`, `sighting_id`; sắp xếp theo giờ chụp (live) hoặc giờ upload.
   - `group_by=sighting`: mỗi lượt xuất hiện một dòng (ưu tiên track đã review, rồi track có confidence cao nhất), kèm `sighting_count`, `first_seen`, `last_seen`. Kết quả upload không gộp.
 - `GET /api/v2/sightings/{id}/results`: các track của một lượt xuất hiện, theo thời gian.
-- `GET /api/v2/plates/{plate}/journey`: **hành trình** của một biển qua các camera live, query `match` (`exact` | `fuzzy`), `captured_from`, `captured_to`, `limit` (1–1000, mặc định 500).
-  - `points`: mỗi lượt xuất hiện (sighting) là một điểm, theo `first_seen`. Mỗi điểm gồm `camera` (`id`, `name`, `location`), `first_seen`, `last_seen`, `reads` (số track), `plate`, `result_id` và `primary_detection_id` để mở bằng chứng, `confidence_status`, `review_status`, `match_distance`. Chỉ tính kết quả user được xem, bỏ kết quả đã review `rejected` hoặc `unreadable`; text đã sửa khi review được dùng thay text máy.
+- `GET /api/v2/plates/{plate}/journey`: **hành trình** của một biển qua các camera live và các video upload đã khai thời điểm quay, query `match` (`exact` | `fuzzy`), `sources` (`all` mặc định | `live` | `upload`), `captured_from`, `captured_to`, `limit` (1–1000, mặc định 500).
+  - `points`: mỗi lượt xuất hiện (sighting) là một điểm, theo `first_seen`. Mỗi điểm gồm `source` (`live` | `upload`), `camera` (`id`, `name`, `kind` = `camera` | `upload`, `location`; với video upload là id và tên file video), `first_seen`, `last_seen`, `reads` (số track), `plate`, `result_id` và `primary_detection_id` để mở bằng chứng, `confidence_status`, `review_status`, `match_distance`. Chỉ tính kết quả user được xem, bỏ kết quả đã review `rejected` hoặc `unreadable`; text đã sửa khi review được dùng thay text máy.
   - `legs[i]` nối `points[i]` với `points[i+1]`, gồm `gap_seconds` (từ lúc rời camera trước đến lúc tới camera sau), `distance_m` (đường chim bay, `null` nếu một camera chưa có vị trí), `speed_kmh`. `implausible=true` kèm `reasons`: `too_fast` khi vượt `PLATE_JOURNEY_MAX_KMH` (mặc định 150), `overlap` khi hai camera khác nhau thấy biển cùng lúc (hai xe trùng biển hoặc đọc sai).
-  - `summary`: `sightings`, `cameras`, `first_seen`, `last_seen`, `plates` (các biển đã gộp khi `fuzzy`), `implausible_legs`, `max_speed_kmh`, `truncated` (còn điểm sau `limit`).
-  - Kết quả từ video upload không có vị trí nên không nằm trong hành trình.
+  - `summary`: `sightings`, `cameras`, `first_seen`, `last_seen`, `plates` (các biển đã gộp khi `fuzzy`), `implausible_legs`, `max_speed_kmh`, `truncated` (còn điểm sau `limit`), `undated_upload_results` (số kết quả khớp nằm trong video chưa có `recorded_at` nên bị bỏ ra).
+  - Video upload: dùng lần nhận diện thành công mới nhất của mỗi video; giờ của kết quả là `recorded_at + start_seconds` (đến `end_seconds`); các kết quả của cùng video cách nhau không quá `PLATE_LIVE_SIGHTING_MINUTES` gộp thành một điểm. Cùng một file upload nhiều lần (trùng `sha256`) chỉ tính bản upload mới nhất. Video chưa khai `recorded_at` không vào hành trình (đếm trong `undated_upload_results`).
 - `GET /api/v2/recognition-results/{id}`: dự đoán tổng hợp, từng crop/prediction, URL bằng chứng và lịch sử review.
 - `GET /api/v2/detections/{id}/artifacts/{kind}`: `crop|frame|enhanced`. Loại bằng chứng không tồn tại trả `404`; MIME theo file. Nhánh enhanced chỉ có khi thực sự được model/worker hỗ trợ, không sinh giả.
 - `POST /api/v2/recognition-results/{id}/reviews`: `201`. Ví dụ:
