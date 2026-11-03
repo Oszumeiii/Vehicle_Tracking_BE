@@ -253,12 +253,9 @@ export class ResultsController {
   @ApiResponse({ status: 200, type: ResultDetailResponse })
   @ApiFailures(404)
   async detail(@Req() req: { user: Actor }, @Param('id') id: string) {
+    // Not audited: pages load the detail of every listed result on their own, so a
+    // result.view row per call recorded dozens of views nobody asked for.
     const appearance = await this.owner.result(req.user, id);
-    await this.audit.record(req, 'result.view', {
-      targetType: 'result',
-      targetId: id,
-      details: { plate: appearance.effective_text },
-    });
     const detections = (
       await this.db.query(
         'SELECT * FROM plate_detections WHERE appearance_id=$1 ORDER BY selected_order,id',
