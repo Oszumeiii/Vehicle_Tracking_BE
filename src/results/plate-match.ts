@@ -7,7 +7,7 @@ export type PlateMatch = z.infer<typeof plateMatch>;
 
 /** Plate text as stored: uppercase, without spaces, hyphens or dots ("43A-123.45" -> "43A12345"). */
 export function plateQuery(text: string) {
-  const plate = normalizePlate(text).replace(/\./g, '');
+  const plate = normalizePlate(text);
   if (!plate) throw new UnprocessableEntityException('Plate query cannot be empty.');
   return plate;
 }

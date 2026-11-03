@@ -14,6 +14,7 @@ import { JOB_OWNER, JOB_SOURCES } from '../common/ownership';
 import { ApiFailures, ApiTimeRange } from '../common/openapi';
 import { CameraLocationResponse } from '../common/api-models';
 import { AuthGuard } from '../auth/auth.guard';
+import { AuditLog } from '../audit/audit';
 import { locationView } from '../live/location';
 import { plateClause, plateQuery } from './plate-match';
 import { journeyLegs, maxJourneySpeed } from './journey';
@@ -105,7 +106,10 @@ class JourneyResponse {
 @UseGuards(AuthGuard)
 @Controller('api/v2')
 export class JourneyController {
-  constructor(private db: Database) {}
+  constructor(
+    private db: Database,
+    private audit: AuditLog,
+  ) {}
 
   @Get('plates/:plate/journey')
   @ApiResponse({ status: 200, type: JourneyResponse })
@@ -178,6 +182,15 @@ export class JourneyController {
       review_status: row.review_status,
       match_distance: row.match_distance,
     }));
+    await this.audit.record(req, 'journey.view', {
+      details: {
+        plate,
+        match: q.match,
+        captured_from: q.captured_from,
+        captured_to: q.captured_to,
+        sightings: points.length,
+      },
+    });
     const maxKmh = maxJourneySpeed();
     const legs = journeyLegs(points, maxKmh);
     return {

@@ -12,6 +12,14 @@ Mặc định `http://127.0.0.1:3000`. Ngoại trừ login và health, gửi `Au
 - `GET /api/v2/users?limit=50&offset=0`: Admin xem tài khoản.
 - `POST /api/v2/users`: Admin gửi `{email,password,display_name,role}` → `201`. Mật khẩu tối thiểu 12 ký tự.
 - `PATCH /api/v2/users/{id}`: Admin gửi các trường `display_name`, `role`, `is_active`, `password` cần thay đổi. Khóa/đổi mật khẩu thu hồi phiên. Không khóa hoặc hạ quyền Admin hoạt động cuối cùng.
+- `GET /api/v2/audit-logs`: chỉ Admin (user thường nhận `403`). **Nhật ký truy cập**, mới nhất trước, query `user_id`, `action` (khớp đúng như `auth.login`, hoặc tiền tố kết thúc bằng dấu chấm như `camera.`), `from`, `to`, phân trang. Mỗi dòng gồm `id`, `user_id`, `user_email`, `action`, `target_type`, `target_id`, `details`, `ip`, `created_at`.
+  - Hành động được ghi:
+    - `auth.login`, `auth.login_failed` (`details.email`, `reason`: `invalid` | `inactive` | `throttled`), `auth.logout`;
+    - `user.create`, `user.update` (chỉ ghi tên các trường đã đổi);
+    - `results.search` (chỉ khi có `plate`), `result.view`, `result.review`, `journey.view`, `job.export`;
+    - `camera.create|update|delete`, `session.start|stop|delete`, `watchlist.add|delete`, `media.delete`, `job.delete`.
+  - Không ghi mật khẩu, token hay các request tải ảnh/video. Lỗi khi ghi log không làm hỏng request. Worker xóa dòng cũ hơn `PLATE_AUDIT_RETENTION_DAYS` (mặc định 365).
+- Biển số do người dùng gõ (watchlist, sửa khi review, tìm kiếm) được chuẩn hóa: chữ hoa, bỏ khoảng trắng, `-` và `.`.
 
 ## Media
 

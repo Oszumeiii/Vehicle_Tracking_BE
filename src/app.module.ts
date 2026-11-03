@@ -16,6 +16,8 @@ import { LiveViewController } from './live/live-view.controller';
 import { VideoController } from './live/video.controller';
 import { WatchlistController } from './live/watchlist.controller';
 import { EvaluationController } from './evaluation/evaluation.controller';
+import { AuditController } from './audit/audit.controller';
+import { AuditLog } from './audit/audit';
 import { LiveEventsHub } from './live/events.hub';
 import { PipelineRegistry } from './recognition/registry';
 import { ApiFailures } from './common/openapi';
@@ -90,7 +92,16 @@ class HealthController {
     LiveViewController,
     WatchlistController,
     EvaluationController,
+    AuditController,
   ],
-  providers: [AuthGuard, Ownership, Storage, JobOperations, PipelineRegistry, LiveEventsHub],
+  providers: [
+    AuthGuard,
+    Ownership,
+    Storage,
+    JobOperations,
+    PipelineRegistry,
+    LiveEventsHub,
+    AuditLog,
+  ],
 })
 export class AppModule {}

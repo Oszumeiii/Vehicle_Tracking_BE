@@ -20,6 +20,7 @@ import { Actor, newId, normalizePlate, pagination } from '../common/http';
 import { ApiFailures, ApiPage, ApiPageResponse } from '../common/openapi';
 import { WatchlistResponse } from '../common/api-models';
 import { AuthGuard } from '../auth/auth.guard';
+import { AuditLog } from '../audit/audit';
 
 const createEntry = z
   .object({ plate: z.string().max(32), note: z.string().max(500).optional() })
@@ -36,7 +37,10 @@ const createEntry = z
 @UseGuards(AuthGuard)
 @Controller('api/v2/watchlist')
 export class WatchlistController {
-  constructor(private db: Database) {}
+  constructor(
+    private db: Database,
+    private audit: AuditLog,
+  ) {}
 
   @Get()
   @ApiPageResponse(WatchlistResponse)
@@ -72,8 +76,9 @@ export class WatchlistController {
     const plate = normalizePlate(body.plate);
     if (!plate || plate.length > 16)
       throw new UnprocessableEntityException('Plate must have 1-16 characters.');
+    let entry;
     try {
-      return (
+      entry = (
         await this.db.query(
           'INSERT INTO plate_watchlist(id,owner_id,plate,note) VALUES($1,$2,$3,$4) RETURNING *',
           [newId(), req.user.id, plate, body.note ?? null],
@@ -84,6 +89,12 @@ export class WatchlistController {
         throw new ConflictException('This plate is already on your watchlist.');
       throw error;
     }
+    await this.audit.record(req, 'watchlist.add', {
+      targetType: 'watchlist',
+      targetId: entry.id,
+      details: { plate },
+    });
+    return entry;
   }
 
   @Delete(':id')
@@ -91,10 +102,15 @@ export class WatchlistController {
   @ApiResponse({ status: 204, description: 'Watchlist entry removed.' })
   @ApiFailures(404)
   async remove(@Req() req: { user: Actor }, @Param('id') id: string) {
-    const result = await this.db.query('DELETE FROM plate_watchlist WHERE id=$1 AND owner_id=$2', [
-      id,
-      req.user.id,
-    ]);
+    const result = await this.db.query(
+      'DELETE FROM plate_watchlist WHERE id=$1 AND owner_id=$2 RETURNING plate',
+      [id, req.user.id],
+    );
     if (!result.rowCount) throw new NotFoundException('Watchlist entry not found.');
+    await this.audit.record(req, 'watchlist.delete', {
+      targetType: 'watchlist',
+      targetId: id,
+      details: { plate: result.rows[0].plate },
+    });
   }
 }
