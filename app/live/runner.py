@@ -104,11 +104,15 @@ class DuplicateLinker:
 class LiveRunner:
     def __init__(self, snapshot, out, open_source, emit, model, recognizer, *, data_dir=None,
                  min_confidence=DEFAULT_MIN_CONFIDENCE, max_track_seconds=30., max_reconnects=10, read_timeout=15.,
-                 stats_interval=1., buffer_seconds=1.5, reader_capacity=None, backoff_max=30., exclude_zones=(),
+                 stats_interval=1., buffer_seconds=1.5, reader_capacity=None, backoff_max=30., exclude_zones=(), detect_roi=None,
                  sampling_scale=1., recording=None):
         if snapshot.get("recognizer", {}).get("input_mode") != "five_frame_joint":
             raise ValueError("Live recognition supports five_frame_joint pipelines only")
         self.exclude_zones = [list(map(float, zone)) for zone in exclude_zones]
+        self.detect_roi = list(map(float, detect_roi)) if detect_roi else None
+        if self.detect_roi and (len(self.detect_roi) != 4 or not (
+                0 <= self.detect_roi[0] < self.detect_roi[2] <= 1 and 0 <= self.detect_roi[1] < self.detect_roi[3] <= 1)):
+            raise ValueError("detect_roi must be [x1, y1, x2, y2] with 0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1")
         if any(len(z) != 4 or not 0 <= z[0] < z[2] <= 1 or not 0 <= z[1] < z[3] <= 1 for z in self.exclude_zones):
             raise ValueError("Exclude zones must be normalized [x1, y1, x2, y2] rectangles")
         self.snapshot, self.out, self.open_source, self.emit = snapshot, out, open_source, emit
@@ -184,7 +188,7 @@ class LiveRunner:
     def _run_epoch(self, epoch, info, connection, stop):
         cfg = {**tracking_config(info["width"], info["height"], info["fps"], 0, self.tracking_snapshot,
                                  info.get("video_id", "live")), "max_track_seconds": self.max_track_seconds,
-               "exclude_zones": self.exclude_zones}
+               "exclude_zones": self.exclude_zones, "detect_roi": self.detect_roi}
         self._warm_up(cfg)
         capacity = self.reader_capacity or max(8, math.ceil(self.buffer_seconds * info["fps"]))
         reader = LiveReader(connection, capacity).start()
@@ -276,6 +280,7 @@ class LiveRunner:
                           reasons={k: gate[k] for k in ("warmup", "live_track", "confirm_scene", "motion",
                                                         "periodic_probe", "idle_skip", "disabled") if gate[k]}),
             detect=dict(batches=detect["batches"], frames=detect["frames"], boxes=detect["boxes"],
+                        roi=self.detect_roi is not None,
                         frames_without_plate=gate["detector_frames_without_plate"],
                         ms_per_frame=round(1000 * detect["seconds"] / detect["frames"], 1) if detect["frames"] else None),
             tracking=dict(active=len(session.active), finished=self.tracks,

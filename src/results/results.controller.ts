@@ -60,6 +60,8 @@ const search = pagination
     captured_from: instant,
     captured_to: instant,
     group_by: z.enum(['sighting']).optional(),
+    min_crop_width: z.coerce.number().int().min(1).max(2000).optional(),
+    order: z.enum(['time', 'confidence']).default('time'),
   })
   .strict();
 // A live sighting groups the tracks of one vehicle passage; every upload result stands alone.
@@ -67,7 +69,9 @@ const SIGHTING = 'coalesce(j.sighting_id, a.id)';
 const RESULT_FIELDS = `a.*,${APPEARANCE_MEDIA_FIELDS},m.uploaded_at,
   CASE WHEN j.live_session_id IS NULL THEN 'upload' ELSE 'live' END AS origin,
   s.stream_source_id,j.live_session_id,j.captured_from,j.captured_to,j.confidence_status,
-  j.duplicate_of_job_id,j.sighting_id`;
+  j.duplicate_of_job_id,j.sighting_id,(j.statistics->>'confidence')::float AS confidence`;
+// Mean width of a result's plate crops, in pixels.
+const CROP_WIDTH = `(SELECT avg(d.crop_width) FROM plate_detections d WHERE d.appearance_id=a.id)`;
 const review = z
   .object({
     action: z.enum(['confirm', 'correct', 'unreadable', 'reject']),
@@ -110,6 +114,18 @@ export class ResultsController {
       'Plate matching; exact by default. `fuzzy` folds look-alike characters (O/D/Q=0, I/L=1, Z=2, S=5, B=8, G=6) and allows 1 edit from 5 characters, 2 from 8; nearest first, with match_distance.',
   })
   @ApiQuery({ name: 'origin', required: false, enum: ['upload', 'live'] })
+  @ApiQuery({
+    name: 'min_crop_width',
+    required: false,
+    type: Number,
+    description: 'Only results whose plate crops are at least this wide on average (pixels).',
+  })
+  @ApiQuery({
+    name: 'order',
+    required: false,
+    enum: ['time', 'confidence'],
+    description: 'time (default, newest first) or confidence (most confident live reads first).',
+  })
   @ApiQuery({ name: 'media_id', required: false, type: String })
   @ApiQuery({ name: 'stream_source_id', required: false, type: String })
   @ApiQuery({ name: 'live_session_id', required: false, type: String })
@@ -150,9 +166,15 @@ export class ResultsController {
         f.origin === 'live' ? 'j.live_session_id IS NOT NULL' : 'j.media_id IS NOT NULL',
       );
     if (f.exclude_duplicates) clauses.push('j.duplicate_of_job_id IS NULL');
+    if (f.min_crop_width !== undefined) {
+      values.push(f.min_crop_width);
+      clauses.push(`${CROP_WIDTH}>=$${values.length}`);
+    }
     // Fuzzy matches carry their edit distance and come nearest first.
     let fields = RESULT_FIELDS,
       nearest = '';
+    // Most confident first: the order a reviewer works through low-confidence reads.
+    const byConfidence = f.order === 'confidence';
     if (f.plate !== undefined) {
       const plate = plateQuery(f.plate);
       const { where, distance } = plateClause(f.match, plate, values);
@@ -207,7 +229,7 @@ export class ResultsController {
           WINDOW w AS (PARTITION BY ${SIGHTING})
           ORDER BY ${SIGHTING}, (a.review_status <> 'pending') DESC, ${nearest}
             (j.statistics->>'confidence')::float DESC NULLS LAST, a.id
-        ) grouped ORDER BY ${nearest && 'grouped.match_distance,'}coalesce(grouped.first_seen, grouped.captured_from, grouped.uploaded_at) DESC, grouped.id
+        ) grouped ORDER BY ${nearest && 'grouped.match_distance,'}${byConfidence ? 'grouped.confidence DESC NULLS LAST,' : ''}coalesce(grouped.first_seen, grouped.captured_from, grouped.uploaded_at) DESC, grouped.id
         ${page}`,
         [...values, f.limit, f.offset],
       );
@@ -220,7 +242,7 @@ export class ResultsController {
     }
     const count = await this.db.query(`SELECT count(*) ${from}`, values);
     const items = await this.db.query(
-      `SELECT ${fields} ${from} ORDER BY ${nearest}coalesce(j.captured_from,m.uploaded_at) DESC,a.id ${page}`,
+      `SELECT ${fields} ${from} ORDER BY ${nearest}${byConfidence ? `(j.statistics->>'confidence')::float DESC NULLS LAST,` : ''}coalesce(j.captured_from,m.uploaded_at) DESC,a.id ${page}`,
       [...values, f.limit, f.offset],
     );
     return {

@@ -271,3 +271,81 @@ test('the worker replays the upload once on its filming clock, or loops on the w
   assert.equal(missing.session.status, 'failed');
   assert.equal(missing.session.error_code, 'SOURCE_MISSING');
 });
+
+test('a camera detection region is validated, copied into sessions and handed to the worker', async () => {
+  const youtube = (
+    await api
+      .post('/api/v2/stream-sources')
+      .set(as('owner'))
+      .send({
+        name: 'roi',
+        url: 'https://www.youtube.com/watch?v=R-OLN-xAVoA',
+        detect_roi: [0.3, 0.35, 1, 1],
+      })
+      .expect(201)
+  ).body;
+  assert.deepEqual(youtube.detect_roi, [0.3, 0.35, 1, 1]);
+  for (const detect_roi of [
+    [0.5, 0.5, 0.4, 1],
+    [0, 0, 0.05, 1],
+    [0, 0, 1],
+    [-0.1, 0, 1, 1],
+  ])
+    await api
+      .patch(`/api/v2/stream-sources/${youtube.id}`)
+      .set(as('owner'))
+      .send({ detect_roi })
+      .expect(422);
+  // Other changes keep the region.
+  const renamed = await api
+    .patch(`/api/v2/stream-sources/${youtube.id}`)
+    .set(as('owner'))
+    .send({ name: 'roi 2' })
+    .expect(200);
+  assert.deepEqual(renamed.body.detect_roi, [0.3, 0.35, 1, 1]);
+
+  const queued = (
+    await api
+      .post(`/api/v2/stream-sources/${youtube.id}/sessions`)
+      .set(as('owner'))
+      .send({ pipeline_id: 'joint' })
+      .expect(202)
+  ).body;
+  assert.deepEqual((await sessionRow(queued.id)).settings.detect_roi, [0.3, 0.35, 1, 1]);
+  const spawned: { args: string[]; child: Fake }[] = [];
+  await manager(spawned).tick();
+  const payload = JSON.parse(
+    await readFile(join(dataDir, 'live', queued.id, 'payload.json'), 'utf8'),
+  );
+  assert.deepEqual(payload.source.detect_roi, [0.3, 0.35, 1, 1]);
+  spawned[0].child.line({ type: 'status', status: 'stopped' });
+  spawned[0].child.exit(0);
+  await until(
+    () => sessionRow(queued.id),
+    (row) => !['queued', 'starting', 'running', 'stopping'].includes(row.status),
+    'session end',
+  );
+
+  // Cleared: the whole frame again, also for sessions an always-on camera restarts.
+  const cleared = await api
+    .patch(`/api/v2/stream-sources/${youtube.id}`)
+    .set(as('owner'))
+    .send({ detect_roi: null, always_on: true, auto_settings: { pipeline_id: 'joint' } })
+    .expect(200);
+  assert.equal(cleared.body.detect_roi, null);
+  await api
+    .patch(`/api/v2/stream-sources/${youtube.id}`)
+    .set(as('owner'))
+    .send({ detect_roi: [0, 0.5, 1, 1] })
+    .expect(200);
+  // The short session above would make auto restart back off; it is gone now.
+  await api.delete(`/api/v2/live-sessions/${queued.id}`).set(as('owner')).expect(204);
+  await manager([]).autoRestart();
+  const restarted = (
+    await db().query(
+      "SELECT settings FROM live_sessions WHERE stream_source_id=$1 AND status='queued'",
+      [youtube.id],
+    )
+  ).rows[0];
+  assert.deepEqual(restarted.settings.detect_roi, [0, 0.5, 1, 1]);
+});

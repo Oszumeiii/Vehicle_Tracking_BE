@@ -257,6 +257,7 @@ class Host:
                     data_dir=self.data_dir, min_confidence=float(message.get("min_confidence", DEFAULT_MIN_CONFIDENCE)),
                     max_track_seconds=float(message.get("max_track_seconds", 30.)),
                     buffer_seconds=self.buffer_seconds, exclude_zones=payload["source"].get("exclude_zones") or (),
+                    detect_roi=payload["source"].get("detect_roi"),
                     sampling_scale=self.sampling_scale, recording=recording_options())
                 with self.lock:
                     self.runners[session] = runner

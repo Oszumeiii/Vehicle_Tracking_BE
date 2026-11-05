@@ -215,6 +215,7 @@ export class LiveManager {
         max_track_seconds: auto.max_track_seconds ?? 30,
         max_height: auto.max_height ?? 1080,
         exclude_zones: camera.exclude_zones,
+        ...(camera.detect_roi ? { detect_roi: camera.detect_roi } : {}),
       };
       await this.database
         .transaction(async (c) => {
@@ -380,6 +381,7 @@ export class LiveManager {
             source,
             session.settings.exclude_zones ?? [],
             session.settings.max_height ?? 1080,
+            session.settings.detect_roi ?? null,
           ),
         ),
       );

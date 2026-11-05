@@ -213,6 +213,7 @@ def main(argv=None):
                             min_confidence=args.min_confidence, max_track_seconds=args.max_track_seconds,
                             max_reconnects=args.max_reconnects, buffer_seconds=args.buffer_seconds,
                             exclude_zones=payload["source"].get("exclude_zones") or (),
+                            detect_roi=payload["source"].get("detect_roi"),
                             recording=recording_options())
     except Exception as exc:  # noqa: BLE001
         traceback.print_exc()

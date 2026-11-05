@@ -67,6 +67,26 @@ export const excludeZones = z
   )
   .max(16);
 
+/**
+ * Detection region: one normalized [x1, y1, x2, y2] box, at least a tenth of the frame each way,
+ * or null for the whole frame.
+ */
+export const detectRoi = z
+  .tuple([z.number(), z.number(), z.number(), z.number()])
+  .refine(
+    ([x1, y1, x2, y2]) =>
+      0 <= x1 &&
+      x1 < x2 &&
+      x2 <= 1 &&
+      0 <= y1 &&
+      y1 < y2 &&
+      y2 <= 1 &&
+      x2 - x1 >= 0.1 &&
+      y2 - y1 >= 0.1,
+    { message: 'The detection region is [x1, y1, x2, y2] in 0..1, at least 0.1 wide and high.' },
+  )
+  .nullable();
+
 /** Where a live process reads from: a YouTube link, an IP camera, or a demo video replayed in a loop. */
 export type LiveSource =
   | { type: 'youtube'; url: string }
@@ -81,7 +101,9 @@ export function livePayload(
   source: LiveSource,
   zones: Zone[] = [],
   maxHeight = 1080,
+  roi: number[] | null = null,
 ) {
+  const region = roi ? { detect_roi: roi } : {};
   return {
     pipeline_snapshot: snapshot,
     source:
@@ -94,8 +116,15 @@ export function livePayload(
             loop: source.loop ?? true,
             ...(source.startTime ? { start_time: new Date(source.startTime).toISOString() } : {}),
             exclude_zones: zones,
+            ...region,
           }
-        : { type: source.type, url: source.url, exclude_zones: zones, max_height: maxHeight },
+        : {
+            type: source.type,
+            url: source.url,
+            exclude_zones: zones,
+            max_height: maxHeight,
+            ...region,
+          },
   };
 }
 

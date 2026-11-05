@@ -56,6 +56,7 @@ import {
   DEMO_VIDEO_EXTENSIONS,
   demoVideoFile,
   excludeZones,
+  detectRoi,
   isLivePipeline,
   isYoutubeUrl,
   MAX_HEIGHTS,
@@ -107,6 +108,7 @@ const createSource = z.union([
         .max(2000)
         .refine(isYoutubeUrl, { message: 'Provide a YouTube watch or live URL.' }),
       exclude_zones: excludeZones.default([]),
+      detect_roi: detectRoi.optional(),
       location: location.optional(),
     })
     .strict(),
@@ -116,6 +118,7 @@ const createSource = z.union([
       source_type: z.literal('file'),
       path: demoPath,
       exclude_zones: excludeZones.default([]),
+      detect_roi: detectRoi.optional(),
       location: location.optional(),
     })
     .strict(),
@@ -125,6 +128,7 @@ const createSource = z.union([
       source_type: z.literal('rtsp'),
       url: rtspUrl,
       exclude_zones: excludeZones.default([]),
+      detect_roi: detectRoi.optional(),
       location: location.optional(),
     })
     .strict(),
@@ -135,6 +139,7 @@ const createSource = z.union([
       media_id: z.string().min(1).max(32),
       loop: z.boolean().default(false),
       exclude_zones: excludeZones.default([]),
+      detect_roi: detectRoi.optional(),
       location: location.optional(),
     })
     .strict(),
@@ -155,6 +160,7 @@ const updateSource = z
     name: name.optional(),
     url: rtspUrl.optional(),
     exclude_zones: excludeZones.optional(),
+    detect_roi: detectRoi.optional(),
     always_on: z.boolean().optional(),
     auto_settings: z
       .object({ pipeline_id: z.string().min(1).max(100), ...runSettings })
@@ -261,6 +267,15 @@ export class LiveController {
             'source_type media: replay forever instead of ending the session after one pass.',
         },
         exclude_zones: streamZones,
+        detect_roi: {
+          type: 'array',
+          nullable: true,
+          minItems: 4,
+          maxItems: 4,
+          items: { type: 'number', minimum: 0, maximum: 1 },
+          description:
+            'Detection region [x1, y1, x2, y2] (normalized, at least 0.1 each way): the detector runs on that part of the frame, scaled up; null = whole frame. Applies from the next session.',
+        },
         location: locationSchema,
       },
     },
@@ -305,8 +320,8 @@ export class LiveController {
     const row = (
       await this.db.query(
         `INSERT INTO stream_sources(id,owner_id,name,source_type,url,exclude_zones,
-           latitude,longitude,location_name,heading,media_id,replay_loop)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+           latitude,longitude,location_name,heading,media_id,replay_loop,detect_roi)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
         [
           newId(),
           req.user.id,
@@ -317,6 +332,7 @@ export class LiveController {
           ...where,
           mediaId,
           loop,
+          body.detect_roi ? JSON.stringify(body.detect_roi) : null,
         ],
       )
     ).rows[0];
@@ -483,6 +499,15 @@ export class LiveController {
       properties: {
         name: { type: 'string', minLength: 1, maxLength: 200 },
         exclude_zones: streamZones,
+        detect_roi: {
+          type: 'array',
+          nullable: true,
+          minItems: 4,
+          maxItems: 4,
+          items: { type: 'number', minimum: 0, maximum: 1 },
+          description:
+            'Detection region [x1, y1, x2, y2] (normalized, at least 0.1 each way): the detector runs on that part of the frame, scaled up; null = whole frame. Applies from the next session.',
+        },
         location: locationSchema,
         always_on: {
           type: 'boolean',
@@ -538,7 +563,7 @@ export class LiveController {
         await c.query(
           `UPDATE stream_sources SET name=$2,exclude_zones=$3,always_on=$4,auto_settings=$5,
           keyframe_retention_hours=$6,track_retention_days=$7,url=$8,
-          latitude=$9,longitude=$10,location_name=$11,heading=$12,replay_loop=$13,updated_at=now()
+          latitude=$9,longitude=$10,location_name=$11,heading=$12,replay_loop=$13,detect_roi=$14,updated_at=now()
           WHERE id=$1 RETURNING *`,
           [
             id,
@@ -553,6 +578,13 @@ export class LiveController {
               ? [source.latitude, source.longitude, source.location_name, source.heading]
               : locationColumns(body.location)),
             body.loop ?? source.replay_loop,
+            body.detect_roi === undefined
+              ? source.detect_roi === null
+                ? null
+                : JSON.stringify(source.detect_roi)
+              : body.detect_roi === null
+                ? null
+                : JSON.stringify(body.detect_roi),
           ],
         )
       ).rows[0];
@@ -635,6 +667,7 @@ export class LiveController {
           max_track_seconds: body.max_track_seconds,
           max_height: body.max_height,
           exclude_zones: source.exclude_zones,
+          ...(source.detect_roi ? { detect_roi: source.detect_roi } : {}),
         };
         const row = (
           await c.query(
