@@ -341,14 +341,32 @@ def warm_up_detector(model, cfg):
         detect_plates(model, [frame] * size, cfg)
 
 
-def detect_plates(model, images, cfg):
-    """Full-frame YOLO at conf .10 plus the notebook's geometric box filter.
+def roi_pixels(roi, width, height):
+    """Pixel box (x1, y1, x2, y2) of a normalized detection region, or None for the whole frame."""
+    if not roi:
+        return None
+    x1, y1, x2, y2 = (int(round(v * s)) for v, s in zip(roi, (width, height, width, height)))
+    x1, y1 = max(0, min(x1, width - 1)), max(0, min(y1, height - 1))
+    x2, y2 = max(x1 + 1, min(x2, width)), max(y1 + 1, min(y2, height))
+    return x1, y1, x2, y2
 
+
+def detect_plates(model, images, cfg):
+    """YOLO at conf .10 plus the notebook's geometric box filter.
+
+    cfg["detect_roi"] (live cameras only), a normalized [x1, y1, x2, y2] box, limits the
+    detector to that region: it gets the region alone, so at the same input size the region
+    is scaled up and small plates in it become larger for the model. Boxes come back in
+    full-frame coordinates, so tracking and crops work on the full frame as before.
     cfg["exclude_zones"] (live cameras only) holds normalized [x1, y1, x2, y2]
     rectangles; boxes centred inside one, such as a fixed street sign, are dropped.
     """
     cuda = cfg["device"] != "cpu"
     zones = cfg.get("exclude_zones") or ()
+    regions = [roi_pixels(cfg.get("detect_roi"), image.shape[1], image.shape[0]) for image in images]
+    images_in = [image if r is None else image[r[1]:r[3], r[0]:r[2]] for image, r in zip(images, regions)]
+    full = images
+    images = images_in
     batch = images
     if cuda and images:
         # fp16 CUDA kernels are prepared per batch size and per thread, about 1.8 s
@@ -359,7 +377,7 @@ def detect_plates(model, images, cfg):
     results = model.predict(batch, imgsz=cfg["imgsz"], conf=.10, iou=.7, device=cfg["device"],
                             quantize="fp16" if cuda else None, verbose=False, max_det=100, rect=True)[:len(images)]
     boxes = []
-    for result, image in zip(results, images):
+    for result, image, frame, region in zip(results, images, full, regions):
         b = result.boxes.cpu().numpy()
         if len(b):
             h, w = image.shape[:2]
@@ -369,10 +387,22 @@ def detect_plates(model, images, cfg):
             keep = (np.isfinite(a).all(axis=1) & (a[:, 0] >= 0) & (a[:, 1] >= 0)
                     & (a[:, 2] <= w) & (a[:, 3] <= h) & (bw >= 12) & (bh >= 5)
                     & (ratio >= 1.1) & (ratio <= 7))
-            cx, cy = (a[:, 0] + a[:, 2]) / (2 * w), (a[:, 1] + a[:, 3]) / (2 * h)
-            for x1, y1, x2, y2 in zones:
-                keep &= ~((cx >= x1) & (cx <= x2) & (cy >= y1) & (cy <= y2))
             b = b[keep]
+            if region is not None and len(b):
+                # Back to full-frame coordinates (the tracker, crops and zones use the frame).
+                from ultralytics.engine.results import Boxes
+                data = np.array(b.data, dtype=np.float32, copy=True)
+                data[:, [0, 2]] += region[0]
+                data[:, [1, 3]] += region[1]
+                b = Boxes(data, frame.shape[:2])
+            if len(b):
+                fh, fw = frame.shape[:2]
+                a = b.data[:, :4]
+                cx, cy = (a[:, 0] + a[:, 2]) / (2 * fw), (a[:, 1] + a[:, 3]) / (2 * fh)
+                keep = np.ones(len(b), dtype=bool)
+                for x1, y1, x2, y2 in zones:
+                    keep &= ~((cx >= x1) & (cx <= x2) & (cy >= y1) & (cy <= y2))
+                b = b[keep]
         boxes.append(b)
     return boxes
 

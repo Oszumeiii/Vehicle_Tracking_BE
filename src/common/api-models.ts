@@ -254,6 +254,13 @@ export class SearchResultResponse extends AppearanceResponse {
     description: 'match=fuzzy only: characters changed from the query (0 = exact).',
   })
   match_distance?: number;
+  @ApiProperty({
+    type: Number,
+    nullable: true,
+    description:
+      'Plate confidence of a live read (compared with the camera threshold); null for uploads.',
+  })
+  confidence!: number | null;
 }
 
 const sessionStatuses = [
@@ -330,6 +337,12 @@ export class StreamSourceResponse {
     description: 'Where the camera is; null until set.',
   })
   location!: CameraLocationResponse | null;
+  @ApiProperty({
+    type: [Number],
+    nullable: true,
+    description: 'Detection region [x1, y1, x2, y2] (normalized); null = whole frame.',
+  })
+  detect_roi!: number[] | null;
   @ApiProperty({ ...nullableText, description: 'YouTube video id; null for channel links.' })
   video_id!: string | null;
   @ApiProperty({

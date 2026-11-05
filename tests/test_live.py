@@ -640,3 +640,41 @@ def test_uploaded_video_replay_uses_its_filming_clock(tmp_path):
     end = datetime.fromisoformat(record["captured_to"].replace("Z", "+00:00"))
     # Days-old footage keeps its own clock (a broadcast clock that far from receive time is refused).
     assert start <= begin <= end < start + timedelta(seconds=5)
+
+
+def test_detection_region_runs_the_detector_on_the_region_and_returns_frame_boxes():
+    from app.recognition.video_tracking import detect_plates, roi_pixels
+
+    class Recorder(BoxFixture):
+        def __init__(self):
+            self.shapes = []
+
+        def predict(self, images, **kwargs):
+            self.shapes += [im.shape[:2] for im in images]
+            return super().predict(images, **kwargs)
+
+    images = [np.zeros((180, 320, 3), np.uint8)]
+    cfg = {"device": "cpu", "imgsz": 320, "detect_roi": [.25, .5, 1, 1]}
+    model = Recorder()
+    boxes = detect_plates(model, images, cfg)[0]
+    # The detector saw the region only (90 x 240 px); the box [40, 40, 140, 70] in it is
+    # [120, 130, 220, 160] in the frame.
+    assert model.shapes == [(90, 240)]
+    assert boxes.data[:, :4].tolist() == [[120, 130, 220, 160]]
+    assert tuple(boxes.orig_shape) == (180, 320)
+    # Exclude zones are matched in frame coordinates after the shift.
+    assert len(detect_plates(Recorder(), images, {**cfg, "exclude_zones": [[.5, .7, .6, .9]]})[0]) == 0
+    assert len(detect_plates(Recorder(), images, {**cfg, "exclude_zones": [[.1, .2, .4, .4]]})[0]) == 1
+    # No region: the whole frame, as before.
+    plain = Recorder()
+    assert detect_plates(plain, images, {"device": "cpu", "imgsz": 320})[0].data[:, :4].tolist() == [[40, 40, 140, 70]]
+    assert plain.shapes == [(180, 320)]
+    assert roi_pixels(None, 320, 180) is None
+    assert roi_pixels([0, 0, 1, 1], 320, 180) == (0, 0, 320, 180)
+
+
+def test_runner_rejects_an_invalid_detection_region(tmp_path):
+    with pytest.raises(ValueError, match="detect_roi"):
+        LiveRunner(SNAPSHOT, tmp_path / "x", None, print, BoxFixture(), recognizer, detect_roi=[.5, .5, .4, 1])
+    runner = LiveRunner(SNAPSHOT, tmp_path / "y", None, print, BoxFixture(), recognizer, detect_roi=[0, .4, 1, 1])
+    assert runner.detect_roi == [0, .4, 1, 1]

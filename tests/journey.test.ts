@@ -423,3 +423,55 @@ test('result search matches misreads and old/Mercosul plates when fuzzy, nearest
   const grouped = await search({ plate: 'SXE6J35', match: 'fuzzy', group_by: 'sighting' });
   assert.equal(grouped.items[0].match_distance, 0);
 });
+
+test('the review queue filters by crop width and orders by confidence', async () => {
+  const live = await session((await camera('queue')).id);
+  const read = async (key: string, text: string, confidence: number, at: string) => {
+    await writeTrack(dataDir, live.id, key, {
+      text,
+      confidence,
+      status: confidence >= 0.96 ? 'readable' : 'low_confidence',
+      capturedFrom: at,
+      capturedTo: new Date(Date.parse(at) + 4000).toISOString(),
+    });
+    return ingestTrack(db(), workerOptions(), live, key);
+  };
+  await read('e000-t000001', 'ABC1D23', 0.62, '2026-05-01T08:00:00.000Z');
+  const wide = await read('e000-t000002', 'DEF4G56', 0.91, '2026-05-01T08:01:00.000Z');
+  await read('e000-t000003', 'GHI7J89', 0.75, '2026-05-01T08:02:00.000Z');
+  // The second read's crops are 80 px wide; the fixture's are 8 px.
+  await db().query(
+    'UPDATE plate_detections SET crop_width=80 WHERE appearance_id IN (SELECT id FROM plate_appearances WHERE job_id=$1)',
+    [wide],
+  );
+  const list = async (query: Record<string, string>) =>
+    (
+      await api
+        .get('/api/v2/recognition-results')
+        .query({ stream_source_id: live.stream_source_id, ...query })
+        .set(as('owner'))
+        .expect(200)
+    ).body;
+  const byConfidence = await list({ order: 'confidence', confidence_status: 'low_confidence' });
+  assert.deepEqual(
+    byConfidence.items.map((item: any) => [item.effective_text, item.confidence]),
+    [
+      ['DEF4G56', 0.91],
+      ['GHI7J89', 0.75],
+      ['ABC1D23', 0.62],
+    ],
+  );
+  const byTime = await list({});
+  assert.deepEqual(
+    byTime.items.map((item: any) => item.effective_text),
+    ['GHI7J89', 'DEF4G56', 'ABC1D23'],
+  );
+  const large = await list({ min_crop_width: '50' });
+  assert.deepEqual(
+    large.items.map((item: any) => item.effective_text),
+    ['DEF4G56'],
+  );
+  await list({ order: 'random' }).catch(() => null);
+  await api.get('/api/v2/recognition-results?order=random').set(as('owner')).expect(422);
+  await api.get('/api/v2/recognition-results?min_crop_width=0').set(as('owner')).expect(422);
+});
