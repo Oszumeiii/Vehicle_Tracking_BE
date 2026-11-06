@@ -32,6 +32,15 @@ export class LoginResponse {
   @ApiProperty(dateTime) expires_at!: string;
 }
 
+export class AssetTokenResponse {
+  @ApiProperty({
+    description:
+      'Signed token for image and video URLs (`?asset_token=`); ends with the session or after PLATE_ASSET_TOKEN_MINUTES.',
+  })
+  asset_token!: string;
+  @ApiProperty(dateTime) expires_at!: string;
+}
+
 export class CameraLocationResponse {
   @ApiProperty({ type: 'number', minimum: -90, maximum: 90 }) latitude!: number;
   @ApiProperty({ type: 'number', minimum: -180, maximum: 180 }) longitude!: number;

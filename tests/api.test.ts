@@ -10,6 +10,7 @@ import { PipelineRegistry } from '../src/recognition/registry';
 import { Database } from '../src/database/database';
 import { processOne, workerOptions } from '../src/recognition/engine';
 import { newId, seedUser, startTestDatabase, TestDatabase } from './helpers';
+import { signAssetToken } from '../src/auth/security';
 
 const image = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAgAAAAECAIAAAA8r+mnAAAAFElEQVR4nGPkEpFjwAaYsIqSJQEAGNgARL3K8HcAAAAASUVORK5CYII=',
@@ -176,6 +177,52 @@ test('FinalV1 media URLs authenticate only asset reads and preserve ownership', 
     .query({ token: ownerToken })
     .set('Range', 'bytes=0-7')
     .expect(206);
+});
+
+test('signed asset tokens open files only, keep ownership and end with the session', async () => {
+  const item = await completed();
+  const crop = `/api/v2/detections/${item.detectionId}/artifacts/crop`;
+  const session = await login(owner);
+  const issue = async (token: string) =>
+    (await api.post('/api/v2/auth/asset-token').set('Authorization', `Bearer ${token}`).expect(200))
+      .body;
+  const { asset_token, expires_at } = await issue(session);
+  assert.ok(!asset_token.includes(session), 'the bearer token stays out of URLs');
+  const minutes = (new Date(expires_at).getTime() - Date.now()) / 60000;
+  assert.ok(minutes > 55 && minutes <= 60, `expires in ${minutes} min`);
+  await api.get(crop).query({ asset_token }).expect(200);
+  await api
+    .get(`/api/v2/media/${item.mediaId}/content`)
+    .query({ asset_token })
+    .set('Range', 'bytes=0-7')
+    .expect(206);
+  // Ownership still applies, and the token is no bearer token for the rest of the API.
+  const strangerAsset = (await issue(strangerToken)).asset_token;
+  await api.get(crop).query({ asset_token: strangerAsset }).expect(404);
+  await api.get('/api/v2/auth/me').query({ asset_token }).expect(401);
+  await api.get('/api/v2/auth/me').set('Authorization', `Bearer ${asset_token}`).expect(401);
+  // Tampered signature, expiry or session.
+  const [sessionId, expires, signature] = asset_token.split('.');
+  const flipped = `${signature.slice(0, -1)}${signature.endsWith('A') ? 'B' : 'A'}`;
+  for (const bad of [
+    `${sessionId}.${expires}.${flipped}`,
+    `${sessionId}.${Number(expires) + 3600}.${signature}`,
+    `${'0'.repeat(32)}.${expires}.${signature}`,
+    'garbage',
+  ])
+    await api.get(crop).query({ asset_token: bad }).expect(401);
+  // Expired, though correctly signed.
+  const hash = (
+    await fixture.database.query('SELECT token_hash FROM auth_sessions WHERE id=$1', [sessionId])
+  ).rows[0].token_hash;
+  const past = Math.floor(Date.now() / 1000) - 5;
+  await api
+    .get(crop)
+    .query({ asset_token: signAssetToken(sessionId, hash, past) })
+    .expect(401);
+  // Signing out ends every asset token of that session.
+  await api.post('/api/v2/auth/logout').set('Authorization', `Bearer ${session}`).expect(204);
+  await api.get(crop).query({ asset_token }).expect(401);
 });
 
 test('FinalV1 metadata and optional partial search preserve reviewed results', async () => {

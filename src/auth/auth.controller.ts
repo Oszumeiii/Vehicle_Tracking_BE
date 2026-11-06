@@ -24,9 +24,9 @@ import { Database } from '../database/database';
 import { Actor, newId, pagination } from '../common/http';
 import { settings } from '../common/config';
 import { ApiFailures, ApiPage, ApiPageResponse } from '../common/openapi';
-import { LoginResponse, UserResponse } from '../common/api-models';
+import { AssetTokenResponse, LoginResponse, UserResponse } from '../common/api-models';
 import { AuthGuard } from './auth.guard';
-import { hashPassword, verifyPassword, makeToken, hashToken } from './security';
+import { hashPassword, verifyPassword, makeToken, hashToken, signAssetToken } from './security';
 import { LoginThrottle } from './throttle';
 import { AuditLog } from '../audit/audit';
 
@@ -146,6 +146,29 @@ export class AuthController {
       req.user.session_id,
     ]);
     await this.audit.record(req, 'auth.logout');
+  }
+
+  @Post('auth/asset-token')
+  @HttpCode(200)
+  @ApiResponse({ status: 200, type: AssetTokenResponse })
+  @UseGuards(AuthGuard)
+  @ApiBearerAuth()
+  async assetToken(@Req() req: { user: Actor }) {
+    const session = (
+      await this.db.query('SELECT token_hash,expires_at FROM auth_sessions WHERE id=$1', [
+        req.user.session_id,
+      ])
+    ).rows[0];
+    // Never outlives the session it is signed with.
+    const until = Math.min(
+      Date.now() + settings().assetTokenMinutes * 60000,
+      new Date(session.expires_at).getTime(),
+    );
+    const expires = Math.floor(until / 1000);
+    return {
+      asset_token: signAssetToken(req.user.session_id!, session.token_hash, expires),
+      expires_at: new Date(expires * 1000),
+    };
   }
 
   @Get('auth/me')

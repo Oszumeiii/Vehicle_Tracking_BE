@@ -186,6 +186,7 @@ export class LiveViewController {
     @Req() req: { user: Actor },
     @Param('id') id: string,
     @Query('token') token: unknown,
+    @Query('asset_token') assetToken: unknown,
     @Res() response: Response,
   ) {
     await this.owner.streamSource(req.user, id);
@@ -195,7 +196,12 @@ export class LiveViewController {
     const shown = items.slice(-PLAYLIST_SEGMENTS);
     const epochNumber = Number(epoch.slice(1));
     // A query token (players that cannot send headers) is passed on to the segments.
-    const query = typeof token === 'string' ? `?token=${encodeURIComponent(token)}` : '';
+    const query =
+      typeof assetToken === 'string'
+        ? `?asset_token=${encodeURIComponent(assetToken)}`
+        : typeof token === 'string'
+          ? `?token=${encodeURIComponent(token)}`
+          : '';
     const lines = [
       '#EXTM3U',
       '#EXT-X-VERSION:3',

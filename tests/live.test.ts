@@ -954,6 +954,11 @@ test('a camera is watched as HLS from its recording, a demo camera as its file',
   // A player without headers: the token goes on to the segments.
   const tokened = await api.get(`${base}/live.m3u8?token=${tokens.owner}`).expect(200);
   assert.ok(tokened.text.includes(`000001.ts?token=${tokens.owner}`));
+  const { asset_token } = (await api.post('/api/v2/auth/asset-token').set(as('owner')).expect(200))
+    .body;
+  const signed = await api.get(`${base}/live.m3u8`).query({ asset_token }).expect(200);
+  assert.ok(signed.text.includes(`000001.ts?asset_token=${encodeURIComponent(asset_token)}`));
+  await api.get(`${base}/live/${live.id}/e000/000001.ts`).query({ asset_token }).expect(200);
 
   const segment = await api
     .get(`${base}/live/${live.id}/e000/000001.ts?token=${tokens.owner}`)
