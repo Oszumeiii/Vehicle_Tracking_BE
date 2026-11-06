@@ -33,6 +33,10 @@ def test_preprocess_preserves_aspect_ratio_and_pads_to_training_dimensions():
 def test_configured_checkpoint_recognizes_labelled_test_track():
     if not CHECKPOINT.is_file():
         pytest.skip("Optional SVTR best checkpoint is not present.")
+    # A checkout without Git LFS (CI) has the small pointer file instead of the weights.
+    with CHECKPOINT.open("rb") as head:
+        if head.read(64).startswith(b"version https://git-lfs.github.com/spec/"):
+            pytest.skip("SVTR checkpoint is a Git LFS pointer; run `git lfs pull` to test it.")
 
     with CHECKPOINT.open("rb") as source:
         import hashlib
