@@ -188,12 +188,12 @@ def test_sampling_scale_lowers_detector_rates_and_is_recorded(tmp_path):
 
 
 def test_exclude_zones_drop_detections_centred_inside_only():
-    from app.recognition.video_tracking import detect_plates
+    from app.recognition.video_tracking import PlateDetector
     images = [np.zeros((180, 320, 3), np.uint8)]
     cfg = {"device": "cpu", "imgsz": 320}
-    assert len(detect_plates(BoxFixture(), images, cfg)[0]) == 1  # box centre (0.28, 0.31)
-    assert len(detect_plates(BoxFixture(), images, {**cfg, "exclude_zones": [[.5, .5, 1, 1]]})[0]) == 1
-    assert len(detect_plates(BoxFixture(), images, {**cfg, "exclude_zones": [[.5, .5, 1, 1], [.2, .2, .4, .4]]})[0]) == 0
+    assert len(PlateDetector.detect_plates(BoxFixture(), images, cfg)[0]) == 1  # box centre (0.28, 0.31)
+    assert len(PlateDetector.detect_plates(BoxFixture(), images, {**cfg, "exclude_zones": [[.5, .5, 1, 1]]})[0]) == 1
+    assert len(PlateDetector.detect_plates(BoxFixture(), images, {**cfg, "exclude_zones": [[.5, .5, 1, 1], [.2, .2, .4, .4]]})[0]) == 0
 
 
 class SizeRecorder(BoxFixture):
@@ -206,15 +206,15 @@ class SizeRecorder(BoxFixture):
 
 
 def test_cuda_batches_are_padded_to_a_few_sizes_and_trimmed_back():
-    from app.recognition.video_tracking import detect_plates, detector_batch_sizes
-    assert detector_batch_sizes(16) == [1, 4, 16] and detector_batch_sizes(4) == [1, 4]
-    assert detector_batch_sizes(1) == [1]
+    from app.recognition.video_tracking import PlateDetector
+    assert PlateDetector.detector_batch_sizes(16) == [1, 4, 16] and PlateDetector.detector_batch_sizes(4) == [1, 4]
+    assert PlateDetector.detector_batch_sizes(1) == [1]
     model, image = SizeRecorder(), np.zeros((180, 320, 3), np.uint8)
     cfg = {"device": "cuda", "imgsz": 320, "batch": 16}
     for count in (1, 2, 4, 5, 16):
-        assert len(detect_plates(model, [image] * count, cfg)) == count
+        assert len(PlateDetector.detect_plates(model, [image] * count, cfg)) == count
     assert model.sizes == [1, 4, 4, 16, 16]
-    detect_plates(model, [image] * 3, {**cfg, "device": "cpu"})
+    PlateDetector.detect_plates(model, [image] * 3, {**cfg, "device": "cpu"})
     assert model.sizes[-1] == 3, "CPU batches are never padded"
 
 
@@ -643,7 +643,7 @@ def test_uploaded_video_replay_uses_its_filming_clock(tmp_path):
 
 
 def test_detection_region_runs_the_detector_on_the_region_and_returns_frame_boxes():
-    from app.recognition.video_tracking import detect_plates, roi_pixels
+    from app.recognition.video_tracking import PlateDetector
 
     class Recorder(BoxFixture):
         def __init__(self):
@@ -656,21 +656,21 @@ def test_detection_region_runs_the_detector_on_the_region_and_returns_frame_boxe
     images = [np.zeros((180, 320, 3), np.uint8)]
     cfg = {"device": "cpu", "imgsz": 320, "detect_roi": [.25, .5, 1, 1]}
     model = Recorder()
-    boxes = detect_plates(model, images, cfg)[0]
+    boxes = PlateDetector.detect_plates(model, images, cfg)[0]
     # The detector saw the region only (90 x 240 px); the box [40, 40, 140, 70] in it is
     # [120, 130, 220, 160] in the frame.
     assert model.shapes == [(90, 240)]
     assert boxes.data[:, :4].tolist() == [[120, 130, 220, 160]]
     assert tuple(boxes.orig_shape) == (180, 320)
     # Exclude zones are matched in frame coordinates after the shift.
-    assert len(detect_plates(Recorder(), images, {**cfg, "exclude_zones": [[.5, .7, .6, .9]]})[0]) == 0
-    assert len(detect_plates(Recorder(), images, {**cfg, "exclude_zones": [[.1, .2, .4, .4]]})[0]) == 1
+    assert len(PlateDetector.detect_plates(Recorder(), images, {**cfg, "exclude_zones": [[.5, .7, .6, .9]]})[0]) == 0
+    assert len(PlateDetector.detect_plates(Recorder(), images, {**cfg, "exclude_zones": [[.1, .2, .4, .4]]})[0]) == 1
     # No region: the whole frame, as before.
     plain = Recorder()
-    assert detect_plates(plain, images, {"device": "cpu", "imgsz": 320})[0].data[:, :4].tolist() == [[40, 40, 140, 70]]
+    assert PlateDetector.detect_plates(plain, images, {"device": "cpu", "imgsz": 320})[0].data[:, :4].tolist() == [[40, 40, 140, 70]]
     assert plain.shapes == [(180, 320)]
-    assert roi_pixels(None, 320, 180) is None
-    assert roi_pixels([0, 0, 1, 1], 320, 180) == (0, 0, 320, 180)
+    assert PlateDetector.roi_pixels(None, 320, 180) is None
+    assert PlateDetector.roi_pixels([0, 0, 1, 1], 320, 180) == (0, 0, 320, 180)
 
 
 def test_runner_rejects_an_invalid_detection_region(tmp_path):

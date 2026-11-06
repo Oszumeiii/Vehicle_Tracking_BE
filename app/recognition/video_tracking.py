@@ -27,41 +27,6 @@ import numpy as np
 DETECTOR_CLASSES = {0: "License_Plate"}
 
 
-def write_json(path, value):
-    Path(path).write_text(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
-
-
-def write_csv(path, rows, fields):
-    with Path(path).open("w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(rows)
-
-
-def sha256_file(path):
-    with Path(path).open("rb") as source:
-        return hashlib.file_digest(source, "sha256").hexdigest()
-
-
-def jpeg_frame(image):
-    """Detector and crops use the JPEG-decoded sampler pixels, as in the notebook."""
-    ok, encoded = cv2.imencode(".jpg", image)
-    if not ok:
-        raise IOError("Cannot encode frame")
-    return encoded, cv2.imdecode(encoded, cv2.IMREAD_COLOR)
-
-
-def sampled_jpeg(image):
-    """Detector pixels, the digest export_crops() later re-verifies, and the JPEG bytes."""
-    encoded, decoded = jpeg_frame(image)
-    return decoded, hashlib.sha256(encoded.tobytes()).hexdigest(), encoded
-
-
-def small_gray(image):
-    """Downscaled grayscale shared by the motion selector and the empty-scene gate."""
-    return cv2.cvtColor(cv2.resize(image, (320, 180), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY)
-
-
 class AdaptiveSelector:
     def __init__(self, fps, low_fps, med_fps, high_fps, threshold_low, threshold_high):
         values = [fps, low_fps, med_fps, high_fps, threshold_low, threshold_high]
@@ -77,7 +42,7 @@ class AdaptiveSelector:
         self.last = -1.
 
     def select(self, image, index, gray=None):
-        gray = small_gray(image) if gray is None else gray
+        gray = FrameImage.small_gray(image) if gray is None else gray
         if self.prev is not None:
             motion = float(np.mean(cv2.absdiff(self.prev, gray))) / 255 * 100
             self.score = .6 * motion + .4 * self.score
@@ -120,7 +85,7 @@ class EmptySceneGate:
     def observe_image(self, image, gray=None):
         if not self.enabled:
             return
-        gray = small_gray(image) if gray is None else gray
+        gray = FrameImage.small_gray(image) if gray is None else gray
         mask = self.background.apply(gray, learningRate=.01)
         self.foreground_fraction = float(np.count_nonzero(mask)) / mask.size
         self.seen_frames += 1
@@ -205,36 +170,6 @@ class SampledTrackerClock:
         return tracker.update(boxes, image)
 
 
-def crop_bounds(box, width, height, padding):
-    """Expand measured boxes without resizing; preserve the original box separately."""
-    dx, dy = (box[2] - box[0]) * padding, (box[3] - box[1]) * padding
-    return [max(0, math.floor(box[0] - dx)), max(0, math.floor(box[1] - dy)),
-            min(width, math.ceil(box[2] + dx)), min(height, math.ceil(box[3] + dy))]
-
-
-def crop_quality(image, box, padding):
-    """Sharpness/size/edge metrics from the exact pixels that will be cropped."""
-    h, w = image.shape[:2]
-    x1, y1, x2, y2 = crop_bounds(box, w, h, padding)
-    crop = image[y1:y2, x1:x2]
-    if crop.size == 0:
-        return dict(sharpness=0.0, box_height=0.0, box_area=0.0, edge_ok=0)
-    gray = cv2.resize(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), (192, 48), interpolation=cv2.INTER_AREA)
-    sharp = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-    bw, bh = box[2] - box[0], box[3] - box[1]
-    margin = 2
-    edge_ok = int(box[0] > margin and box[1] > margin and box[2] < w - margin and box[3] < h - margin)
-    return dict(sharpness=sharp if math.isfinite(sharp) else 0.0,
-                box_height=float(bh), box_area=float(bw * bh), edge_ok=edge_ok)
-
-
-def _minmax(values):
-    lo, hi = min(values), max(values)
-    if hi - lo < 1e-9:
-        return [0.5] * len(values)
-    return [(v - lo) / (hi - lo) for v in values]
-
-
 QUALITY_WEIGHTS = dict(sharp=0.35, height=0.30, conf=0.25, edge=0.10)
 TOP_FRACTION = 0.5
 MIN_POOL = 8
@@ -246,269 +181,7 @@ NARROW = 0.75  # width/height below this share of the track's median: the plate 
 SELECTION = "robust"
 
 
-def _width(row):
-    return row["box"][2] - row["box"][0]
-
-
-def _aspect(row):
-    return _width(row) / max(row["box"][3] - row["box"][1], 1e-9)
-
-
-def hidden_or_cut(rows):
-    """Indices of observations whose plate looks partly hidden (a pole, another car) or cut.
-
-    A plate seen through the scene grows or shrinks smoothly, so a box clearly narrower
-    than the observation before or after it, a width/height ratio well below the track's
-    median, or a box touching the frame edge marks an incomplete plate.
-    """
-    if any("box" not in r for r in rows):
-        return set()  # nothing to compare without boxes
-    widths, aspects = [_width(r) for r in rows], [_aspect(r) for r in rows]
-    median_aspect = float(np.median(aspects)) if aspects else 0.
-    flagged = set()
-    for i, row in enumerate(rows):
-        neighbours = [widths[j] for j in (i - 1, i + 1) if 0 <= j < len(rows)]
-        if neighbours and widths[i] < SHRUNK * max(neighbours):
-            flagged.add(i)
-        if aspects[i] < NARROW * median_aspect or not row.get("edge_ok", 1):
-            flagged.add(i)
-    return flagged
-
-
-def score_rows(rows, weights=QUALITY_WEIGHTS):
-    """Quality score 0..1 per observation, normalized within the track."""
-    sharp = _minmax([math.log1p(r.get("sharpness", 0.0)) for r in rows])
-    height = _minmax([r.get("box_height", 0.0) for r in rows])
-    conf = _minmax([r["confidence"] for r in rows])
-    w = weights
-    return [w["sharp"] * s + w["height"] * h + w["conf"] * c + w["edge"] * r.get("edge_ok", 1)
-            for r, s, h, c in zip(rows, sharp, height, conf)]
-
-
-def select_five(rows, cfg):
-    """Keep the better-quality pool, then spread five picks over time inside it.
-
-    cfg["crop_selection"] (default SELECTION): "current" scores every observation;
-    "robust" first sets aside hidden or cut plates (taking back the best of them only
-    when fewer than five remain) and weighs crop size more.
-    cfg["min_frames"] (default 5): a track with only four valid observations keeps all
-    four when it is 4; the joint OCR then repeats one of them (runner.ocr_inputs).
-    """
-    unique = {}
-    for r in rows:
-        if r["confidence"] >= cfg["crop_confidence"]:
-            previous = unique.get(r["frame_index"])
-            if previous is None or r["confidence"] > previous["confidence"]:
-                unique[r["frame_index"]] = r
-    eligible = sorted(unique.values(), key=lambda r: r["frame_index"])
-    min_frames = cfg.get("min_frames", 5)
-    if len(eligible) < min_frames:
-        return None, "fewer_than_five_valid_frames" if min_frames == 5 else "fewer_than_four_valid_frames"
-    count = min(5, len(eligible))
-    if any(b["timestamp_seconds"] <= a["timestamp_seconds"] for a, b in zip(eligible, eligible[1:])):
-        raise ValueError("Track timestamps must be strictly increasing")
-    weights, fraction = QUALITY_WEIGHTS, TOP_FRACTION
-    if cfg.get("crop_selection", SELECTION) == "robust":
-        weights, fraction = ROBUST_WEIGHTS, ROBUST_TOP_FRACTION
-        flagged = hidden_or_cut(eligible)
-        if flagged:
-            kept = [r for i, r in enumerate(eligible) if i not in flagged]
-            if len(kept) < count:
-                scores = score_rows(eligible, weights)
-                best = sorted(flagged, key=lambda i: scores[i], reverse=True)[:count - len(kept)]
-                kept = sorted(kept + [eligible[i] for i in best], key=lambda r: r["frame_index"])
-            eligible = kept
-    scores = score_rows(eligible, weights)
-    pool_size = min(len(eligible), max(5, MIN_POOL, math.ceil(fraction * len(eligible))))
-    top = sorted(range(len(eligible)), key=lambda i: scores[i], reverse=True)[:pool_size]
-    pool = sorted(top)
-    picks = np.rint(np.linspace(0, len(pool) - 1, count)).astype(int)
-    chosen = [eligible[pool[i]] for i in picks]
-    if len({r["frame_index"] for r in chosen}) != count:
-        chosen = [eligible[i] for i in sorted(top[:count])]
-    return chosen, None
-
-
-def detector_batch_sizes(batch):
-    """Batch sizes the detector runs at on CUDA (smaller batches are padded up to one of them)."""
-    return sorted({size for size in (1, 4) if size < batch} | {batch})
-
-
-def warm_up_detector(model, cfg):
-    """Run every detector batch size once on blank frames, before real frames arrive."""
-    frame = np.zeros((cfg["height"], cfg["width"], 3), np.uint8)
-    for size in detector_batch_sizes(cfg["batch"]) if cfg["device"] != "cpu" else [cfg["batch"]]:
-        detect_plates(model, [frame] * size, cfg)
-
-
-def roi_pixels(roi, width, height):
-    """Pixel box (x1, y1, x2, y2) of a normalized detection region, or None for the whole frame."""
-    if not roi:
-        return None
-    x1, y1, x2, y2 = (int(round(v * s)) for v, s in zip(roi, (width, height, width, height)))
-    x1, y1 = max(0, min(x1, width - 1)), max(0, min(y1, height - 1))
-    x2, y2 = max(x1 + 1, min(x2, width)), max(y1 + 1, min(y2, height))
-    return x1, y1, x2, y2
-
-
-def detect_plates(model, images, cfg):
-    """YOLO at conf .10 plus the notebook's geometric box filter.
-
-    cfg["detect_roi"] (live cameras only), a normalized [x1, y1, x2, y2] box, limits the
-    detector to that region: it gets the region alone, so at the same input size the region
-    is scaled up and small plates in it become larger for the model. Boxes come back in
-    full-frame coordinates, so tracking and crops work on the full frame as before.
-    cfg["exclude_zones"] (live cameras only) holds normalized [x1, y1, x2, y2]
-    rectangles; boxes centred inside one, such as a fixed street sign, are dropped.
-    """
-    cuda = cfg["device"] != "cpu"
-    zones = cfg.get("exclude_zones") or ()
-    regions = [roi_pixels(cfg.get("detect_roi"), image.shape[1], image.shape[0]) for image in images]
-    images_in = [image if r is None else image[r[1]:r[3], r[0]:r[2]] for image, r in zip(images, regions)]
-    full = images
-    images = images_in
-    batch = images
-    if cuda and images:
-        # fp16 CUDA kernels are prepared per batch size and per thread, about 1.8 s
-        # each on an RTX 4060. Padding to a few sizes keeps that cost in warm-up
-        # instead of stalling a stream whenever the empty-scene gate flushes early.
-        size = next((s for s in detector_batch_sizes(cfg.get("batch", 1)) if s >= len(images)), len(images))
-        batch = images + images[-1:] * (size - len(images))
-    results = model.predict(batch, imgsz=cfg["imgsz"], conf=.10, iou=.7, device=cfg["device"],
-                            quantize="fp16" if cuda else None, verbose=False, max_det=100, rect=True)[:len(images)]
-    boxes = []
-    for result, image, frame, region in zip(results, images, full, regions):
-        b = result.boxes.cpu().numpy()
-        if len(b):
-            h, w = image.shape[:2]
-            a = b.data[:, :4]
-            bw, bh = a[:, 2] - a[:, 0], a[:, 3] - a[:, 1]
-            ratio = bw / np.maximum(bh, 1e-9)
-            keep = (np.isfinite(a).all(axis=1) & (a[:, 0] >= 0) & (a[:, 1] >= 0)
-                    & (a[:, 2] <= w) & (a[:, 3] <= h) & (bw >= 12) & (bh >= 5)
-                    & (ratio >= 1.1) & (ratio <= 7))
-            b = b[keep]
-            if region is not None and len(b):
-                # Back to full-frame coordinates (the tracker, crops and zones use the frame).
-                from ultralytics.engine.results import Boxes
-                data = np.array(b.data, dtype=np.float32, copy=True)
-                data[:, [0, 2]] += region[0]
-                data[:, [1, 3]] += region[1]
-                b = Boxes(data, frame.shape[:2])
-            if len(b):
-                fh, fw = frame.shape[:2]
-                a = b.data[:, :4]
-                cx, cy = (a[:, 0] + a[:, 2]) / (2 * fw), (a[:, 1] + a[:, 3]) / (2 * fh)
-                keep = np.ones(len(b), dtype=bool)
-                for x1, y1, x2, y2 in zones:
-                    keep &= ~((cx >= x1) & (cx <= x2) & (cy >= y1) & (cy <= y2))
-                b = b[keep]
-        boxes.append(b)
-    return boxes
-
-
-def check_frame_count(decoded, declared, fps):
-    """Stream-copied cuts often declare a few trailing frames that never decode.
-
-    Accept only such a short tail (<= 1% or 2 s of video); any surplus or larger
-    gap still means the metadata, and so the timestamps, cannot be trusted.
-    """
-    if declared <= 0 or decoded == declared:
-        return
-    if decoded > declared or declared - decoded > max(declared // 100, round(2 * fps)):
-        raise RuntimeError("Decoded frame count differs from video metadata")
-
-
-def video_config(video, snapshot):
-    """Notebook run_tracking() configuration for one video and pipeline snapshot."""
-    cap = cv2.VideoCapture(str(video))
-    try:
-        fps = float(cap.get(cv2.CAP_PROP_FPS))
-        width, height = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        declared = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        if not cap.isOpened() or width <= 0 or height <= 0 or not math.isfinite(fps) or fps <= 0 or declared < 1:
-            raise ValueError("Video metadata or timing is invalid")
-    finally:
-        cap.release()
-    return tracking_config(width, height, fps, declared, snapshot, video.stem, video_path=str(video))
-
-
-def tracking_config(width, height, fps, declared, snapshot, video_id, video_path=""):
-    """Tracking configuration from source metadata; live sources have no declared frame count (0)."""
-    if width <= 0 or height <= 0 or not math.isfinite(fps) or fps <= 0 or declared < 0:
-        raise ValueError("Source metadata or timing is invalid")
-    tracking = snapshot["tracking"]
-    return dict(video_path=video_path, video_id=video_id, width=width, height=height, fps=fps,
-                declared_frames=declared, max_seconds=0, batch=tracking["batch"], imgsz=tracking["imgsz"],
-                device="cpu" if snapshot["device"] == "cpu" else 0,
-                crop_confidence=tracking["crop_confidence"], crop_padding=tracking["crop_padding"],
-                min_frames=tracking.get("min_frames", 5),
-                sampling=dict(snapshot["sampling"]), empty_scene_gate=dict(snapshot["empty_scene_gate"]),
-                botsort=dict(tracker_type="botsort", track_high_thresh=.25, track_low_thresh=.10,
-                             new_track_thresh=.25,
-                             track_buffer=max(3, round(fps * tracking["track_buffer_seconds"])),
-                             match_thresh=.8, fuse_score=False, gmc_method="none", proximity_thresh=.5,
-                             appearance_thresh=.8, with_reid=False, model="auto"))
-
-
 _END = object()
-
-
-def read_frames(video, max_seconds=0, prefetch=16):
-    """Yield (index, pts, frame, small_gray) in order, decoding on a background thread.
-
-    OpenCV releases the GIL while decoding and resizing, so this overlaps with
-    detection on the caller's thread. Errors are re-raised in the caller.
-    """
-    cap = cv2.VideoCapture(str(video))
-    if not cap.isOpened():
-        cap.release()
-        raise ValueError(f"Cannot open video: {video}")
-    frames, stop = queue.Queue(maxsize=prefetch), threading.Event()
-
-    def put(item):
-        while not stop.is_set():
-            try:
-                frames.put(item, timeout=.1)
-                return True
-            except queue.Full:
-                pass
-        return False
-
-    def decode():
-        try:
-            index, previous = 0, None
-            while cap.grab():
-                index += 1
-                timestamp = float(cap.get(cv2.CAP_PROP_POS_MSEC)) / 1000
-                if max_seconds and timestamp >= max_seconds:
-                    break
-                if not math.isfinite(timestamp) or (previous is not None and timestamp <= previous):
-                    raise RuntimeError("Video PTS is not strictly increasing")
-                previous = timestamp
-                ok, raw = cap.retrieve()
-                if not ok:
-                    raise RuntimeError(f"Cannot decode frame {index}")
-                if not put((index, timestamp, raw, small_gray(raw))):
-                    return
-            put(_END)
-        except BaseException as exc:  # noqa: BLE001 - handed to the consuming thread
-            put(exc)
-
-    thread = threading.Thread(target=decode, name="video-decode", daemon=True)
-    thread.start()
-    try:
-        while True:
-            item = frames.get()
-            if item is _END:
-                return
-            if isinstance(item, BaseException):
-                raise item
-            yield item
-    finally:
-        stop.set()
-        thread.join()
-        cap.release()
 
 
 DETECTION_FIELDS = ["track_id", "frame_index", "timestamp_seconds", "confidence", "x1", "y1", "x2", "y2"]
@@ -565,7 +238,7 @@ class TrackSession:
         self._jpeg.shutdown(wait=True, cancel_futures=True)
 
     def push(self, index, timestamp, image, gray=None):
-        gray = small_gray(image) if gray is None else gray
+        gray = FrameImage.small_gray(image) if gray is None else gray
         self.gate.observe_image(image, gray)
         meta = self.selector.select(image, index, gray)
         if meta is not None:
@@ -581,7 +254,7 @@ class TrackSession:
                              sampled_jpeg_sha256="")
                 if not self.retain_images:
                     self.frames.append(frame)
-                self._pending.append((self._jpeg.submit(sampled_jpeg, image), frame))
+                self._pending.append((self._jpeg.submit(FrameImage.sampled_jpeg, image), frame))
                 if len(self._pending) >= self.cfg["batch"] or (self.gate.enabled and self.gate.idle):
                     self._flush()
         return self._take()
@@ -611,7 +284,7 @@ class TrackSession:
 
     def _finish(self, tid):
         rows = self.active.pop(tid)
-        selected, reason = select_five(rows, self.cfg)
+        selected, reason = CropSelector.select_five(rows, self.cfg)
         if selected:
             candidate = dict(track_id=str(tid), rows=selected, observations=len(rows),
                              first_frame=rows[0]["frame_index"], last_frame=rows[-1]["frame_index"],
@@ -642,7 +315,7 @@ class TrackSession:
             orders.append(frame["selected_order"])
         self._pending.clear()
         started = time.perf_counter()
-        detected = detect_plates(self.model, images, self.cfg)
+        detected = PlateDetector.detect_plates(self.model, images, self.cfg)
         if len(detected) != len(images):
             raise RuntimeError("Detector returned a different number of frames")
         self.detect["batches"] += 1
@@ -662,7 +335,7 @@ class TrackSession:
                 if tid in self.closed:
                     continue
                 row = dict(info, box=box, confidence=float(raw[4]))
-                row.update(crop_quality(image, box, self.cfg["crop_padding"]))
+                row.update(CropSelector.crop_quality(image, box, self.cfg["crop_padding"]))
                 if self.retain_images:
                     row["sampling_selected_order"] = order
                 rows = self.active.setdefault(tid, [])
@@ -688,149 +361,496 @@ class JobStopped(Exception):
     code = "WORKER_INTERRUPTED"
 
 
-def check_stop(stop):
-    if stop is not None and stop.is_set():
-        raise JobStopped("Job stopped")
-
-
-def track_video(video, model, cfg, out, stop=None, throttle=None, progress=None):
-    """progress(counts), when given, is called about every 2 s with the tracking counters."""
-    pts, candidates = [], []
-    started = last_progress = last_report = time.perf_counter()
-    with (out / "tracking_detections.csv").open("w", newline="", encoding="utf-8") as det_file, \
-         (out / "frame_gate.csv").open("w", newline="", encoding="utf-8") as gate_file, \
-         TrackSession(model, cfg, det_file, gate_file) as session, \
-         closing(read_frames(video, cfg["max_seconds"])) as frames:
-        for index, timestamp, image, gray in frames:
-            check_stop(stop)
-            if throttle is not None:
-                throttle(timestamp)
-            pts.append(timestamp)
-            candidates += session.push(index, timestamp, image, gray)
-            now = time.perf_counter()
-            if progress is not None and now - last_report >= 2:
-                progress(dict(step="tracking", decoded_frames=len(pts), expected_frames=cfg["declared_frames"],
-                              sampled_frames=session.sampled, candidates=len(candidates),
-                              active_tracks=len(session.active), rejected=sum(session.rejected.values())))
-                last_report = now
-            if now - last_progress >= 20:
-                # stderr: inside the shared live host, stdout carries its JSON events.
-                print(json.dumps(dict(stage="tracking", decoded_frames=len(pts),
-                                      expected_frames=cfg["declared_frames"], sampled_frames=session.sampled,
-                                      candidates=len(candidates),
-                                      elapsed_seconds=round(now - started, 1))), file=sys.stderr, flush=True)
-                last_progress = now
-        candidates += session.close()
-    if not cfg["max_seconds"]:
-        check_frame_count(len(pts), cfg["declared_frames"], cfg["fps"])
-    summary = dict(decoded_frames=len(pts), sampled_frames=session.sampled, candidates=len(candidates),
-                   rejected=session.summary()["rejected"], frame_gate=session.gate.summary(),
-                   elapsed_seconds=time.perf_counter() - started)
-    write_json(out / "tracking_summary.json", summary)
-    return pts, session.frames, candidates, summary
-
-
 MANIFEST_FIELDS = ["video_id", "track_id", "selected_order", "frame_index", "timestamp_seconds",
                    "confidence", "x1", "y1", "x2", "y2", "crop_x1", "crop_y1", "crop_x2", "crop_y2",
                    "crop_width", "crop_height", "crop_path", "crop_sha256", "sampled_frame_path",
                    "sampling_selected_order"]
 
 
-def _crop_evidence(image, cfg, out, tid, order, row, timestamp, frame_path, sampling_order):
-    """Save one selected crop from its sampled frame pixels; return its manifest row."""
-    index, box = row["frame_index"], row["box"]
-    h, w = image.shape[:2]
-    if not np.isfinite(box).all() or not (0 <= box[0] < box[2] <= w and 0 <= box[1] < box[3] <= h):
-        raise ValueError("Invalid bounding box")
-    bounds = crop_bounds(box, w, h, cfg["crop_padding"])
-    x1, y1, x2, y2 = bounds
-    crop = image[y1:y2, x1:x2]
-    folder = out / "tracks" / f"track_{int(tid):06d}"
-    folder.mkdir(exist_ok=True)
-    path = folder / f"{order:02d}_frame_{index:07d}.png"
-    if not crop.size or not cv2.imwrite(str(path), crop):
-        raise IOError(path)
-    return dict(
-        video_id=cfg["video_id"], track_id=tid, selected_order=order, frame_index=index,
-        timestamp_seconds=timestamp, confidence=row["confidence"],
-        **dict(zip(("x1", "y1", "x2", "y2"), box)),
-        **dict(zip(("crop_x1", "crop_y1", "crop_x2", "crop_y2"), bounds)),
-        crop_width=crop.shape[1], crop_height=crop.shape[0],
-        crop_path=path.relative_to(out).as_posix(), crop_sha256=sha256_file(path),
-        sampled_frame_path=frame_path, sampling_selected_order=sampling_order)
+class EvidenceWriter:
+    @staticmethod
+    def write_json(path, value):
+        Path(path).write_text(json.dumps(value, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
+
+    @staticmethod
+    def write_csv(path, rows, fields):
+        with Path(path).open("w", newline="", encoding="utf-8-sig") as f:
+            writer = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+
+    @staticmethod
+    def sha256_file(path):
+        with Path(path).open("rb") as source:
+            return hashlib.file_digest(source, "sha256").hexdigest()
+
+    @staticmethod
+    def _crop_evidence(image, cfg, out, tid, order, row, timestamp, frame_path, sampling_order):
+        """Save one selected crop from its sampled frame pixels; return its manifest row."""
+        index, box = row["frame_index"], row["box"]
+        h, w = image.shape[:2]
+        if not np.isfinite(box).all() or not (0 <= box[0] < box[2] <= w and 0 <= box[1] < box[3] <= h):
+            raise ValueError("Invalid bounding box")
+        bounds = CropSelector.crop_bounds(box, w, h, cfg["crop_padding"])
+        x1, y1, x2, y2 = bounds
+        crop = image[y1:y2, x1:x2]
+        folder = out / "tracks" / f"track_{int(tid):06d}"
+        folder.mkdir(exist_ok=True)
+        path = folder / f"{order:02d}_frame_{index:07d}.png"
+        if not crop.size or not cv2.imwrite(str(path), crop):
+            raise IOError(path)
+        return dict(
+            video_id=cfg["video_id"], track_id=tid, selected_order=order, frame_index=index,
+            timestamp_seconds=timestamp, confidence=row["confidence"],
+            **dict(zip(("x1", "y1", "x2", "y2"), box)),
+            **dict(zip(("crop_x1", "crop_y1", "crop_x2", "crop_y2"), bounds)),
+            crop_width=crop.shape[1], crop_height=crop.shape[0],
+            crop_path=path.relative_to(out).as_posix(), crop_sha256=EvidenceWriter.sha256_file(path),
+            sampled_frame_path=frame_path, sampling_selected_order=sampling_order)
+
+    @staticmethod
+    def export_retained(candidates, cfg, out):
+        """export_crops() without a second decode, for TrackSession(retain_images=True).
+
+        Keyframes are the retained sampler JPEG bytes and crops come from decoding
+        them, i.e. the same files the file pipeline writes for the same selection.
+        """
+        for name in ("tracks", "keyframes"):
+            (out / name).mkdir(exist_ok=True)
+        manifest = []
+        for candidate in candidates:
+            for order, row in enumerate(candidate["rows"], 1):
+                index = row["frame_index"]
+                encoded = candidate["jpeg"][index]
+                rel = f"keyframes/frame_{index:07d}.jpg"
+                if not (out / rel).exists():
+                    (out / rel).write_bytes(encoded)
+                image = cv2.imdecode(np.frombuffer(encoded, np.uint8), cv2.IMREAD_COLOR)
+                if image is None:
+                    raise ValueError(f"Cannot decode retained frame {index}")
+                manifest.append(EvidenceWriter._crop_evidence(image, cfg, out, candidate["track_id"], order, row,
+                                               row["timestamp_seconds"], rel, row["sampling_selected_order"]))
+        return manifest
+
+    @staticmethod
+    def export_crops(video, cfg, out, pts, frames, candidates):
+        """Second decode pass: save keyframes and PNG crops from identical sampler pixels."""
+        requested = defaultdict(list)
+        lookup = {r["frame_index"]: r for r in frames}
+        for candidate in candidates:
+            for order, row in enumerate(candidate["rows"], 1):
+                requested[row["frame_index"]].append((candidate["track_id"], order, row))
+        for name in ("tracks", "keyframes"):
+            (out / name).mkdir(exist_ok=True)
+        cap = cv2.VideoCapture(str(video))
+        if not cap.isOpened():
+            raise RuntimeError("Cannot reopen video for export")
+        manifest = []
+        last_index = max(requested, default=0)
+        index = 0
+        try:
+            while index < last_index and cap.grab():
+                index += 1
+                if index not in requested:
+                    continue
+                ok, raw = cap.retrieve()
+                timestamp = float(cap.get(cv2.CAP_PROP_POS_MSEC)) / 1000
+                if not ok or abs(timestamp - pts[index - 1]) > .001:
+                    raise RuntimeError(f"Export PTS mismatch: {index}")
+                encoded, image = FrameImage.jpeg_frame(raw)
+                frame_meta = lookup[index]
+                digest = hashlib.sha256(encoded.tobytes()).hexdigest()
+                if digest != frame_meta["sampled_jpeg_sha256"]:
+                    raise RuntimeError(f"Sampler pixels changed at frame {index}")
+                rel = f"keyframes/frame_{index:07d}.jpg"
+                (out / rel).write_bytes(encoded.tobytes())
+                frame_meta.update(frame_path=rel, sha256=digest)
+                for tid, order, row in requested[index]:
+                    manifest.append(EvidenceWriter._crop_evidence(image, cfg, out, tid, order, row, timestamp, rel,
+                                                   frame_meta["selected_order"]))
+        finally:
+            cap.release()
+        if len(manifest) != sum(len(candidate["rows"]) for candidate in candidates):
+            raise RuntimeError("Missing crops after export")
+        for row in manifest:
+            frame = cv2.imread(str(out / row["sampled_frame_path"]))
+            crop = cv2.imread(str(out / row["crop_path"]))
+            if frame is None or crop is None:
+                raise ValueError("Cannot read exported evidence")
+            x1, y1, x2, y2 = (int(row[k]) for k in ("crop_x1", "crop_y1", "crop_x2", "crop_y2"))
+            if not np.array_equal(crop, frame[y1:y2, x1:x2]):
+                raise ValueError("Crop pixels differ from the keyframe region")
+        manifest.sort(key=lambda r: (int(r["track_id"]), r["selected_order"]))
+        EvidenceWriter.write_csv(out / "manifest.csv", manifest, MANIFEST_FIELDS)
+        return manifest
 
 
-def export_retained(candidates, cfg, out):
-    """export_crops() without a second decode, for TrackSession(retain_images=True).
+class FrameImage:
+    @staticmethod
+    def jpeg_frame(image):
+        """Detector and crops use the JPEG-decoded sampler pixels, as in the notebook."""
+        ok, encoded = cv2.imencode(".jpg", image)
+        if not ok:
+            raise IOError("Cannot encode frame")
+        return encoded, cv2.imdecode(encoded, cv2.IMREAD_COLOR)
 
-    Keyframes are the retained sampler JPEG bytes and crops come from decoding
-    them, i.e. the same files the file pipeline writes for the same selection.
-    """
-    for name in ("tracks", "keyframes"):
-        (out / name).mkdir(exist_ok=True)
-    manifest = []
-    for candidate in candidates:
-        for order, row in enumerate(candidate["rows"], 1):
-            index = row["frame_index"]
-            encoded = candidate["jpeg"][index]
-            rel = f"keyframes/frame_{index:07d}.jpg"
-            if not (out / rel).exists():
-                (out / rel).write_bytes(encoded)
-            image = cv2.imdecode(np.frombuffer(encoded, np.uint8), cv2.IMREAD_COLOR)
-            if image is None:
-                raise ValueError(f"Cannot decode retained frame {index}")
-            manifest.append(_crop_evidence(image, cfg, out, candidate["track_id"], order, row,
-                                           row["timestamp_seconds"], rel, row["sampling_selected_order"]))
-    return manifest
+    @staticmethod
+    def sampled_jpeg(image):
+        """Detector pixels, the digest export_crops() later re-verifies, and the JPEG bytes."""
+        encoded, decoded = FrameImage.jpeg_frame(image)
+        return decoded, hashlib.sha256(encoded.tobytes()).hexdigest(), encoded
+
+    @staticmethod
+    def small_gray(image):
+        """Downscaled grayscale shared by the motion selector and the empty-scene gate."""
+        return cv2.cvtColor(cv2.resize(image, (320, 180), interpolation=cv2.INTER_AREA), cv2.COLOR_BGR2GRAY)
 
 
-def export_crops(video, cfg, out, pts, frames, candidates):
-    """Second decode pass: save keyframes and PNG crops from identical sampler pixels."""
-    requested = defaultdict(list)
-    lookup = {r["frame_index"]: r for r in frames}
-    for candidate in candidates:
-        for order, row in enumerate(candidate["rows"], 1):
-            requested[row["frame_index"]].append((candidate["track_id"], order, row))
-    for name in ("tracks", "keyframes"):
-        (out / name).mkdir(exist_ok=True)
-    cap = cv2.VideoCapture(str(video))
-    if not cap.isOpened():
-        raise RuntimeError("Cannot reopen video for export")
-    manifest = []
-    last_index = max(requested, default=0)
-    index = 0
-    try:
-        while index < last_index and cap.grab():
-            index += 1
-            if index not in requested:
-                continue
-            ok, raw = cap.retrieve()
-            timestamp = float(cap.get(cv2.CAP_PROP_POS_MSEC)) / 1000
-            if not ok or abs(timestamp - pts[index - 1]) > .001:
-                raise RuntimeError(f"Export PTS mismatch: {index}")
-            encoded, image = jpeg_frame(raw)
-            frame_meta = lookup[index]
-            digest = hashlib.sha256(encoded.tobytes()).hexdigest()
-            if digest != frame_meta["sampled_jpeg_sha256"]:
-                raise RuntimeError(f"Sampler pixels changed at frame {index}")
-            rel = f"keyframes/frame_{index:07d}.jpg"
-            (out / rel).write_bytes(encoded.tobytes())
-            frame_meta.update(frame_path=rel, sha256=digest)
-            for tid, order, row in requested[index]:
-                manifest.append(_crop_evidence(image, cfg, out, tid, order, row, timestamp, rel,
-                                               frame_meta["selected_order"]))
-    finally:
-        cap.release()
-    if len(manifest) != sum(len(candidate["rows"]) for candidate in candidates):
-        raise RuntimeError("Missing crops after export")
-    for row in manifest:
-        frame = cv2.imread(str(out / row["sampled_frame_path"]))
-        crop = cv2.imread(str(out / row["crop_path"]))
-        if frame is None or crop is None:
-            raise ValueError("Cannot read exported evidence")
-        x1, y1, x2, y2 = (int(row[k]) for k in ("crop_x1", "crop_y1", "crop_x2", "crop_y2"))
-        if not np.array_equal(crop, frame[y1:y2, x1:x2]):
-            raise ValueError("Crop pixels differ from the keyframe region")
-    manifest.sort(key=lambda r: (int(r["track_id"]), r["selected_order"]))
-    write_csv(out / "manifest.csv", manifest, MANIFEST_FIELDS)
-    return manifest
+class CropSelector:
+    @staticmethod
+    def crop_bounds(box, width, height, padding):
+        """Expand measured boxes without resizing; preserve the original box separately."""
+        dx, dy = (box[2] - box[0]) * padding, (box[3] - box[1]) * padding
+        return [max(0, math.floor(box[0] - dx)), max(0, math.floor(box[1] - dy)),
+                min(width, math.ceil(box[2] + dx)), min(height, math.ceil(box[3] + dy))]
+
+    @staticmethod
+    def crop_quality(image, box, padding):
+        """Sharpness/size/edge metrics from the exact pixels that will be cropped."""
+        h, w = image.shape[:2]
+        x1, y1, x2, y2 = CropSelector.crop_bounds(box, w, h, padding)
+        crop = image[y1:y2, x1:x2]
+        if crop.size == 0:
+            return dict(sharpness=0.0, box_height=0.0, box_area=0.0, edge_ok=0)
+        gray = cv2.resize(cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY), (192, 48), interpolation=cv2.INTER_AREA)
+        sharp = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+        bw, bh = box[2] - box[0], box[3] - box[1]
+        margin = 2
+        edge_ok = int(box[0] > margin and box[1] > margin and box[2] < w - margin and box[3] < h - margin)
+        return dict(sharpness=sharp if math.isfinite(sharp) else 0.0,
+                    box_height=float(bh), box_area=float(bw * bh), edge_ok=edge_ok)
+
+    @staticmethod
+    def _minmax(values):
+        lo, hi = min(values), max(values)
+        if hi - lo < 1e-9:
+            return [0.5] * len(values)
+        return [(v - lo) / (hi - lo) for v in values]
+
+    @staticmethod
+    def _width(row):
+        return row["box"][2] - row["box"][0]
+
+    @staticmethod
+    def _aspect(row):
+        return CropSelector._width(row) / max(row["box"][3] - row["box"][1], 1e-9)
+
+    @staticmethod
+    def hidden_or_cut(rows):
+        """Indices of observations whose plate looks partly hidden (a pole, another car) or cut.
+
+        A plate seen through the scene grows or shrinks smoothly, so a box clearly narrower
+        than the observation before or after it, a width/height ratio well below the track's
+        median, or a box touching the frame edge marks an incomplete plate.
+        """
+        if any("box" not in r for r in rows):
+            return set()  # nothing to compare without boxes
+        widths, aspects = [CropSelector._width(r) for r in rows], [CropSelector._aspect(r) for r in rows]
+        median_aspect = float(np.median(aspects)) if aspects else 0.
+        flagged = set()
+        for i, row in enumerate(rows):
+            neighbours = [widths[j] for j in (i - 1, i + 1) if 0 <= j < len(rows)]
+            if neighbours and widths[i] < SHRUNK * max(neighbours):
+                flagged.add(i)
+            if aspects[i] < NARROW * median_aspect or not row.get("edge_ok", 1):
+                flagged.add(i)
+        return flagged
+
+    @staticmethod
+    def score_rows(rows, weights=QUALITY_WEIGHTS):
+        """Quality score 0..1 per observation, normalized within the track."""
+        sharp = CropSelector._minmax([math.log1p(r.get("sharpness", 0.0)) for r in rows])
+        height = CropSelector._minmax([r.get("box_height", 0.0) for r in rows])
+        conf = CropSelector._minmax([r["confidence"] for r in rows])
+        w = weights
+        return [w["sharp"] * s + w["height"] * h + w["conf"] * c + w["edge"] * r.get("edge_ok", 1)
+                for r, s, h, c in zip(rows, sharp, height, conf)]
+
+    @staticmethod
+    def select_five(rows, cfg):
+        """Keep the better-quality pool, then spread five picks over time inside it.
+
+        cfg["crop_selection"] (default SELECTION): "current" scores every observation;
+        "robust" first sets aside hidden or cut plates (taking back the best of them only
+        when fewer than five remain) and weighs crop size more.
+        cfg["min_frames"] (default 5): a track with only four valid observations keeps all
+        four when it is 4; the joint OCR then repeats one of them (runner.ocr_inputs).
+        """
+        unique = {}
+        for r in rows:
+            if r["confidence"] >= cfg["crop_confidence"]:
+                previous = unique.get(r["frame_index"])
+                if previous is None or r["confidence"] > previous["confidence"]:
+                    unique[r["frame_index"]] = r
+        eligible = sorted(unique.values(), key=lambda r: r["frame_index"])
+        min_frames = cfg.get("min_frames", 5)
+        if len(eligible) < min_frames:
+            return None, "fewer_than_five_valid_frames" if min_frames == 5 else "fewer_than_four_valid_frames"
+        count = min(5, len(eligible))
+        if any(b["timestamp_seconds"] <= a["timestamp_seconds"] for a, b in zip(eligible, eligible[1:])):
+            raise ValueError("Track timestamps must be strictly increasing")
+        weights, fraction = QUALITY_WEIGHTS, TOP_FRACTION
+        if cfg.get("crop_selection", SELECTION) == "robust":
+            weights, fraction = ROBUST_WEIGHTS, ROBUST_TOP_FRACTION
+            flagged = CropSelector.hidden_or_cut(eligible)
+            if flagged:
+                kept = [r for i, r in enumerate(eligible) if i not in flagged]
+                if len(kept) < count:
+                    scores = CropSelector.score_rows(eligible, weights)
+                    best = sorted(flagged, key=lambda i: scores[i], reverse=True)[:count - len(kept)]
+                    kept = sorted(kept + [eligible[i] for i in best], key=lambda r: r["frame_index"])
+                eligible = kept
+        scores = CropSelector.score_rows(eligible, weights)
+        pool_size = min(len(eligible), max(5, MIN_POOL, math.ceil(fraction * len(eligible))))
+        top = sorted(range(len(eligible)), key=lambda i: scores[i], reverse=True)[:pool_size]
+        pool = sorted(top)
+        picks = np.rint(np.linspace(0, len(pool) - 1, count)).astype(int)
+        chosen = [eligible[pool[i]] for i in picks]
+        if len({r["frame_index"] for r in chosen}) != count:
+            chosen = [eligible[i] for i in sorted(top[:count])]
+        return chosen, None
+
+
+class PlateDetector:
+    @staticmethod
+    def detector_batch_sizes(batch):
+        """Batch sizes the detector runs at on CUDA (smaller batches are padded up to one of them)."""
+        return sorted({size for size in (1, 4) if size < batch} | {batch})
+
+    @staticmethod
+    def warm_up_detector(model, cfg):
+        """Run every detector batch size once on blank frames, before real frames arrive."""
+        frame = np.zeros((cfg["height"], cfg["width"], 3), np.uint8)
+        for size in PlateDetector.detector_batch_sizes(cfg["batch"]) if cfg["device"] != "cpu" else [cfg["batch"]]:
+            PlateDetector.detect_plates(model, [frame] * size, cfg)
+
+    @staticmethod
+    def roi_pixels(roi, width, height):
+        """Pixel box (x1, y1, x2, y2) of a normalized detection region, or None for the whole frame."""
+        if not roi:
+            return None
+        x1, y1, x2, y2 = (int(round(v * s)) for v, s in zip(roi, (width, height, width, height)))
+        x1, y1 = max(0, min(x1, width - 1)), max(0, min(y1, height - 1))
+        x2, y2 = max(x1 + 1, min(x2, width)), max(y1 + 1, min(y2, height))
+        return x1, y1, x2, y2
+
+    @staticmethod
+    def detect_plates(model, images, cfg):
+        """YOLO at conf .10 plus the notebook's geometric box filter.
+
+        cfg["detect_roi"] (live cameras only), a normalized [x1, y1, x2, y2] box, limits the
+        detector to that region: it gets the region alone, so at the same input size the region
+        is scaled up and small plates in it become larger for the model. Boxes come back in
+        full-frame coordinates, so tracking and crops work on the full frame as before.
+        cfg["exclude_zones"] (live cameras only) holds normalized [x1, y1, x2, y2]
+        rectangles; boxes centred inside one, such as a fixed street sign, are dropped.
+        """
+        cuda = cfg["device"] != "cpu"
+        zones = cfg.get("exclude_zones") or ()
+        regions = [PlateDetector.roi_pixels(cfg.get("detect_roi"), image.shape[1], image.shape[0]) for image in images]
+        images_in = [image if r is None else image[r[1]:r[3], r[0]:r[2]] for image, r in zip(images, regions)]
+        full = images
+        images = images_in
+        batch = images
+        if cuda and images:
+            # fp16 CUDA kernels are prepared per batch size and per thread, about 1.8 s
+            # each on an RTX 4060. Padding to a few sizes keeps that cost in warm-up
+            # instead of stalling a stream whenever the empty-scene gate flushes early.
+            size = next((s for s in PlateDetector.detector_batch_sizes(cfg.get("batch", 1)) if s >= len(images)), len(images))
+            batch = images + images[-1:] * (size - len(images))
+        results = model.predict(batch, imgsz=cfg["imgsz"], conf=.10, iou=.7, device=cfg["device"],
+                                quantize="fp16" if cuda else None, verbose=False, max_det=100, rect=True)[:len(images)]
+        boxes = []
+        for result, image, frame, region in zip(results, images, full, regions):
+            b = result.boxes.cpu().numpy()
+            if len(b):
+                h, w = image.shape[:2]
+                a = b.data[:, :4]
+                bw, bh = a[:, 2] - a[:, 0], a[:, 3] - a[:, 1]
+                ratio = bw / np.maximum(bh, 1e-9)
+                keep = (np.isfinite(a).all(axis=1) & (a[:, 0] >= 0) & (a[:, 1] >= 0)
+                        & (a[:, 2] <= w) & (a[:, 3] <= h) & (bw >= 12) & (bh >= 5)
+                        & (ratio >= 1.1) & (ratio <= 7))
+                b = b[keep]
+                if region is not None and len(b):
+                    # Back to full-frame coordinates (the tracker, crops and zones use the frame).
+                    from ultralytics.engine.results import Boxes
+                    data = np.array(b.data, dtype=np.float32, copy=True)
+                    data[:, [0, 2]] += region[0]
+                    data[:, [1, 3]] += region[1]
+                    b = Boxes(data, frame.shape[:2])
+                if len(b):
+                    fh, fw = frame.shape[:2]
+                    a = b.data[:, :4]
+                    cx, cy = (a[:, 0] + a[:, 2]) / (2 * fw), (a[:, 1] + a[:, 3]) / (2 * fh)
+                    keep = np.ones(len(b), dtype=bool)
+                    for x1, y1, x2, y2 in zones:
+                        keep &= ~((cx >= x1) & (cx <= x2) & (cy >= y1) & (cy <= y2))
+                    b = b[keep]
+            boxes.append(b)
+        return boxes
+
+
+class TrackingConfig:
+    @staticmethod
+    def check_frame_count(decoded, declared, fps):
+        """Stream-copied cuts often declare a few trailing frames that never decode.
+
+        Accept only such a short tail (<= 1% or 2 s of video); any surplus or larger
+        gap still means the metadata, and so the timestamps, cannot be trusted.
+        """
+        if declared <= 0 or decoded == declared:
+            return
+        if decoded > declared or declared - decoded > max(declared // 100, round(2 * fps)):
+            raise RuntimeError("Decoded frame count differs from video metadata")
+
+    @staticmethod
+    def video_config(video, snapshot):
+        """Notebook run_tracking() configuration for one video and pipeline snapshot."""
+        cap = cv2.VideoCapture(str(video))
+        try:
+            fps = float(cap.get(cv2.CAP_PROP_FPS))
+            width, height = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            declared = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            if not cap.isOpened() or width <= 0 or height <= 0 or not math.isfinite(fps) or fps <= 0 or declared < 1:
+                raise ValueError("Video metadata or timing is invalid")
+        finally:
+            cap.release()
+        return TrackingConfig.tracking_config(width, height, fps, declared, snapshot, video.stem, video_path=str(video))
+
+    @staticmethod
+    def tracking_config(width, height, fps, declared, snapshot, video_id, video_path=""):
+        """Tracking configuration from source metadata; live sources have no declared frame count (0)."""
+        if width <= 0 or height <= 0 or not math.isfinite(fps) or fps <= 0 or declared < 0:
+            raise ValueError("Source metadata or timing is invalid")
+        tracking = snapshot["tracking"]
+        return dict(video_path=video_path, video_id=video_id, width=width, height=height, fps=fps,
+                    declared_frames=declared, max_seconds=0, batch=tracking["batch"], imgsz=tracking["imgsz"],
+                    device="cpu" if snapshot["device"] == "cpu" else 0,
+                    crop_confidence=tracking["crop_confidence"], crop_padding=tracking["crop_padding"],
+                    min_frames=tracking.get("min_frames", 5),
+                    sampling=dict(snapshot["sampling"]), empty_scene_gate=dict(snapshot["empty_scene_gate"]),
+                    botsort=dict(tracker_type="botsort", track_high_thresh=.25, track_low_thresh=.10,
+                                 new_track_thresh=.25,
+                                 track_buffer=max(3, round(fps * tracking["track_buffer_seconds"])),
+                                 match_thresh=.8, fuse_score=False, gmc_method="none", proximity_thresh=.5,
+                                 appearance_thresh=.8, with_reid=False, model="auto"))
+
+
+class VideoFrameReader:
+    """Own a bounded decode queue and release the capture when iteration ends."""
+
+    def __init__(self, video, max_seconds=0, prefetch=16):
+        self.video = video
+        self.max_seconds = max_seconds
+        self.frames = queue.Queue(maxsize=prefetch)
+        self.stop = threading.Event()
+        self.capture = None
+
+    @classmethod
+    def read_frames(cls, video, max_seconds=0, prefetch=16):
+        """Yield ordered (index, pts, frame, small_gray) with background decoding."""
+        yield from cls(video, max_seconds, prefetch)
+
+    def _put(self, item):
+        while not self.stop.is_set():
+            try:
+                self.frames.put(item, timeout=.1)
+                return True
+            except queue.Full:
+                pass
+        return False
+
+    def _decode(self):
+        try:
+            index, previous = 0, None
+            while self.capture.grab():
+                index += 1
+                timestamp = float(self.capture.get(cv2.CAP_PROP_POS_MSEC)) / 1000
+                if self.max_seconds and timestamp >= self.max_seconds:
+                    break
+                if not math.isfinite(timestamp) or (previous is not None and timestamp <= previous):
+                    raise RuntimeError("Video PTS is not strictly increasing")
+                previous = timestamp
+                ok, raw = self.capture.retrieve()
+                if not ok:
+                    raise RuntimeError(f"Cannot decode frame {index}")
+                if not self._put((index, timestamp, raw, FrameImage.small_gray(raw))):
+                    return
+            self._put(_END)
+        except BaseException as exc:  # noqa: BLE001 - handed to the consuming thread
+            self._put(exc)
+
+    def __iter__(self):
+        self.capture = cv2.VideoCapture(str(self.video))
+        if not self.capture.isOpened():
+            self.capture.release()
+            raise ValueError(f"Cannot open video: {self.video}")
+        thread = threading.Thread(target=self._decode, name="video-decode", daemon=True)
+        thread.start()
+        try:
+            while True:
+                item = self.frames.get()
+                if item is _END:
+                    return
+                if isinstance(item, BaseException):
+                    raise item
+                yield item
+        finally:
+            self.stop.set()
+            thread.join()
+            self.capture.release()
+
+
+class VideoTracker:
+    @staticmethod
+    def check_stop(stop):
+        if stop is not None and stop.is_set():
+            raise JobStopped("Job stopped")
+
+    @staticmethod
+    def track_video(video, model, cfg, out, stop=None, throttle=None, progress=None):
+        """progress(counts), when given, is called about every 2 s with the tracking counters."""
+        pts, candidates = [], []
+        started = last_progress = last_report = time.perf_counter()
+        with (out / "tracking_detections.csv").open("w", newline="", encoding="utf-8") as det_file, \
+             (out / "frame_gate.csv").open("w", newline="", encoding="utf-8") as gate_file, \
+             TrackSession(model, cfg, det_file, gate_file) as session, \
+             closing(VideoFrameReader.read_frames(video, cfg["max_seconds"])) as frames:
+            for index, timestamp, image, gray in frames:
+                VideoTracker.check_stop(stop)
+                if throttle is not None:
+                    throttle(timestamp)
+                pts.append(timestamp)
+                candidates += session.push(index, timestamp, image, gray)
+                now = time.perf_counter()
+                if progress is not None and now - last_report >= 2:
+                    progress(dict(step="tracking", decoded_frames=len(pts), expected_frames=cfg["declared_frames"],
+                                  sampled_frames=session.sampled, candidates=len(candidates),
+                                  active_tracks=len(session.active), rejected=sum(session.rejected.values())))
+                    last_report = now
+                if now - last_progress >= 20:
+                    # stderr: inside the shared live host, stdout carries its JSON events.
+                    print(json.dumps(dict(stage="tracking", decoded_frames=len(pts),
+                                          expected_frames=cfg["declared_frames"], sampled_frames=session.sampled,
+                                          candidates=len(candidates),
+                                          elapsed_seconds=round(now - started, 1))), file=sys.stderr, flush=True)
+                    last_progress = now
+            candidates += session.close()
+        if not cfg["max_seconds"]:
+            TrackingConfig.check_frame_count(len(pts), cfg["declared_frames"], cfg["fps"])
+        summary = dict(decoded_frames=len(pts), sampled_frames=session.sampled, candidates=len(candidates),
+                       rejected=session.summary()["rejected"], frame_gate=session.gate.summary(),
+                       elapsed_seconds=time.perf_counter() - started)
+        EvidenceWriter.write_json(out / "tracking_summary.json", summary)
+        return pts, session.frames, candidates, summary

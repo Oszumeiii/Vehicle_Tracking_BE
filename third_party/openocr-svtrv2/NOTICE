@@ -1,0 +1,10 @@
+SVTRv2 visual encoder
+
+The SVTRv2 LNConvTwo33 encoder in app/recognition/svtr_backbone.py is adapted
+from Topdu/OpenOCR, source revision
+1ccfc6ee6161f7133b192e16af3a9265273997ba, files
+openrec/modeling/encoders/svtrv2_lnconv_two33.py and modeling/common.py.
+The upstream operators and state-dict names are retained; the application
+integration adds the Base dimensions and 384-to-512 projection.
+
+Licensed under Apache License, Version 2.0. See LICENSE.

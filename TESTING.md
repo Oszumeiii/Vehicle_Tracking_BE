@@ -30,11 +30,12 @@ Swagger. Chạy lại **24/24 test API/OpenAPI đạt** (18 API + 6 OpenAPI, tí
 cha); build và format check đạt. Test mới xác nhận thiếu/sai migration OCR trả
 `503` nhưng liveness vẫn hoạt động. Phần ML không thay đổi trong đợt rà soát này.
 
-Checkpoint Kaggle thật đã strict-load và chạy inference thành công trên CPU.
-Smoke test qua ML subprocess trên clip thật khoảng 3 giây xử lý 85 frame, chọn
-43 frame và tạo một track với 5 crop ở frame `1, 21, 43, 65, 85`; manifest vượt
-qua validator Node. Kết quả này xác nhận tích hợp chạy được, chưa đo accuracy do
-chưa có nhãn chuẩn. Chi tiết tại [OCR_KAGGLE.md](docs/OCR_KAGGLE.md).
+Checkpoint SE-ResNet34-C cũ đã strict-load và chạy inference trên CPU; ghi nhận
+lịch sử này không xác nhận pipeline SVTRv2 mới. Pipeline hiện tại dùng
+`pbl6-svtrv2-regional-joint5-v1`; test focused của adapter SVTRv2 strict-load
+checkpoint, kiểm tra preprocess và prediction contract khi checkpoint có mặt.
+Việc này chưa đo accuracy trên biển số Việt Nam. Chi tiết tại
+[OCR_KAGGLE.md](docs/OCR_KAGGLE.md).
 
 Đợt rà soát source ngày **11/10/2026**: **50 test Node và 98 test Python đạt**;
 TypeScript build và Prettier đạt. Node chạy đủ các suite theo hai đợt: 18 API +
@@ -59,7 +60,7 @@ README. Swagger ở `http://127.0.0.1:3000/docs`.
 3. User A upload một PNG/JPG bằng `/api/v2/media`. Đối chiếu kích thước, MIME,
    `content_url`; User B không đọc được URL này.
 4. Gọi `/api/v2/pipelines`. Cấu hình Kaggle có profile `task=prepare` không yêu
-   cầu OCR và `pbl6-resnet34c-joint5-v1` nhận diện video. Thiếu checkpoint/code/Python
+   cầu OCR và `pbl6-svtrv2-regional-joint5-v1` nhận diện video. Thiếu checkpoint/code/Python
    phải thấy `ready=false` và tạo job trả `503`.
 5. Với detector đã cấu hình, tạo job từ `media_id` và `pipeline_id`, đợi trạng
    thái kết thúc. Ảnh đã crop dùng `input_mode=plate_crop`; video dùng `scene`.
@@ -257,7 +258,7 @@ RTX 4060 Laptop 8 GB, Ryzen 7 7735HS. Ứng dụng khác đã chiếm khoảng 1
 **Câu hỏi:** nâng lấy mẫu detector từ 8/12/15 lên 15/20/25 frame/s có giúp bắt được nhiều biển hơn không?
 
 **Cách đo:**
-- So sánh pipeline `pbl6-resnet34c-joint5-hfps-v1` với `-v1`. Hai pipeline giống hệt nhau, chỉ khác `sampling`.
+- So sánh profile `pbl6-svtrv2-regional-joint5-hfps-v1` với `pbl6-svtrv2-regional-joint5-v1`. Cùng model/checkpoint, chỉ khác `sampling`; số đo lịch sử của model OCR cũ không áp dụng cho SVTRv2.
 - Ngưỡng `readable` 0.96. Đo sau khi đã sửa lỗi bỏ frame lúc khởi động.
 - Máy: RTX 4060 Laptop.
 

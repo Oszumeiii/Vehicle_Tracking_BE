@@ -5,7 +5,7 @@ import zlib
 import pytest
 from PIL import Image
 
-from app.recognition.runner import _image_detections
+from app.recognition.runner import AppearanceBuilder
 from scripts.probe_media import probe
 
 
@@ -45,7 +45,7 @@ def test_recognition_crops_the_upright_image(tmp_path):
                    pipeline_snapshot=dict(tracking=dict(crop_padding=0.)))
     folder = tmp_path / "out"
     folder.mkdir()
-    appearances, _ = _image_detections(payload, None, folder, tmp_path)
+    appearances, _ = AppearanceBuilder.image_detections(payload, None, folder, tmp_path)
     with Image.open(folder / "frame.png") as frame:
         assert frame.size == (20, 40)
     detection = appearances[0]["detections"][0]

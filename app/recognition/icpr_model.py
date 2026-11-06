@@ -221,12 +221,6 @@ class HeightAttentionPool(nn.Module):
         return pooled + flat.transpose(1, 2)
 
 
-def backbone_out_height(h):
-    for _ in range(3):
-        h = (h + 1) // 2
-    return h
-
-
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, max_len=256):
         super().__init__()
@@ -247,7 +241,7 @@ class SingleLRLPRModel(nn.Module):
         self.stn = SharedSTNBlock(Config.STN_MAX_AFFINE_DELTA)
         self.backbone = SEResNet34CBackboneNoPool()
         self.fusion = QualityAwareFrameFusion(512)
-        self.height_pool = HeightAttentionPool(512, backbone_out_height(Config.IMG_HEIGHT))
+        self.height_pool = HeightAttentionPool(512, SingleLRLPRModel.backbone_out_height(Config.IMG_HEIGHT))
         self.head_drop = nn.Dropout(Config.HEAD_DROPOUT)
         self.pos_encoder = PositionalEncoding(d_model)
         encoder_layer = nn.TransformerEncoderLayer(
@@ -274,3 +268,9 @@ class SingleLRLPRModel(nn.Module):
         x = self.pos_encoder(seq_feat)
         enc_out = self.final_norm(self.encoder(x))
         return self.primary_head(self.head_drop(enc_out)), frame_weights
+
+    @staticmethod
+    def backbone_out_height(h):
+        for _ in range(3):
+            h = (h + 1) // 2
+        return h

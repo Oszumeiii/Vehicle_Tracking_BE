@@ -9,6 +9,15 @@
     "downloaded_date": "2026-10-14",
     "license": "Apache-2.0"
   },
+  "ocr_svtrv2": {
+    "source": "trnvnhun/svtrv2_base_regional_pool_warmup_parts",
+    "checkpoint_file": "single_model_best_svtrv2_base_regional_pool_warmup_v1.pt",
+    "sha256": "fe1e58e5fb5938b83cc4ddac1e5bad62c2bbcbd2dd4bb925043913601db5e8d1",
+    "size_bytes": 107437431,
+    "model_variant": "SVTRv2-Base regional, EMA validation greedy exact",
+    "input": "five RGB crops, 40x128, aspect-preserving resize and gray padding",
+    "license": "Apache-2.0"
+  },
   "detector": {
     "source": "https://huggingface.co/morsetechlab/yolov11-license-plate-detection",
     "file": "license-plate-finetune-v1l.pt",

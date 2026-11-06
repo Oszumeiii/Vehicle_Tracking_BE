@@ -74,7 +74,7 @@ def recognize_tracks(tracks, recognizer, root: Path, log=lambda message: None, f
     from PIL import Image
 
     from app.live.runner import plate_confidence
-    from app.recognition.runner import _predict_joint
+    from app.recognition.runner import PredictionRunner
 
     rows = []
     for index, (track, folder, plate) in enumerate(tracks, 1):
@@ -82,14 +82,14 @@ def recognize_tracks(tracks, recognizer, root: Path, log=lambda message: None, f
         with Image.open(frames[2]) as middle:
             width, height = middle.size
         if len(set(frames)) == len(frames):
-            prediction = _predict_joint(recognizer, frames, root)
+            prediction = PredictionRunner.predict_joint(recognizer, frames, root)
         else:  # repeated frames (short_track): the evidence check of _predict_joint does not apply
             import time
-            from app.recognition.fusion import normalize_plate
+            from app.recognition.fusion import PlateFusion
             started = time.perf_counter()
             images = [Image.open(frame).convert("RGB") for frame in frames]
             value = recognizer(images)
-            prediction = dict(value, normalized_text=normalize_plate(value["raw_text"]),
+            prediction = dict(value, normalized_text=PlateFusion.normalize_plate(value["raw_text"]),
                               latency_ms=(time.perf_counter() - started) * 1000)
         rows.append(dict(track=track, plate_text=plate, crop_width=width, crop_height=height,
                          machine_text=prediction["normalized_text"] or None,
@@ -169,6 +169,8 @@ def run(argv: list[str] | None = None) -> int:
                 snapshot = {**snapshot, "device": args.device}
             if args.tta:
                 recognizer_spec = snapshot["recognizer"]
+                if recognizer_spec.get("factory") in {"svtr_adapter:create_recognizer", "svtr_adapter:SVTRRecognizer"}:
+                    raise ValueError("The SVTRv2 recognizer does not implement TTA.")
                 snapshot = {**snapshot, "recognizer": {**recognizer_spec,
                                                        "config": {**recognizer_spec.get("config", {}), "use_tta": True}}}
             tracks = find_tracks(args.dataset, args.split, args.val_list)[:args.limit]

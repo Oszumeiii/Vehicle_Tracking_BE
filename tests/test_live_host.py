@@ -189,7 +189,7 @@ def test_upload_jobs_run_on_the_shared_models_beside_sessions(tmp_path, monkeypa
         calls.append(recognize(["crop"]))
         return {"appearances": [], "statistics": {"decoded_frames": 1}}
 
-    monkeypatch.setattr(runner, "execute", fake_execute)
+    monkeypatch.setattr(runner.RecognitionRunner, "execute", fake_execute)
     host, model, loads = make_host(tmp_path)
     start(host, tmp_path, "a", "camboriu")
     file = job_payload(tmp_path, "job1")
@@ -212,7 +212,7 @@ def test_a_stopped_or_misplaced_job_writes_an_error_result(tmp_path, monkeypatch
         stop.wait(5)
         raise JobStopped("Job stopped")
 
-    monkeypatch.setattr(runner, "execute", slow_execute)
+    monkeypatch.setattr(runner.RecognitionRunner, "execute", slow_execute)
     host, _, _ = make_host(tmp_path)
     file = job_payload(tmp_path, "job2")
     host.command(dict(cmd="job", job="job2", payload=str(file)))
