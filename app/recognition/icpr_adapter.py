@@ -117,6 +117,8 @@ class ICPRRecognizer:
             if identity:
                 weights = frame_weights
             acc.append(F.log_softmax(logits.float(), dim=-1))
+        if weights is None:
+            raise ValueError("ICPR inference did not produce frame fusion weights.")
         return F.log_softmax(torch.stack(acc, dim=0).mean(dim=0), dim=-1), weights
 
     def __init__(self, spec: Mapping):

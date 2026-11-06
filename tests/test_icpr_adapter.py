@@ -179,6 +179,17 @@ def test_checkpoint_load_is_safe_strict_and_forward_has_no_invented_confidence(s
         recognize(Image.new("RGB", (50, 19)))
 
 
+def test_predict_log_probs_rejects_missing_frame_weights():
+    class ModelWithoutWeights:
+        def __call__(self, _images):
+            return torch.zeros((1, 48, 37)), None
+
+    with pytest.raises(ValueError, match="did not produce frame fusion weights"):
+        ICPRRecognizer.predict_log_probs(
+            ModelWithoutWeights(), torch.zeros((1, 5, 3, 48, 192))
+        )
+
+
 def test_default_decoder_is_notebook_beam_filter(synthetic_checkpoint):
     recognize = ICPRRecognizer({"checkpoint": str(synthetic_checkpoint), "config": {}})
     decoding = recognize([Image.new("RGB", (40, 12)) for _ in range(5)])["decoding"]
