@@ -2,6 +2,15 @@
 
 Demo khoảng 10 phút, đi qua cả hai nguồn của hệ thống: video upload và camera live. Chạy trên máy dev Windows có GPU (RTX 4060 8 GB).
 
+
+## Kịch bản demo giai đoạn 16–20 (khoảng 10 phút)
+
+1. **Camera live (Canada Orla, Av. Atlântica):** bật phiên; video phát mượt qua HLS (chậm hơn thực tế khoảng 15–25 s), biển số hiện real-time. Mở tab **Quá trình xử lý** để thấy 7 bước và nhật ký từng track. Trong **Cài đặt camera**, chỉ vùng nhận diện đã khoanh và giải thích số đo A/B (`docs/EVALUATION.md`).
+2. **Phát video upload như livestream:** ở Tra cứu video, mở Thư viện, bấm **Phát như livestream** trên `04_5phut_00h30m-00h35m.mp4`. Video quay lúc 12:32:30 ngày 29/09/2026 (giờ Brasília) nên biển số mang đúng giờ quay.
+3. **Hành trình:** mở `TBT6D43` hoặc `QJK0C77`, bật **Gần đúng** (gộp cả biển cũ ↔ Mercosul). Trình bày dòng thời gian, bản đồ, cảnh báo chặng vô lý, và mục khai thời điểm quay cho video upload.
+4. **Kết quả → Duyệt nhanh:** xác nhận vài biển đọc đúng nhưng dưới ngưỡng 0,96; biển kế tiếp tự mở.
+5. **Quản lý:** **Nhật ký** (ai tra biển nào, xem hành trình nào) và **Video & tác vụ → Dung lượng máy chủ** (ổ trống, video trùng, hạn lưu từng camera; dưới 5 GB trống thì camera live tạm dừng).
+
 ## Chuẩn bị (làm trước buổi demo)
 
 1. **Môi trường:**
