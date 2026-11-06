@@ -636,6 +636,16 @@ export class LiveManager {
   private async requestStop(run: Run) {
     if (run.stopSent) return;
     run.stopSent = true;
+    // Record "stopping" before telling the process: a process that exits at once would otherwise
+    // have its "stopped" written first.
+    if (!run.interrupted) {
+      run.status = 'stopping';
+      await this.database.query(
+        "UPDATE live_sessions SET status='stopping' WHERE id=$1 AND status IN ('starting','running','reconnecting')",
+        [run.session.id],
+      );
+      await recordEvent(this.database, run.session.id, 'status', { status: 'stopping' });
+    }
     run.child.stdin?.write('stop\n');
     run.timers.push(
       setTimeout(() => {
@@ -644,13 +654,6 @@ export class LiveManager {
         killLive(run.child);
       }, this.settings.stopSeconds * 1000),
     );
-    if (run.interrupted) return;
-    run.status = 'stopping';
-    await this.database.query(
-      "UPDATE live_sessions SET status='stopping' WHERE id=$1 AND status IN ('starting','running','reconnecting')",
-      [run.session.id],
-    );
-    await recordEvent(this.database, run.session.id, 'status', { status: 'stopping' });
   }
 
   private async finish(
