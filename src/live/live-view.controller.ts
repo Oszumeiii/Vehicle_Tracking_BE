@@ -185,7 +185,6 @@ export class LiveViewController {
   async playlist(
     @Req() req: { user: Actor },
     @Param('id') id: string,
-    @Query('token') token: unknown,
     @Query('asset_token') assetToken: unknown,
     @Res() response: Response,
   ) {
@@ -197,11 +196,7 @@ export class LiveViewController {
     const epochNumber = Number(epoch.slice(1));
     // A query token (players that cannot send headers) is passed on to the segments.
     const query =
-      typeof assetToken === 'string'
-        ? `?asset_token=${encodeURIComponent(assetToken)}`
-        : typeof token === 'string'
-          ? `?token=${encodeURIComponent(token)}`
-          : '';
+      typeof assetToken === 'string' ? `?asset_token=${encodeURIComponent(assetToken)}` : '';
     const lines = [
       '#EXTM3U',
       '#EXT-X-VERSION:3',

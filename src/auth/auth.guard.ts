@@ -27,11 +27,7 @@ export class AuthGuard implements CanActivate {
       }
       if (!row) throw new UnauthorizedException('Invalid or expired asset link.');
     } else {
-      let token = /^Bearer ([A-Za-z0-9_-]+)$/i.exec(authHeader)?.[1];
-      // Deprecated: the bearer token itself in the URL. Kept until clients use asset tokens.
-      if (!authHeader && assetRequest && typeof request.query?.token === 'string') {
-        token = request.query.token;
-      }
+      const token = /^Bearer ([A-Za-z0-9_-]+)$/i.exec(authHeader)?.[1];
       if (!token) throw new UnauthorizedException('Authentication required.');
       row = (await this.db.query(`${SESSION_USER} AND s.token_hash=$1`, [hashToken(token)]))
         .rows[0];

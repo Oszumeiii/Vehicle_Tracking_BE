@@ -157,26 +157,13 @@ async function completed(
   return { mediaId, jobId, resultId, detectionId, cropKey };
 }
 
-test('FinalV1 media URLs authenticate only asset reads and preserve ownership', async () => {
+test('the bearer token is never accepted in a URL', async () => {
   const item = await completed();
   const crop = `/api/v2/detections/${item.detectionId}/artifacts/crop`;
-  await api.get(crop).query({ token: ownerToken }).expect(200);
-  await api.get(crop).query({ token: strangerToken }).expect(404);
-  await api
-    .get(crop)
-    .query({ token: ownerToken })
-    .set('Authorization', 'Bearer invalid')
-    .expect(401);
+  await api.get(crop).set('Authorization', `Bearer ${ownerToken}`).expect(200);
+  await api.get(crop).query({ token: ownerToken }).expect(401);
+  await api.get(`/api/v2/media/${item.mediaId}/content`).query({ token: ownerToken }).expect(401);
   await api.get('/api/v2/auth/me').query({ token: ownerToken }).expect(401);
-  await api
-    .delete(`/api/v2/recognition-jobs/${item.jobId}`)
-    .query({ token: ownerToken })
-    .expect(401);
-  await api
-    .get(`/api/v2/media/${item.mediaId}/content`)
-    .query({ token: ownerToken })
-    .set('Range', 'bytes=0-7')
-    .expect(206);
 });
 
 test('signed asset tokens open files only, keep ownership and end with the session', async () => {

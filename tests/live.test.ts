@@ -68,6 +68,9 @@ after(async () => {
 });
 
 const as = (role: keyof typeof tokens) => ({ Authorization: `Bearer ${tokens[role]}` });
+// Signed token for URLs of players that cannot send headers.
+const assetToken = async (role: keyof typeof tokens) =>
+  (await api.post('/api/v2/auth/asset-token').set(as(role)).expect(200)).body.asset_token as string;
 
 async function camera(name = 'Camboriú', zones: number[][] = []) {
   return (
@@ -812,7 +815,10 @@ test('a live track gets its clip, and a result shows where its video is', async 
   assert.equal(video.headers['x-plate-first-seen-seconds'], '2.5');
   assert.equal(video.headers['content-type'], 'video/mp4');
   await api.get(info.body.url).set(as('owner')).set('Range', 'bytes=0-2').expect(206);
-  await api.get(`${info.body.url}?token=${tokens.owner}`).expect(200); // <video src> cannot send headers
+  // <video src> cannot send headers: a signed asset token, never the bearer token.
+  const clipToken = await assetToken('owner');
+  await api.get(info.body.url).query({ asset_token: clipToken }).expect(200);
+  await api.get(`${info.body.url}?token=${tokens.owner}`).expect(401);
   await api.get(info.body.url).set(as('stranger')).expect(404);
 
   // No clip: the camera's recording, while it still covers the track, then nothing.
@@ -952,8 +958,7 @@ test('a camera is watched as HLS from its recording, a demo camera as its file',
   ]);
   await api.get(`${base}/live.m3u8`).set(as('stranger')).expect(404);
   // A player without headers: the token goes on to the segments.
-  const tokened = await api.get(`${base}/live.m3u8?token=${tokens.owner}`).expect(200);
-  assert.ok(tokened.text.includes(`000001.ts?token=${tokens.owner}`));
+  await api.get(`${base}/live.m3u8?token=${tokens.owner}`).expect(401);
   const { asset_token } = (await api.post('/api/v2/auth/asset-token').set(as('owner')).expect(200))
     .body;
   const signed = await api.get(`${base}/live.m3u8`).query({ asset_token }).expect(200);
@@ -961,7 +966,8 @@ test('a camera is watched as HLS from its recording, a demo camera as its file',
   await api.get(`${base}/live/${live.id}/e000/000001.ts`).query({ asset_token }).expect(200);
 
   const segment = await api
-    .get(`${base}/live/${live.id}/e000/000001.ts?token=${tokens.owner}`)
+    .get(`${base}/live/${live.id}/e000/000001.ts`)
+    .query({ asset_token })
     .buffer(true)
     .parse((res, done) => {
       const chunks: Buffer[] = [];
@@ -1030,8 +1036,10 @@ test('a camera is watched as HLS from its recording, a demo camera as its file',
     loop: true,
   });
   await api.get(`${demoBase}/demo-video`).set(as('admin')).expect(200);
+  const demoToken = await assetToken('admin');
   await api
-    .get(`${demoBase}/demo-video?token=${tokens.admin}`)
+    .get(`${demoBase}/demo-video`)
+    .query({ asset_token: demoToken })
     .set('Range', 'bytes=0-3')
     .expect(206);
   await api.get(`${demoBase}/demo-video`).set(as('owner')).expect(404);
