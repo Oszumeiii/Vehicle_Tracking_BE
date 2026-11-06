@@ -12,6 +12,7 @@ Mặc định `http://127.0.0.1:3000`. Ngoại trừ login và health, gửi `Au
 - `GET /api/v2/users?limit=50&offset=0`: Admin xem tài khoản.
 - `POST /api/v2/users`: Admin gửi `{email,password,display_name,role}` → `201`. Mật khẩu tối thiểu 12 ký tự.
 - `PATCH /api/v2/users/{id}`: Admin gửi các trường `display_name`, `role`, `is_active`, `password` cần thay đổi. Khóa/đổi mật khẩu thu hồi phiên. Không khóa hoặc hạ quyền Admin hoạt động cuối cùng.
+- `GET /api/v2/system/storage`: chỉ Admin. Ổ đĩa (`free_bytes`, `total_bytes`), ngưỡng `min_free_bytes`, `low`, dung lượng video upload (`media_bytes`), bằng chứng live (`live_evidence_bytes`), bản ghi đệm (`recording_bytes`), các file upload trùng (`duplicates`) và hạn lưu cùng dung lượng bằng chứng của từng camera (`cameras`).
 - `GET /api/v2/audit-logs`: chỉ Admin (user thường nhận `403`). **Nhật ký truy cập**, mới nhất trước, query `user_id`, `action` (khớp đúng như `auth.login`, hoặc tiền tố kết thúc bằng dấu chấm như `camera.`), `from`, `to`, phân trang. Mỗi dòng gồm `id`, `user_id`, `user_email`, `action`, `target_type`, `target_id`, `details`, `ip`, `created_at`.
   - Hành động được ghi:
     - `auth.login`, `auth.login_failed` (`details.email`, `reason`: `invalid` | `inactive` | `throttled`), `auth.logout`;
@@ -24,6 +25,7 @@ Mặc định `http://127.0.0.1:3000`. Ngoại trừ login và health, gửi `Au
 ## Media
 
 - `POST /api/v2/media`: multipart `file` → `201` với `media_id` (cùng giá trị `id`) và metadata. Chỉ JPG/PNG/MP4/AVI/MOV; kiểm tra giải mã thực, tối đa `PLATE_MAX_UPLOAD_MIB` (mặc định 500), ảnh tối đa 25 megapixels. File không đọc được trả `422`; môi trường kiểm tra file chưa sẵn sàng trả `503`.
+- `POST /api/v2/media?reuse=true`: nếu chính người dùng đã upload đúng file này (cùng sha256) thì trả media cũ kèm `duplicate: true` và bỏ bản mới; không có `reuse` thì luôn tạo media mới. Ổ chứa dữ liệu còn dưới `PLATE_MIN_FREE_GB` thì trả `507`.
 - `GET /api/v2/media?limit=50&offset=0`: nguồn theo phạm vi quyền.
 - `PATCH /api/v2/media/{id}`: `{recorded_at?, location?}`: video được quay **lúc nào** (giờ của khung hình đầu tiên, ISO 8601 có múi giờ, ví dụ `2026-03-01T11:00:00-03:00` theo giờ Brasília) và **ở đâu** (cùng dạng `location` của camera); `null` để xóa. Có `recorded_at` thì kết quả của lần nhận diện mới nhất được đưa vào hành trình biển số. Response của media luôn có `recorded_at` và `location`.
 - `GET /api/v2/media/{id}/content`: file gốc, MIME theo nội dung đã kiểm tra. Hỗ trợ header `Range` để đọc từng phần (`206`); khoảng byte ngoài file trả `416` với JSON lỗi và `Content-Range: bytes */<size>`.

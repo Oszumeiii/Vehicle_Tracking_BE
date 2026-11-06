@@ -77,6 +77,22 @@ const streamFilter = z
   })
   .strict();
 
+/**
+ * Retention given to a camera when it is turned always-on without any (PLATE_ALWAYS_ON_KEYFRAME_HOURS,
+ * default 24: keyframes pruned to one per track; PLATE_ALWAYS_ON_TRACK_DAYS, default 7: unreviewed,
+ * unalerted tracks deleted). 0 keeps them.
+ */
+function alwaysOnRetention() {
+  const read = (name: string, fallback: number) => {
+    const value = Number(process.env[name] ?? fallback);
+    return Number.isInteger(value) && value >= 0 ? value || null : fallback;
+  };
+  return {
+    keyframeHours: read('PLATE_ALWAYS_ON_KEYFRAME_HOURS', 24),
+    trackDays: read('PLATE_ALWAYS_ON_TRACK_DAYS', 7),
+  };
+}
+
 function sourceView(row: Record<string, any>) {
   const videoId = row.source_type === 'youtube' ? youtubeVideoId(row.url) : null;
   const { latitude: _lat, longitude: _lng, location_name: _name, heading: _heading, ...rest } = row;
@@ -559,6 +575,17 @@ export class LiveController {
         throw new UnprocessableEntityException('Only a camera replaying an upload can loop.');
       const pick = <K extends keyof typeof body>(key: K) =>
         body[key] === undefined ? source[key] : body[key];
+      // Turning a camera always-on without retention would keep every keyframe and track
+      // forever and fill the disk: give it the defaults unless retention was set.
+      const turningOn = alwaysOn && !source.always_on;
+      const keyframeHours =
+        turningOn && pick('keyframe_retention_hours') === null
+          ? alwaysOnRetention().keyframeHours
+          : pick('keyframe_retention_hours');
+      const trackDays =
+        turningOn && pick('track_retention_days') === null
+          ? alwaysOnRetention().trackDays
+          : pick('track_retention_days');
       return (
         await c.query(
           `UPDATE stream_sources SET name=$2,exclude_zones=$3,always_on=$4,auto_settings=$5,
@@ -571,8 +598,8 @@ export class LiveController {
             JSON.stringify(pick('exclude_zones')),
             alwaysOn,
             JSON.stringify(auto),
-            pick('keyframe_retention_hours'),
-            pick('track_retention_days'),
+            keyframeHours,
+            trackDays,
             pick('url'),
             ...(body.location === undefined
               ? [source.latitude, source.longitude, source.location_name, source.heading]

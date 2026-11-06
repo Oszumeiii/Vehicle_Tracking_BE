@@ -349,3 +349,100 @@ test('a camera detection region is validated, copied into sessions and handed to
   ).rows[0];
   assert.deepEqual(restarted.settings.detect_roi, [0, 0.5, 1, 1]);
 });
+
+test('a nearly full disk stops live sessions and holds new ones; always-on gets retention', async () => {
+  // Sessions and always-on cameras left by earlier tests would be claimed first.
+  await db().query('UPDATE stream_sources SET always_on=false');
+  await db().query(
+    "UPDATE live_sessions SET status='stopped', finished_at=now() WHERE status IN ('queued','starting','running','reconnecting','stopping')",
+  );
+  const camera = (
+    await api
+      .post('/api/v2/stream-sources')
+      .set(as('owner'))
+      .send({ name: 'disk', url: 'https://www.youtube.com/watch?v=R-OLN-xAVoA' })
+      .expect(201)
+  ).body;
+  const queued = (
+    await api
+      .post(`/api/v2/stream-sources/${camera.id}/sessions`)
+      .set(as('owner'))
+      .send({ pipeline_id: 'joint' })
+      .expect(202)
+  ).body;
+  const spawned: { args: string[]; child: Fake }[] = [];
+  const live = manager(spawned);
+  await live.tick();
+  assert.equal(spawned.length, 1);
+  live.diskCheck = async () => ({ low: true, free: 1, floor: 5 * 2 ** 30 });
+  await live.tick();
+  // stdin is written asynchronously.
+  await until(
+    async () => spawned[0].child.input,
+    (input) => /stop\n/.test(input),
+    'stop sent to the live process',
+  );
+  const events = (
+    await db().query(
+      'SELECT event_type, payload FROM live_session_events WHERE session_id=$1 ORDER BY id',
+      [queued.id],
+    )
+  ).rows;
+  assert.ok(
+    events.some((row) => row.event_type === 'error' && row.payload.code === 'DISK_LOW'),
+    JSON.stringify(events),
+  );
+  spawned[0].child.line({ type: 'status', status: 'stopped' });
+  spawned[0].child.exit(0);
+  await until(
+    () => sessionRow(queued.id),
+    (row) => row.status === 'stopped',
+    'stopped session',
+  );
+  // While the disk stays low nothing new starts.
+  const next = (
+    await api
+      .post(`/api/v2/stream-sources/${camera.id}/sessions`)
+      .set(as('owner'))
+      .send({ pipeline_id: 'joint' })
+      .expect(202)
+  ).body;
+  await live.tick();
+  assert.equal(spawned.length, 1);
+  assert.equal((await sessionRow(next.id)).status, 'queued');
+  await api.post(`/api/v2/live-sessions/${next.id}/stop`).set(as('owner')).expect(202);
+
+  // Turning a camera always-on without retention gives it 24 h keyframes / 7 day tracks;
+  // retention that was set stays.
+  const on = await api
+    .patch(`/api/v2/stream-sources/${camera.id}`)
+    .set(as('owner'))
+    .send({ always_on: true, auto_settings: { pipeline_id: 'joint' } })
+    .expect(200);
+  assert.equal(on.body.keyframe_retention_hours, 24);
+  assert.equal(on.body.track_retention_days, 7);
+  const other = (
+    await api
+      .post('/api/v2/stream-sources')
+      .set(as('owner'))
+      .send({ name: 'kept', url: 'https://www.youtube.com/watch?v=ZMcmtGYYg5E' })
+      .expect(201)
+  ).body;
+  const kept = await api
+    .patch(`/api/v2/stream-sources/${other.id}`)
+    .set(as('owner'))
+    .send({
+      always_on: true,
+      auto_settings: { pipeline_id: 'joint' },
+      track_retention_days: 30,
+    })
+    .expect(200);
+  assert.equal(kept.body.track_retention_days, 30);
+  assert.equal(kept.body.keyframe_retention_hours, 24);
+  for (const id of [camera.id, other.id])
+    await api
+      .patch(`/api/v2/stream-sources/${id}`)
+      .set(as('owner'))
+      .send({ always_on: false })
+      .expect(200);
+});

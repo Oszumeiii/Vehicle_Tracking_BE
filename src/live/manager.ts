@@ -24,6 +24,7 @@ import {
 } from './payload';
 import { isReplay, replaySource } from './replay';
 import { ACTIVE_SQL, recordEvent } from './sessions';
+import { diskLow } from '../common/disk';
 
 type Row = Record<string, any>;
 export type SpawnLive = (python: string, args: string[]) => ChildProcess;
@@ -151,6 +152,10 @@ interface Run {
  */
 export class LiveManager {
   private runs = new Map<string, Run>();
+  /** Free-space check of the data folder (replaceable in tests); see src/common/disk.ts. */
+  diskCheck: () => Promise<{ low: boolean; free: number | null; floor: number }> = () =>
+    diskLow(this.options.dataDir);
+  private diskWarned = false;
   // Cameras whose pipeline could not be resolved: retry time and consecutive failures.
   private restartBlocked = new Map<string, { until: number; failures: number }>();
 
@@ -306,6 +311,26 @@ export class LiveManager {
         if (run) await this.requestStop(run);
       }
     }
+    // A nearly full disk stops live sessions (recordings and evidence are what grows) and
+    // holds new ones until space is freed; always-on cameras restart afterwards.
+    const disk = await this.diskCheck();
+    if (disk.low) {
+      if (!this.diskWarned)
+        console.warn(
+          `Data disk below ${Math.round(disk.floor / 2 ** 30)} GB free: live sessions paused.`,
+        );
+      this.diskWarned = true;
+      for (const run of this.runs.values())
+        if (!run.stopSent) {
+          await recordEvent(this.database, run.session.id, 'error', {
+            code: 'DISK_LOW',
+            message: `Less than ${Math.round(disk.floor / 2 ** 30)} GB free on the data disk; the session was stopped.`,
+          });
+          await this.requestStop(run);
+        }
+      return;
+    }
+    this.diskWarned = false;
     await this.autoRestart();
     while (this.runs.size < this.settings.maxSessions && !this.options.signal?.aborted) {
       if (!this.gate.enter('live')) break;
