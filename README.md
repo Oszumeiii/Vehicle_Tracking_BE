@@ -6,7 +6,7 @@ Luồng model đã đối chiếu với chat **Gộp pipeline cắt frame và de
 
 **Video → Adaptive Sampling → empty-scene gate → YOLO11l → BoT-SORT → 5 crop/track (chọn theo chất lượng) → OCR joint 5 frame (beam_filter) → kiểm duyệt.**
 
-Pipeline và OCR theo notebook nhóm [PBL6 PIPELINE](https://www.kaggle.com/code/trnvnhun/pbl6-pipeline): STN → SE-ResNet34-C `[3,4,6,3]` → quality fusion → height attention → Transformer → CTC, nhận **đồng thời 5 crop RGB 192×48**, giải mã `beam_filter` theo định dạng biển Brazil/Mercosul. Nhánh này lưu một dự đoán cho mỗi track kèm `decoding` (greedy text, `format_valid`, beam score); không tạo năm dự đoán riêng hoặc dùng bỏ phiếu 3/5.
+Detector/tracker vẫn theo notebook nhóm [PBL6 PIPELINE](https://www.kaggle.com/code/trnvnhun/pbl6-pipeline). OCR hiện tại dùng SVTRv2-Base regional, nhận **đồng thời 5 crop RGB**, resize giữ tỉ lệ vào canvas 128×40 rồi giải mã CTC bằng `beam_filter`. Kết quả lưu một dự đoán cho mỗi track; không tạo năm dự đoán riêng hoặc dùng bỏ phiếu 3/5. Checkpoint được train/evaluated trên biển Brazil/Mercosul; chất lượng trên biển Việt Nam cần được đánh giá riêng.
 
 Profile `prepare` vẫn chạy độc lập không cần OCR: kết quả `machine_status=not_run`, `machine_text=null`, predictions rỗng; người dùng nhập biển số thủ công nếu cần. Ảnh đơn dùng profile prepare hoặc adapter một ảnh riêng; không nhân bản ảnh để đưa vào model joint-frame.
 
@@ -68,9 +68,11 @@ Dùng Python 3.12. Tracking và OCR nằm trong `app/recognition` (không còn c
 
 Máy không có GPU NVIDIA thì cài bản CPU (`--index-url https://download.pytorch.org/whl/cpu`) và đặt `PLATE_DEVICE=cpu`; YOLO11l ở imgsz 1280 chạy chậm hơn nhiều trên CPU.
 
-Đặt `PLATE_PIPELINE_PYTHON`, `PLATE_DEVICE`, `PLATE_PIPELINES_CONFIG=config/pipelines.kaggle.json`. Có hai profile chính: `pbl6-resnet34c-joint5-v1` cho video nhận diện đầy đủ và `pbl6-yolo11l-botsort-prepare-v1` cho ảnh/video lấy bằng chứng. Profile thử nghiệm `pbl6-resnet34c-joint5-hfps-v1` giống v1 nhưng lấy mẫu 15/20/25 frame/s. Đo trên clip demo, profile này không cho thêm biển đọc được, và chạy hai camera cùng lúc thì bỏ 12–17% frame, nên không dùng làm mặc định (xem `TESTING.md`). Checkpoint/interpreter thiếu hoặc sai checksum thì profile tương ứng trả `ready=false`, tạo job trả `503`.
+Đặt `PLATE_PIPELINE_PYTHON`, `PLATE_DEVICE`, `PLATE_PIPELINES_CONFIG=config/pipelines.kaggle.json`. Profile `pbl6-svtrv2-regional-joint5-v1` nhận diện video; `pbl6-yolo11l-botsort-prepare-v1` chỉ lấy bằng chứng, không chạy OCR. Profile thử nghiệm `pbl6-svtrv2-regional-joint5-hfps-v1` dùng cùng checkpoint nhưng lấy mẫu 15/20/25 frame/s. Checkpoint/interpreter thiếu hoặc sai checksum thì profile tương ứng trả `ready=false`, tạo job trả `503`.
 
-Checkpoint OCR `models/icpr_resnet34c_single_model_best.pt` và detector `models/license-plate-finetune-v1l.pt` được kiểm checksum và không đưa vào Git. Cách tải lại, kiến trúc, decoder và đối chiếu với notebook tại [OCR_KAGGLE.md](docs/OCR_KAGGLE.md). File `config/pipelines.example.json` chỉ là mẫu adapter OCR một ảnh để mở rộng sau này.
+Checkpoint OCR `models/single_model_best_svtrv2_base_regional_pool_warmup_v1.pt` được quản lý bằng Git LFS; sau khi clone, cài Git LFS rồi chạy `git lfs install` và `git lfs pull`. Bộ mẫu `data/test_tracks/` cũng được đưa vào Git. Detector `models/license-plate-finetune-v1l.pt` vẫn cần chuẩn bị riêng. Cả hai checkpoint đều được kiểm checksum. Cách chuẩn bị checkpoint, kiến trúc và decoder tại [OCR_KAGGLE.md](docs/OCR_KAGGLE.md). Adapter SE-ResNet34-C cũ vẫn có trong source để phục vụ các snapshot job lịch sử; pipeline mới dùng class `SVTRRecognizer`. File `config/pipelines.example.json` chỉ là mẫu adapter OCR một ảnh để mở rộng sau này.
+
+Chạy OCR trên bộ mẫu 5 ảnh có nhãn: `python -m scripts.evaluate_test_tracks --output data/test_tracks_report.json`. Cấu trúc class và cách chạy test tại [app/recognition/README.md](app/recognition/README.md).
 
 Chi tiết hợp đồng model, phiên bản và crop: [MODEL_INTEGRATION.md](docs/MODEL_INTEGRATION.md).
 
@@ -100,7 +102,7 @@ Vì mỗi track là một job, review, xem crop, xuất CSV và tra cứu biển
 
 1. `POST /api/v2/stream-sources` với body `{ "name": "...", "url": "https://www.youtube.com/watch?v=...", "exclude_zones": [[x1, y1, x2, y2]] }`.
    Vùng loại trừ là hình chữ nhật chuẩn hóa 0..1. Detection có tâm nằm trong vùng bị bỏ qua, dùng cho biển tên đường hay bảng quảng cáo cố định mà detector nhầm là biển số.
-2. `POST /api/v2/stream-sources/{id}/sessions` với body `{ "pipeline_id": "pbl6-resnet34c-joint5-v1" }` trả `202` và phiên `queued`. Mỗi camera chỉ có một phiên hoạt động. Tùy chọn:
+2. `POST /api/v2/stream-sources/{id}/sessions` với body `{ "pipeline_id": "pbl6-svtrv2-regional-joint5-v1" }` trả `202` và phiên `queued`. Mỗi camera chỉ có một phiên hoạt động. Tùy chọn:
    - `min_confidence` (mặc định 0.96): từ ngưỡng này track được đánh dấu `readable`. Ngưỡng được hiệu chỉnh trên tập ICPR có nhãn để precision đạt 95%, xem [EVALUATION.md](docs/EVALUATION.md#kết-quả-hiệu-chỉnh-offline-trên-icpr-26102026);
    - `max_track_seconds` (mặc định 30): chốt track của xe đỗ hoặc xe chờ đèn.
 3. Theo dõi real-time qua `GET /api/v2/live-events/stream` (SSE: trạng thái, stats, từng biển số vừa đọc, cảnh báo watchlist; xem [API.md](docs/API.md#sự-kiện-real-time-sse)), hoặc poll `GET /api/v2/live-sessions/{id}`:
@@ -173,7 +175,7 @@ Kết quả đo xem [TESTING.md](TESTING.md#nghiệm-thu-live-qua-api).
 
 ```powershell
 npm run build
-node dist/src/cli.js live-payload --pipeline pbl6-resnet34c-joint5-v1 --url "https://www.youtube.com/watch?v=VIDEO_ID" --out live.json
+node dist/src/cli.js live-payload --pipeline pbl6-svtrv2-regional-joint5-v1 --url "https://www.youtube.com/watch?v=VIDEO_ID" --out live.json
 .\.venv\Scripts\python.exe -m app.live --payload live.json --out data/live/run1 --ignore-stdin
 ```
 
@@ -212,4 +214,3 @@ npm run format:check
 Test Node dùng PostgreSQL thật trong cluster/database tạm, không sửa database đang sử dụng. Nếu máy không có binaries PostgreSQL, đặt `PG_BIN` hoặc `TEST_DATABASE_URL` trỏ server cho phép tạo database test. Python tests kiểm tra model OCR/decoder, tracking 5 frame và evaluator; không thay cho kiểm thử API NestJS.
 
 Đánh giá accuracy/CER: [EVALUATION.md](docs/EVALUATION.md). Chạy inference thành công chưa chứng minh độ chính xác trên dữ liệu ứng dụng; cần nhãn chuẩn độc lập. Test với runner fixture chỉ chứng minh luồng nghiệp vụ/transaction.
-

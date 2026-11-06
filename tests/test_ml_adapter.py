@@ -8,8 +8,8 @@ import cv2
 import numpy as np
 import pytest
 
-from app.recognition.runner import _video_detections
-from app.recognition.video_tracking import check_frame_count, video_config
+from app.recognition.runner import AppearanceBuilder
+from app.recognition.video_tracking import TrackingConfig
 
 SAMPLING = {"low_fps": 10., "med_fps": 10., "high_fps": 10., "threshold_low": 2., "threshold_high": 6.}
 TRACKING = {"imgsz": 320, "batch": 4, "track_buffer_seconds": 1.5, "crop_padding": .15, "crop_confidence": .25}
@@ -33,12 +33,12 @@ def test_real_tracking_exports_five_ordered_pts_crops_without_camera_defaults(tm
     writer.release()
     snapshot = {"device": "cpu", "sampling": SAMPLING, "tracking": TRACKING, "empty_scene_gate": GATE}
     payload = {"input_path": str(video), "pipeline_snapshot": snapshot}
-    cfg = video_config(video, snapshot)
+    cfg = TrackingConfig.video_config(video, snapshot)
     assert (cfg["width"], cfg["height"], cfg["declared_frames"]) == (320, 180, 30)
     assert cfg["device"] == "cpu" and cfg["botsort"]["track_buffer"] == 15
     folder = tmp_path / "recognition"
     folder.mkdir()
-    appearances, statistics = _video_detections(payload, BoxFixture(), folder, tmp_path)
+    appearances, statistics = AppearanceBuilder.video_detections(payload, BoxFixture(), folder, tmp_path)
     assert statistics["decoded_frames"] == 30
     assert statistics["accepted_tracks"] == 1
     assert statistics["total_detections"] == 5
@@ -69,7 +69,7 @@ def test_track_with_only_four_valid_frames_is_reported_and_not_duplicated(tmp_pa
     folder = tmp_path / "recognition"
     folder.mkdir()
     reports = []
-    appearances, stats = _video_detections(payload, BoxFixture(), folder, tmp_path, progress=reports.append)
+    appearances, stats = AppearanceBuilder.video_detections(payload, BoxFixture(), folder, tmp_path, progress=reports.append)
     assert appearances == []
     assert stats["rejected_tracks"] == {"fewer_than_five_valid_frames": 1}
     assert stats["rejected_track_count"] == 1
@@ -78,13 +78,13 @@ def test_track_with_only_four_valid_frames_is_reported_and_not_duplicated(tmp_pa
 
 
 def test_track_session_counts_detector_work_and_queues_rejected_tracks(tmp_path):
-    from app.recognition.video_tracking import TrackSession, video_config
+    from app.recognition.video_tracking import TrackSession, TrackingConfig
     video = tmp_path / "short.avi"
     writer = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*"MJPG"), 10., (320, 180))
     for _ in range(4):
         writer.write(np.full((180, 320, 3), 180, np.uint8))
     writer.release()
-    cfg = video_config(video, {"device": "cpu", "sampling": SAMPLING, "tracking": TRACKING,
+    cfg = TrackingConfig.video_config(video, {"device": "cpu", "sampling": SAMPLING, "tracking": TRACKING,
                                "empty_scene_gate": GATE})
     with TrackSession(BoxFixture(), cfg) as session:
         for index in range(4):
@@ -101,7 +101,7 @@ def test_prepare_runs_real_video_tracking_without_loading_ocr(tmp_path, monkeypa
     """Synthetic detector isolates the adapter contract; this is not accuracy testing."""
     import hashlib
     import ultralytics
-    from app.recognition.runner import execute
+    from app.recognition.runner import RecognitionRunner
 
     video = tmp_path / "prepare.avi"
     writer = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*"MJPG"), 10., (320, 180))
@@ -120,7 +120,7 @@ def test_prepare_runs_real_video_tracking_without_loading_ocr(tmp_path, monkeypa
         "code_files": [],
         "sampling": SAMPLING, "tracking": TRACKING, "empty_scene_gate": GATE,
     }
-    result = execute({"job_kind": "detect_only", "input_mode": "scene", "media_type": "video",
+    result = RecognitionRunner.execute({"job_kind": "detect_only", "input_mode": "scene", "media_type": "video",
                       "input_path": str(video), "pipeline_snapshot": snapshot, "output_dir": str(folder), "data_dir": str(tmp_path)})
     assert result["statistics"]["accepted_tracks"] == 1
     appearance = result["appearances"][0]
@@ -139,7 +139,7 @@ def test_joint_model_runs_once_on_five_real_ordered_crops(tmp_path, monkeypatch,
                 "beam_log_score": -1.0, "beam_confidence_proxy": .85}
     import hashlib
     import ultralytics
-    from app.recognition.runner import execute
+    from app.recognition.runner import RecognitionRunner
 
     video = tmp_path / "joint.avi"
     writer = cv2.VideoWriter(str(video), cv2.VideoWriter_fourcc(*"MJPG"), 10., (320, 180))
@@ -175,7 +175,7 @@ def test_joint_model_runs_once_on_five_real_ordered_crops(tmp_path, monkeypatch,
     folder.mkdir()
     payload = {"job_kind": "recognize", "input_mode": "scene", "media_type": "video", "input_path": str(video),
                "pipeline_snapshot": snapshot, "output_dir": str(folder), "data_dir": str(tmp_path)}
-    result = execute(payload)
+    result = RecognitionRunner.execute(payload)
     assert len(calls) == 1
     appearance = result["appearances"][0]
     assert appearance["recognition_method"] == "joint_multiframe"
@@ -196,47 +196,47 @@ def test_joint_model_runs_once_on_five_real_ordered_crops(tmp_path, monkeypatch,
         "n_tracks": 1, "confidence": .85, "first_seen": appearance["detections"][0]["timestamp_seconds"],
         "last_seen": appearance["detections"][-1]["timestamp_seconds"]}] if raw_text else [])
     with pytest.raises(ValueError, match="scene video only"):
-        execute({**payload, "media_type": "image"})
+        RecognitionRunner.execute({**payload, "media_type": "image"})
     assert len(calls) == 1
 
 
 def test_joint_predict_rejects_duplicated_input_and_invalid_fusion_weights(tmp_path):
     from PIL import Image
-    from app.recognition.runner import _predict_joint
+    from app.recognition.runner import PredictionRunner
     paths = []
     for index in range(5):
         path = tmp_path / f"crop-{index}.png"
         Image.new("RGB", (10, 5), (index, index, index)).save(path)
         paths.append(path)
     with pytest.raises(ValueError, match="distinct crop"):
-        _predict_joint(lambda _: {"raw_text": "A"}, [paths[0]] * 5, tmp_path)
+        PredictionRunner.predict_joint(lambda _: {"raw_text": "A"}, [paths[0]] * 5, tmp_path)
     with pytest.raises(ValueError, match="normalized probabilities"):
-        _predict_joint(lambda _: {"raw_text": "A", "frame_weights": [.5] * 5}, paths, tmp_path)
+        PredictionRunner.predict_joint(lambda _: {"raw_text": "A", "frame_weights": [.5] * 5}, paths, tmp_path)
 
 
 def test_merge_tracks_joins_broken_ids_and_votes_per_character():
-    from app.recognition.fusion import merge_tracks
+    from app.recognition.fusion import PlateFusion
     tracks = [dict(track_id="1", plate_text="ABC1234", confidence=.9, first_seen=0., last_seen=1.),
               dict(track_id="2", plate_text="ABC1284", confidence=.5, first_seen=2., last_seen=3.),
               dict(track_id="3", plate_text="ABC1234", confidence=.7, first_seen=3.5, last_seen=4.),
               dict(track_id="4", plate_text="XYZ9876", confidence=.8, first_seen=1., last_seen=2.),
               dict(track_id="5", plate_text="ABC1234", confidence=.6, first_seen=20., last_seen=21.),
               dict(track_id="6", plate_text="AB12", confidence=.99, first_seen=0., last_seen=1.)]
-    groups = merge_tracks(tracks)
+    groups = PlateFusion.merge_tracks(tracks)
     assert [g["track_ids"] for g in groups] == [["1", "3", "2"], ["4"], ["5"]]
     assert groups[0]["plate_text"] == "ABC1234" and groups[0]["variants"] == ["ABC1234", "ABC1284"]
     assert groups[0]["first_seen"] == 0. and groups[0]["last_seen"] == 4.
 
 
 def test_quality_selection_prefers_sharp_large_crops_and_keeps_time_order():
-    from app.recognition.video_tracking import select_five
+    from app.recognition.video_tracking import CropSelector
     rows = [dict(frame_index=i, timestamp_seconds=i / 10, confidence=.9, sharpness=1. if i < 10 else 500.,
                  box_height=10. if i < 10 else 30., edge_ok=1) for i in range(1, 21)]
-    chosen, reason = select_five(rows, {"crop_confidence": .25})
+    chosen, reason = CropSelector.select_five(rows, {"crop_confidence": .25})
     frames = [r["frame_index"] for r in chosen]
     assert reason is None and frames == sorted(frames) and len(set(frames)) == 5
     assert min(frames) >= 10  # the blurry/small first half is outside the quality pool
-    assert select_five(rows[:4], {"crop_confidence": .25}) == (None, "fewer_than_five_valid_frames")
+    assert CropSelector.select_five(rows[:4], {"crop_confidence": .25}) == (None, "fewer_than_five_valid_frames")
 
 
 def test_empty_scene_gate_skips_quiet_frames_only_after_confirmations():
@@ -268,14 +268,14 @@ def _plate_video(path, frames, fps=10.):
 
 def test_streamed_session_matches_file_tracking(tmp_path):
     """A live source pushing decoded frames gets exactly the file pipeline's result."""
-    from app.recognition.video_tracking import TrackSession, read_frames, track_video
+    from app.recognition.video_tracking import TrackSession, VideoFrameReader, VideoTracker
     video = tmp_path / "input.avi"
     _plate_video(video, 30)
-    cfg = video_config(video, {"device": "cpu", "sampling": SAMPLING, "tracking": TRACKING, "empty_scene_gate": GATE})
-    _, file_frames, file_candidates, _ = track_video(video, BoxFixture(), cfg, tmp_path)
+    cfg = TrackingConfig.video_config(video, {"device": "cpu", "sampling": SAMPLING, "tracking": TRACKING, "empty_scene_gate": GATE})
+    _, file_frames, file_candidates, _ = VideoTracker.track_video(video, BoxFixture(), cfg, tmp_path)
     streamed = []
     with TrackSession(BoxFixture(), cfg) as session:
-        for index, timestamp, image, _ in read_frames(video):
+        for index, timestamp, image, _ in VideoFrameReader.read_frames(video):
             streamed += session.push(index, timestamp, image)  # gray computed by the session
         streamed += session.close()
     assert streamed == file_candidates and len(streamed) == 1
@@ -284,14 +284,14 @@ def test_streamed_session_matches_file_tracking(tmp_path):
 
 
 def test_max_track_seconds_finishes_a_parked_track_once(tmp_path):
-    from app.recognition.video_tracking import TrackSession, read_frames
+    from app.recognition.video_tracking import TrackSession, VideoFrameReader
     video = tmp_path / "parked.avi"
     _plate_video(video, 40)  # the same plate stays in view for 4 s
-    cfg = {**video_config(video, {"device": "cpu", "sampling": SAMPLING, "tracking": {**TRACKING, "batch": 1},
+    cfg = {**TrackingConfig.video_config(video, {"device": "cpu", "sampling": SAMPLING, "tracking": {**TRACKING, "batch": 1},
                                   "empty_scene_gate": GATE}), "max_track_seconds": 1.0}
     emitted_at = []
     with TrackSession(BoxFixture(), cfg) as session:
-        for index, timestamp, image, gray in read_frames(video):
+        for index, timestamp, image, gray in VideoFrameReader.read_frames(video):
             emitted_at += [(timestamp, c) for c in session.push(index, timestamp, image, gray)]
         assert session.close() == []  # the closed track is not finished a second time
     assert len(emitted_at) == 1
@@ -304,39 +304,38 @@ def test_max_track_seconds_finishes_a_parked_track_once(tmp_path):
 
 
 def test_retained_images_export_the_same_evidence_as_a_second_decode(tmp_path):
-    from app.recognition.video_tracking import (TrackSession, export_crops, export_retained, read_frames,
-                                                track_video)
+    from app.recognition.video_tracking import TrackSession, EvidenceWriter, VideoFrameReader, VideoTracker
     video = tmp_path / "input.avi"
     _plate_video(video, 30)
-    cfg = video_config(video, {"device": "cpu", "sampling": SAMPLING, "tracking": TRACKING, "empty_scene_gate": GATE})
+    cfg = TrackingConfig.video_config(video, {"device": "cpu", "sampling": SAMPLING, "tracking": TRACKING, "empty_scene_gate": GATE})
     file_out, live_out = tmp_path / "file", tmp_path / "live"
     file_out.mkdir()
     live_out.mkdir()
-    pts, frames, candidates, _ = track_video(video, BoxFixture(), cfg, file_out)
-    expected = export_crops(video, cfg, file_out, pts, frames, candidates)
+    pts, frames, candidates, _ = VideoTracker.track_video(video, BoxFixture(), cfg, file_out)
+    expected = EvidenceWriter.export_crops(video, cfg, file_out, pts, frames, candidates)
     retained = []
     with TrackSession(BoxFixture(), cfg, retain_images=True) as session:
-        for index, timestamp, image, gray in read_frames(video):
+        for index, timestamp, image, gray in VideoFrameReader.read_frames(video):
             retained += session.push(index, timestamp, image, gray)
             assert session.retained_frames <= index
         retained += session.close()
     assert session.frames == [] and session.retained_frames == 0
     assert [sorted(c["jpeg"]) for c in retained] == [[r["frame_index"] for r in c["rows"]] for c in retained]
-    assert export_retained(retained, cfg, live_out) == expected
+    assert EvidenceWriter.export_retained(retained, cfg, live_out) == expected
     for row in expected:
         for key in ("crop_path", "sampled_frame_path"):
             assert (live_out / row[key]).read_bytes() == (file_out / row[key]).read_bytes()
 
 
 def test_retained_images_are_released_once_a_parked_track_is_finished(tmp_path):
-    from app.recognition.video_tracking import TrackSession, read_frames
+    from app.recognition.video_tracking import TrackSession, VideoFrameReader
     video = tmp_path / "parked.avi"
     _plate_video(video, 40)
-    cfg = {**video_config(video, {"device": "cpu", "sampling": SAMPLING, "tracking": {**TRACKING, "batch": 1},
+    cfg = {**TrackingConfig.video_config(video, {"device": "cpu", "sampling": SAMPLING, "tracking": {**TRACKING, "batch": 1},
                                   "empty_scene_gate": GATE}), "max_track_seconds": 1.0}
     after_finish = []
     with TrackSession(BoxFixture(), cfg, retain_images=True) as session:
-        for index, timestamp, image, gray in read_frames(video):
+        for index, timestamp, image, gray in VideoFrameReader.read_frames(video):
             emitted = session.push(index, timestamp, image, gray)
             if emitted or after_finish:
                 after_finish.append(session.retained_frames)
@@ -348,29 +347,29 @@ def test_retained_images_are_released_once_a_parked_track_is_finished(tmp_path):
 
 def test_read_frames_stops_decoder_when_consumer_leaves_early(tmp_path):
     import threading
-    from app.recognition.video_tracking import read_frames
+    from app.recognition.video_tracking import VideoFrameReader
     video = tmp_path / "long.avi"
     _plate_video(video, 60)
-    frames = read_frames(video, prefetch=2)
+    frames = VideoFrameReader.read_frames(video, prefetch=2)
     first = next(frames)
     assert first[0] == 1 and first[1] == 0 and first[3].shape == (180, 320)
     frames.close()
     assert not any(t.name == "video-decode" for t in threading.enumerate())
     with pytest.raises(ValueError, match="Cannot open video"):
-        next(read_frames(tmp_path / "missing.avi"))
+        next(VideoFrameReader.read_frames(tmp_path / "missing.avi"))
 
 
 def test_frame_count_tolerates_only_a_short_missing_tail():
-    check_frame_count(49584, 49584, 27.5)
-    check_frame_count(49567, 49584, 27.5)  # stream-copied cut: 17 trailing frames never decode
-    check_frame_count(30, 0, 10.)  # container without a frame count
+    TrackingConfig.check_frame_count(49584, 49584, 27.5)
+    TrackingConfig.check_frame_count(49567, 49584, 27.5)  # stream-copied cut: 17 trailing frames never decode
+    TrackingConfig.check_frame_count(30, 0, 10.)  # container without a frame count
     for decoded in (49585, 49000):  # surplus, or a gap beyond max(1%, 2 s)
         with pytest.raises(RuntimeError, match="frame count"):
-            check_frame_count(decoded, 49584, 27.5)
+            TrackingConfig.check_frame_count(decoded, 49584, 27.5)
 
 
 def test_four_crop_tracks_are_kept_when_the_pipeline_allows_them(tmp_path):
-    from app.recognition.runner import build_appearance
+    from app.recognition.runner import AppearanceBuilder
 
     video = tmp_path / "short.avi"
     _plate_video(video, 4)
@@ -378,11 +377,11 @@ def test_four_crop_tracks_are_kept_when_the_pipeline_allows_them(tmp_path):
                "tracking": {**TRACKING, "min_frames": 4}, "empty_scene_gate": GATE}}
     folder = tmp_path / "recognition"
     folder.mkdir()
-    appearances, stats = _video_detections(payload, BoxFixture(), folder, tmp_path)
+    appearances, stats = AppearanceBuilder.video_detections(payload, BoxFixture(), folder, tmp_path)
     assert stats["rejected_tracks"] == {} and stats["total_detections"] == 4
     detections = appearances[0]["detections"]
     assert [d["selected_order"] for d in detections] == [1, 2, 3, 4]
     assert len({d["crop_storage_key"] for d in detections}) == 4
     with pytest.raises(ValueError, match="invalid selection"):
-        build_appearance({"track_id": "1", "first_frame": 1, "last_frame": 3}, [
+        AppearanceBuilder.build_appearance({"track_id": "1", "first_frame": 1, "last_frame": 3}, [
             {"selected_order": i, "frame_index": i} for i in (1, 2, 3)], folder, tmp_path, 0, 1, "video_pts")

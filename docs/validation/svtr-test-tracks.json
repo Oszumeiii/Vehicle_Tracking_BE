@@ -1,0 +1,67 @@
+{
+  "pipeline_id": "pbl6-svtrv2-regional-joint5-v1",
+  "factory": "svtr_adapter:SVTRRecognizer",
+  "checkpoint": "single_model_best_svtrv2_base_regional_pool_warmup_v1.pt",
+  "checkpoint_sha256": "fe1e58e5fb5938b83cc4ddac1e5bad62c2bbcbd2dd4bb925043913601db5e8d1",
+  "device": "cpu",
+  "runtime": {
+    "python": "3.13.4",
+    "opencv": "5.0.0",
+    "torch": "2.9.1",
+    "numpy": "2.3.2",
+    "Pillow": "10.4.0"
+  },
+  "tracks": 1,
+  "correct": 1,
+  "exact_accuracy": 1.0,
+  "character_error_rate": 0.0,
+  "results": [
+    {
+      "track": ".",
+      "expected": "BCY4440",
+      "prediction": {
+        "variant": "joint",
+        "raw_text": "BCY4440",
+        "normalized_text": "BCY4440",
+        "ocr_score": null,
+        "character_scores": null,
+        "input_storage_keys": [
+          "lr-001.jpg",
+          "lr-002.jpg",
+          "lr-003.jpg",
+          "lr-004.jpg",
+          "lr-005.jpg"
+        ],
+        "frame_weights": [
+          0.1991596668958664,
+          0.14916905760765076,
+          0.2011580765247345,
+          0.2590702772140503,
+          0.19144295156002045
+        ],
+        "decoding": {
+          "plate_text": "BCY4440",
+          "greedy_text": "BCY4440",
+          "format_valid": true,
+          "greedy_symbol_confidence": 0.9285618241393125,
+          "beam_log_score": -0.5234726122426993,
+          "beam_confidence_proxy": 0.9279459404214475,
+          "decoder": "beam_filter",
+          "beam_width": 8,
+          "use_tta": false
+        },
+        "latency_ms": 186.05391700020846
+      },
+      "exact_match": true,
+      "character_errors": 0,
+      "evidence_sha256": {
+        "annotations.json": "4e0700b646085243a6e1282a5af5918cd2cda18207dbbad868427c71b1618f67",
+        "lr-001.jpg": "544f09da6350fff86e8cee80a7c386d6ba38123beb3e0a2c6236382407418f58",
+        "lr-002.jpg": "75744ba2e0220042c5b40b95f5a04b43dd8c1f6244cca0a44207e0123804c88f",
+        "lr-003.jpg": "5b5bdf0b77b646ec2273b3605bd1e0382e8c386cb3458efc305c3d82283baae4",
+        "lr-004.jpg": "6170e82b3a338e092d12e20fab381f0e5cc2576de97cbca1efaea7d4d4e995f3",
+        "lr-005.jpg": "64e0a47bd00ce2f085656ee86b88eb37825b30f79ff67279b1b4ce59f9035431"
+      }
+    }
+  ]
+}

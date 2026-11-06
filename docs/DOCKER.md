@@ -17,7 +17,7 @@ Cách này chạy cả hệ thống trong container (PostgreSQL, API, worker có
 
 - **Model** trong `Vehicle_Tracking_BE/models/` (không có trong git, xem README):
   - `license-plate-finetune-v1l.pt`
-  - `icpr_resnet34c_single_model_best.pt`
+  - `single_model_best_svtrv2_base_regional_pool_warmup_v1.pt`
 
   Checksum được kiểm tra khi tạo pipeline, nên file sai sẽ bị từ chối.
 - **File `.env`** tạo từ `.env.example`, ít nhất có `POSTGRES_PASSWORD`, `POSTGRES_PORT` và các biến `PLATE_*`. Compose tự ghi đè `DATABASE_URL`, đường dẫn Python và thư mục dữ liệu cho container.

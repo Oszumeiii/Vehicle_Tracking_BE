@@ -295,7 +295,7 @@ class Host:
 
     def run_job(self, job, message, stop, emit):
         """One upload job on the shared models; results go to files exactly as the job subprocess writes them."""
-        from app.recognition.runner import error_result, execute, write_json
+        from app.recognition.runner import ResultWriter, RecognitionRunner
         code, folder = 1, None
         try:
             payload_file = absolute(message["payload"])
@@ -306,14 +306,14 @@ class Host:
             if absolute(payload["output_dir"]) != folder:
                 raise ValueError("output_dir must be the payload's folder")
             models = self.models.get(payload["pipeline_snapshot"])
-            result = execute(payload, models=models, stop=stop, throttle=RealTime(lambda: bool(self.sessions)))
-            write_json(folder / "recognition-result.json", {"ok": True, **result})
+            result = RecognitionRunner.execute(payload, models=models, stop=stop, throttle=RealTime(lambda: bool(self.sessions)))
+            ResultWriter.write_json(folder / "recognition-result.json", {"ok": True, **result})
             code = 0
         except Exception as exc:  # noqa: BLE001 - reported through the job's result file
             traceback.print_exc()
             if folder is not None:
                 try:
-                    write_json(folder / "recognition-result.json", error_result(exc))
+                    ResultWriter.write_json(folder / "recognition-result.json", ResultWriter.error_result(exc))
                 except OSError:
                     traceback.print_exc()
         finally:

@@ -6,7 +6,7 @@
 - Detector theo notebook [PBL6 PIPELINE](https://www.kaggle.com/code/trnvnhun/pbl6-pipeline): **YOLO11l**, checkpoint `morsetechlab/yolov11-license-plate-detection/license-plate-finetune-v1l.pt`, revision `251a30d7daedca065f56e04b0af04052c907c68f` (mô tả notebook ghi YOLO11n nhưng code dùng v1l). Trước YOLO có adaptive sampling 8/12/15 fps và empty-scene gate.
 - BoT-SORT `with_reid=false`; mỗi track đủ điều kiện xuất đúng **5 crop từ 5 frame khác nhau**, chọn trong nhóm crop nét/lớn nhất rồi trải đều theo thời gian, giữ keyframe nguồn. Một keyframe có thể chứa nhiều biển số.
 - Quy tắc 5 LR + 5 HR thuộc dữ liệu train cũ, không áp lên đầu vào inference hiện tại.
-- Nhận diện: model joint-frame SE-ResNet34-C nhận đồng thời 5 crop 192×48, checkpoint `icpr_checkpoints_resnet34c/single_model_best.pt` (dataset `trnvnhun/icpr-2026-model`), decoder `beam_filter`. Chi tiết ở [OCR_KAGGLE.md](OCR_KAGGLE.md).
+- Nhận diện hiện tại: SVTRv2-Base regional nhận đồng thời 5 crop RGB, resize giữ tỉ lệ vào canvas 128×40, checkpoint `single_model_best_svtrv2_base_regional_pool_warmup_v1.pt`, decoder `beam_filter`. Adapter SE-ResNet34-C vẫn tồn tại để chạy snapshot job lịch sử; pipeline mới dùng SVTRv2. Chi tiết ở [OCR_KAGGLE.md](OCR_KAGGLE.md).
 
 ## Ranh giới NestJS / Python
 
@@ -22,7 +22,7 @@ Dùng `PLATE_PIPELINES_CONFIG=config/pipelines.kaggle.json` để bật cả pro
 
 Job prepare dùng `job_kind=detect_only` và `pipeline_snapshot.task=prepare`. Tra cứu nhận cả kết quả prepare đã nhập tay.
 
-Profile `pbl6-resnet34c-joint5-v1` có `task=recognize`, `recognizer.input_mode=five_frame_joint`, chỉ nhận video. Callable nhận danh sách đúng 5 PIL RGB images theo thứ tự thời gian và trả một prediction chung. Worker lưu prediction ở cấp appearance, giữ ordered input provenance, `recognition_method=joint_multiframe` và `agreement_count=null` vì không bỏ phiếu. `frame_weights` là trọng số fusion của model, không phải confidence hoặc độ chính xác. `decoding` lưu decoder, greedy text, `format_valid` và beam score heuristic; job lưu thêm `statistics.frame_gate` và gợi ý gộp track `statistics.vehicle_groups`.
+Profile `pbl6-svtrv2-regional-joint5-v1` có `task=recognize`, `recognizer.input_mode=five_frame_joint`, chỉ nhận video. Callable nhận danh sách đúng 5 PIL RGB crops theo thứ tự thời gian và trả một prediction chung. Worker lưu prediction ở cấp appearance, giữ ordered input provenance, `recognition_method=joint_multiframe` và `agreement_count=null` vì không bỏ phiếu. `frame_weights` là trọng số fusion của model, không phải confidence hoặc độ chính xác. `decoding` lưu decoder, greedy text, `format_valid` và beam score heuristic; job lưu thêm `statistics.frame_gate` và gợi ý gộp track `statistics.vehicle_groups`.
 
 `config/pipelines.example.json` giữ hợp đồng adapter từng crop nếu cần model khác sau này. Profile recognize yêu cầu adapter/checkpoint thật; thiếu thành phần trả `ready=false`/`503`. Không cần recognizer để dùng profile prepare.
 

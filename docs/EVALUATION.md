@@ -168,14 +168,16 @@ Kiểm thử riêng bộ chấm:
 
 `readable` là nhãn tham khảo: nó chỉ đổi trạng thái hiển thị và bộ lọc `confidence_status`. Cảnh báo watchlist và việc gom lượt xuất hiện vẫn chạy với mọi track đọc ra chữ; mỗi cảnh báo kèm `confidence_status` để người xem biết mức tin cậy.
 
-### Kết quả hiệu chỉnh offline trên ICPR (26/10/2026)
+### Kết quả lịch sử — SE-ResNet34-C (26/10/2026)
+
+Các số bên dưới được đo với checkpoint SE-ResNet34-C cũ; **không xác nhận hoặc hiệu chỉnh ngưỡng cho SVTRv2 hiện tại**. Ngưỡng `min_confidence=0.96` đang dùng trong ứng dụng được giữ nguyên cho tương thích, nhưng cần chạy lại hiệu chỉnh bằng payload pipeline SVTRv2 và nhãn độc lập trước khi coi là đáng tin cậy.
 
 **Dữ liệu:** bộ ICPR 2026 LRLPR mà nhóm dùng để train model (Kaggle `trnvnhun/icpr-2026-low-resolution-plate-dataset`). Mỗi track có 5 ảnh độ phân giải thấp và biển số do người gán.
 - **Tập test**, 3000 track: chỉ dùng để chấm, không dùng để train hay chọn checkpoint.
 - **Tập validation**, 1000 track: danh sách `trnvnhun/split-data/val_tracks.txt`, tách khỏi train nhưng được dùng để chọn checkpoint.
 - Crop ICPR rộng 39–56 px, **cùng cỡ với crop live** (Camboriú: trung vị 42,5 px).
 
-**Cách chạy:** `scripts/calibrate_icpr.py` dùng đúng recognizer của pipeline live (`pbl6-resnet34c-joint5-v1`: checkpoint `single_model_best.pt` sha256 `e934a864…`, `beam_filter`, beam 8, không TTA) và đúng confidence của live (`beam_confidence_proxy`).
+**Cách chạy lịch sử:** `scripts/calibrate_icpr.py` dùng snapshot của pipeline live `pbl6-resnet34c-joint5-v1` (checkpoint `single_model_best.pt` sha256 `e934a864…`, `beam_filter`, beam 8, không TTA) và confidence `beam_confidence_proxy`. Để đánh giá model hiện tại, cung cấp payload/snapshot có recognizer `svtr_adapter:SVTRRecognizer`; không dùng `--tta` vì adapter SVTRv2 không hỗ trợ test-time augmentation.
 - **Kiểm tra tái lập:** đọc đúng toàn biển 77,1% trên test, khớp với 77,3% trong notebook của nhóm (`docs/OCR_KAGGLE.md`).
 - Validation đạt 78,0%. Hai tập gần nhau, nên không thấy dấu hiệu rò rỉ.
 
@@ -357,4 +359,3 @@ Tổng cộng 20/280 mẫu có nhãn, đều thuộc nhóm crop lớn nhất và
 - Bộ 280 track ban đầu có khoảng 180 track crop dưới 51 px. Ở cỡ đó không đọc được ký tự nào, nên gán chỉ tốn công mà không thêm thông tin.
 - Cách gán chi tiết: `docs/LABELLING.md`. Mỗi mẫu cần ít nhất 2 người; admin mở **Báo cáo ngưỡng** với tối thiểu 2 nhãn mỗi mẫu.
 - Kết quả chỉ đại diện cho biển đủ lớn để người đọc được. Đó cũng là nhóm biển duy nhất máy có thể xếp `readable` đúng.
-

@@ -16,7 +16,7 @@ import time
 
 import numpy as np
 
-from app.recognition.video_tracking import read_frames, small_gray
+from app.recognition.video_tracking import VideoFrameReader, FrameImage
 
 
 class StreamEnded(Exception):
@@ -407,7 +407,7 @@ class FileFrames:
         start, offset = None, 0.
         while True:
             last, step = None, 0.
-            with closing(read_frames(self.path)) as frames:
+            with closing(VideoFrameReader.read_frames(self.path)) as frames:
                 for _, pts, image, gray in frames:
                     if self._closed.is_set():
                         return
@@ -461,7 +461,7 @@ class LiveReader:
                     break
                 # Connections yield (pts, image) or (pts, image, small gray) when already computed.
                 pts, image = item[0], item[1]
-                gray = item[2] if len(item) > 2 else small_gray(image)
+                gray = item[2] if len(item) > 2 else FrameImage.small_gray(image)
                 if previous is not None and not pts > previous:
                     raise SourceError(f"Timestamps went backwards ({previous:.3f} -> {pts:.3f} s)")
                 previous = pts
