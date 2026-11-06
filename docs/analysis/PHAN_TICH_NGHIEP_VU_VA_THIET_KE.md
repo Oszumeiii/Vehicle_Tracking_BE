@@ -186,6 +186,11 @@ Giới hạn upload có thể cấu hình; giới hạn 25 MP hiện được ki
 | BR31 | Track nằm trong bộ mẫu không bị retention bỏ keyframe hay xóa; xóa bộ mẫu xóa nhãn nhưng giữ track. |
 | BR32 | Các phiên chạy đồng thời trong host dùng chung phải dùng cùng một pipeline. Phiên treo hoặc quá thời gian dừng làm cả host bị kill, vì không hủy riêng được một lời gọi model. |
 | BR33 | Bản ghi đệm giữ `PLATE_LIVE_RECORD_MINUTES` (mặc định 240 phút) rồi tự xóa; clip lâu dài theo vòng đời track (xóa track thì xóa clip, dọn keyframe không đụng clip). Video chỉ phục vụ người có quyền với camera/kết quả. |
+| BR34 | Biển số được chuẩn hóa (bỏ khoảng trắng, dấu chấm, gạch) trước khi so. Tìm gần đúng gộp các chữ/số hay đọc nhầm (O/0, I/1, B/8...) và chuyển đổi Mercosul: chữ A–J ở vị trí thứ 5 tương ứng số 0–9 của biển cũ. |
+| BR35 | Hành trình chỉ dùng kết quả có giờ thật: track camera live, và video upload đã khai thời điểm quay (`recorded_at`). Giờ của biển trong video = `recorded_at` + vị trí trong video. |
+| BR36 | Chặng có tốc độ trên `PLATE_JOURNEY_MAX_KMH` (mặc định 150 km/h), hoặc hai nguồn khác nhau thấy cùng biển cùng lúc, được đánh dấu vô lý. Video upload trùng file (cùng sha256 của cùng chủ) chỉ tính một lần. |
+| BR37 | Camera nguồn `media` dùng chung file của video upload; video đang được camera phát lại không xóa được. Khi ổ dữ liệu còn dưới `PLATE_MIN_FREE_GB` (mặc định 5 GB), camera live tạm dừng (`DISK_LOW`) và upload mới bị từ chối (507). |
+| BR38 | Vùng nhận diện là một hình chữ nhật chuẩn hóa, mỗi chiều ít nhất 10% khung; vùng loại trừ được áp sau khi đổi box về tọa độ toàn khung. Nhãn `readable` vẫn theo ngưỡng 0,96. |
 
 ## 6. Use case
 
@@ -387,6 +392,50 @@ Nguồn chỉnh sửa: [01-use-case.puml](diagrams/01-use-case.puml). Admin kế
 - **Hậu điều kiện:** Không đổi dữ liệu; đoạn cắt theo yêu cầu được giữ tạm 1 giờ.
 - **Truy vết:** FR30; BR33; API49-API52.
 
+### UC22 - Truy vết hành trình của biển số
+
+![Use case truy vết, duyệt nhanh và vận hành](../uml/png/Hinh_2.10_UC_Truy_vet_duyet_nhanh_van_hanh.png)
+
+- **Actor:** User, Admin.
+- **Tiền điều kiện:** Có kết quả từ camera live, hoặc từ video upload đã khai thời điểm quay. Muốn vẽ được đường đi thì camera và video phải có vị trí.
+- **Luồng chính:**
+  1. Nhập biển số và chọn khoảng thời gian, nguồn (camera live, video upload hoặc cả hai) và cách so khớp (chính xác hoặc gần đúng).
+  2. Hệ thống gom mỗi lượt xe đi qua một nguồn thành một điểm, sắp theo giờ.
+  3. Hệ thống tính từng chặng giữa hai điểm liên tiếp: thời gian, khoảng cách đường chim bay, tốc độ.
+  4. Hiển thị dòng thời gian và bản đồ. Bấm một điểm để xem bằng chứng.
+- **Thay thế/lỗi:** Chặng nhanh hơn 150 km/h, hoặc hai camera thấy biển cùng lúc, bị đánh dấu vô lý (biển giả hoặc đọc sai). Kết quả trong video chưa khai thời điểm quay không vào hành trình mà được đếm riêng. Biển rỗng: 422.
+- **Hậu điều kiện:** Không đổi dữ liệu; nhật ký ghi `journey.view`.
+- **Truy vết:** BR34-BR36; `GET /plates/{plate}/journey`.
+
+### UC23 - Khai thời điểm, vị trí quay và phát video upload như livestream
+
+- **Actor:** User (với video của mình), Admin.
+- **Luồng chính:**
+  1. Khai giờ của khung hình đầu tiên (mặc định giờ Brasília) và vị trí quay; có thể lấy vị trí của một camera.
+  2. Bấm "Phát như livestream". Hệ thống tạo (hoặc dùng lại) camera nguồn `media` và bật phiên.
+  3. Worker phát video theo tốc độ thật qua đúng pipeline của luồng live.
+- **Thay thế/lỗi:** Phát một lần (mặc định) thì hết video phiên tự kết thúc; có tùy chọn lặp lại. File video mất: phiên thất bại với `SOURCE_MISSING`. Video đang được camera phát lại thì không xóa được (409).
+- **Hậu điều kiện:** Kết quả là các track live, tách riêng với kết quả xử lý theo lô của cùng video.
+- **Truy vết:** BR37; `PATCH /media/{id}`, `POST /stream-sources` với `source_type: "media"`.
+
+### UC24 - Vẽ vùng nhận diện của camera
+
+- **Actor:** User (chủ camera), Admin.
+- **Luồng chính:** Trên khung hình mới nhất của camera, kéo một hình chữ nhật quanh các làn xe gần camera, rồi lưu. Từ phiên kế tiếp, bộ phát hiện chỉ tìm biển trong vùng đó và phóng to vùng lên.
+- **Thay thế/lỗi:** Vùng nhỏ hơn 10% khung mỗi chiều: 422. Bỏ vùng thì dùng lại cả khung hình.
+- **Truy vết:** BR38; `detect_roi` của camera.
+
+### UC25 - Duyệt nhanh biển tin cậy thấp
+
+- **Actor:** User, Admin.
+- **Luồng chính:**
+  1. Bật "Duyệt nhanh" trong trang Kết quả. Hệ thống lọc các biển camera live chưa duyệt, độ tin cậy dưới ngưỡng, ảnh crop từ 50 px, sắp từ tin cậy cao xuống thấp.
+  2. Biển đầu tiên tự mở với 5 ảnh crop và khung hình.
+  3. Người duyệt chọn Xác nhận, Sửa biển số hoặc Không đọc được; biển kế tiếp tự mở.
+- **Thay thế/lỗi:** Người khác vừa duyệt cùng biển: 409, tải lại biển đó.
+- **Hậu điều kiện:** Thêm bản ghi review, tăng revision; text đã duyệt được dùng cho tra cứu và hành trình.
+- **Truy vết:** UC07; `GET /recognition-results?order=confidence&min_crop_width=50`.
+
 ## 7 Quy trình nghiệp vụ và sơ đồ hoạt động
 
 Các activity diagram mô tả hành động, quyết định và nhánh kết thúc của backend hiện có. Trách nhiệm của từng thành phần được giải thích trong phần mô tả và sequence diagram. Tương tác trên màn hình là yêu cầu cho client; không xác nhận dự án đã có frontend hoàn chỉnh.
@@ -470,6 +519,18 @@ Báo cáo lấy nhãn đồng thuận của mỗi mẫu (mẫu bất đồng b�
 - **Ngưỡng chọn:** 0,96 là ngưỡng nhỏ nhất mà cận dưới khoảng tin cậy trên hai tập gộp vẫn từ 95% trở lên. Đây là mặc định mới; migration 0009 đổi các camera đang lưu 0,85.
 - **Giới hạn:** ICPR là cận trên cho camera thật, nên vẫn cần xác nhận bằng nhãn live.
 - **Phạm vi ảnh hưởng:** ngưỡng chỉ đổi nhãn `readable` và bộ lọc; cảnh báo watchlist và lượt xuất hiện vẫn xét mọi track đọc ra chữ.
+
+### 7.7 Phát video upload như livestream
+
+![Hoạt động phát video upload như livestream](../uml/png/Hinh_3.12_Activity_Phat_video_upload_nhu_livestream.png)
+
+Camera nguồn `media` trỏ thẳng tới file video đã upload, không chép file. Tiến trình nhận diện đọc file theo đúng tốc độ khung hình, nên mọi bước giống hệt luồng YouTube: lọc khung, phát hiện, bám vết, chọn 5 crop, OCR ghép, sự kiện real-time và cảnh báo watchlist. Khi video phát một lần và đã có thời điểm quay, giờ của mỗi track bằng thời điểm quay cộng vị trí trong video (`capture_clock = recorded`). Giờ này được tin như đồng hồ của chính đoạn phim, không so với giờ nhận khung như đồng hồ của luồng phát. Khi phát lặp lại, giờ là giờ lúc phát, giống camera demo.
+
+### 7.8 Duyệt nhanh biển tin cậy thấp
+
+![Hoạt động duyệt nhanh](../uml/png/Hinh_3.13_Activity_Duyet_nhanh_bien_tin_cay_thap.png)
+
+Trên luồng YouTube, phần lớn biển có độ tin cậy dưới ngưỡng 0,96, kể cả biển đọc đúng (ví dụ `SEC7J28` đạt 0,92). Hàng đợi duyệt ưu tiên những biển có ảnh đủ lớn và điểm cao nhất, nên người duyệt xác nhận được nhiều biển đúng trong ít thời gian. Mỗi lần lưu vẫn đi qua kiểm tra revision như UC07.
 
 ## 8. Sơ đồ sequence và ranh giới transaction
 
@@ -555,6 +616,18 @@ Nguồn chỉnh sửa: [20-seq-labeling.puml](diagrams/20-seq-labeling.puml).
 
 Tạo bộ mẫu là một transaction: chèn `evaluation_sets` và các `evaluation_items` đã lấy mẫu. `next` chỉ đọc; thứ tự riêng của mỗi người gán là `md5(labeler_id || item_id)`, nên ổn định giữa các lần mở và khác nhau giữa người gán. Ảnh bằng chứng đi qua route của bộ mẫu (theo thứ tự detection), không lộ id detection hay kết quả. Gán nhãn là một `INSERT … ON CONFLICT (item_id, labeler_id) DO UPDATE`, nên sửa nhãn không cần khóa. Báo cáo gom nhãn theo mẫu bằng `json_agg` rồi tính trong API; không ghi dữ liệu.
 
+### 8.8. Truy vết hành trình - UC22
+
+![Sequence truy vết hành trình](../uml/png/Hinh_4.12_Sequence_Truy_vet_hanh_trinh.png)
+
+API chạy hai truy vấn chỉ đọc: một cho các lượt xe đi qua của camera live (mỗi `sighting` một dòng), một cho kết quả của video upload có `recorded_at` (lần nhận diện mới nhất của mỗi video). Bản upload trùng file (cùng sha256) chỉ tính một lần. Kết quả của cùng video cách nhau không quá 5 phút được gộp thành một điểm. Chặng được tính sau khi sắp theo giờ. Không có transaction ghi, ngoài dòng nhật ký `journey.view`.
+
+### 8.9. Xem camera bằng video - UC15
+
+![Sequence xem camera bằng video](../uml/png/Hinh_4.13_Sequence_Xem_camera_bang_video.png)
+
+Camera IP và YouTube được xem qua HLS dựng từ bản ghi đệm. API trả danh sách 6 đoạn 10 giây mới nhất, rồi remux từng đoạn MP4 sang MPEG-TS khi trình duyệt cần (không mã hóa lại, khoảng 0,15 giây mỗi đoạn, có cache). Camera demo và camera phát video upload trả chính file video; trình phát tua theo vị trí đang nhận diện mà tiến trình báo về mỗi 2 giây.
+
 ## 9 Mô hình trạng thái
 
 ### 9.1 Trạng thái job
@@ -612,6 +685,20 @@ Nguồn chỉnh sửa: [12-erd.puml](diagrams/12-erd.puml). Sơ đồ thể hi�
 - Mỗi job có **đúng một nguồn**: `media_id` (upload) hoặc `live_session_id` (live).
 - Một user có nhiều mục watchlist; biển số là duy nhất trong watchlist của từng user.
 - Một bộ mẫu gán nhãn có nhiều mẫu, mỗi mẫu trỏ tới đúng một job live; một job xuất hiện tối đa một lần trong mỗi bộ mẫu. Mỗi mẫu có tối đa một nhãn của mỗi người gán.
+
+### 10.2a. Bổ sung giai đoạn 16–20
+
+![ERD bổ sung](../uml/png/Hinh_6.4_ERD_bo_sung_giai_doan_16_20.png)
+
+| Migration | Thay đổi |
+|---|---|
+| 0012 | `recognition_jobs.progress`: bộ đếm tiến độ của job upload. |
+| 0013 | Vị trí camera (`latitude`, `longitude`, `location_name`, `heading`); extension `fuzzystrmatch`, hàm `plate_skeleton()` và index cho tìm biển gần đúng. |
+| 0014 | Bảng `audit_log` (nhật ký truy cập; `user_id` không ràng buộc khóa ngoại để giữ lịch sử khi xóa user). |
+| 0015 | Bỏ dấu chấm trong biển đã lưu ở watchlist và review. |
+| 0016 | `media_assets.recorded_at` và vị trí quay; `plate_skeleton()` hiểu chuyển đổi Mercosul (chữ A–J ở vị trí 5 tương ứng số 0–9). |
+| 0017 | Camera nguồn `media`: `stream_sources.media_id` (khóa ngoại RESTRICT) và `replay_loop`. |
+| 0018 | `stream_sources.detect_roi`: vùng nhận diện `[x1, y1, x2, y2]` chuẩn hóa. |
 
 ### 10.3. Quy ước từ điển dữ liệu
 
@@ -1409,7 +1496,8 @@ Các sơ đồ PlantUML và SVG đi kèm là sản phẩm mô hình hóa mã ngu
 4. **Readiness có phạm vi.** Health kiểm DB/schema, pipelines.ready kiểm file/config/checksum; chỉ job thực mới kiểm được toàn runtime/model/thiết bị. Chưa có endpoint xác nhận heartbeat worker đang sống.
 5. **Đánh giá chất lượng còn tách riêng.** Test và smoke không thay ground truth độc lập; chưa xác nhận accuracy Việt Nam, SLA hoặc tải đồng thời production.
 6. **Live trên một GPU.** Host dùng chung chạy được ba camera trên GPU 8 GB (đo được); bốn camera bỏ 4-30% frame vì CPU/GIL. Job video joint chạy cùng camera nhưng bị giữ ở tốc độ thời gian thực; job khác phải chờ khi có camera chạy. Camera YouTube 720p cho confidence thấp hơn hẳn 1080p (2/318 track `readable` ở ngưỡng 0,96). Camera RTSP mới thử với camera giả lập (mediamtx), chưa thử camera thật. Chất lượng phụ thuộc băng thông (1080p cần khoảng 4 Mbit/s). Nhãn `readable` dựa trên ngưỡng 0,96, hiệu chỉnh offline trên ICPR (precision 96,9% trên test). Kết quả này là cận trên; trên camera thật chưa xác nhận bằng nhãn người gán độc lập. Lượt xuất hiện là gợi ý theo chuỗi đọc được.
-7. **Phạm vi nghiệp vụ giới hạn.** Chưa có bãi xe, chủ phương tiện, xử phạt, hủy job, chia sẻ dữ liệu, public signup, email reset, giao diện đầy đủ hoặc SR. Đây không phải các API bị bỏ sót trong 52 endpoint hiện có.
+7. **Chất lượng đọc trên luồng YouTube Brazil.** Crop biển trung vị khoảng 46-51 px và bị nén, nên phần lớn biển rơi vào nhóm tin cậy thấp. Vùng nhận diện (ROI) giảm số track bị loại từ 16 xuống 6 trên cùng 5 phút footage, nhưng số biển đạt 0,96 gần như không đổi. Cần nhãn người trên camera Brazil để tinh chỉnh OCR và hiệu chỉnh ngưỡng riêng từng camera. Từ ngày 06/11/2026, nhóm dùng mô hình OCR SVTRv2-Base (pipeline `pbl6-svtrv2-regional-joint5-v1`).
+8. **Phạm vi nghiệp vụ giới hạn.** Chưa có bãi xe, chủ phương tiện, xử phạt, hủy job, chia sẻ dữ liệu, public signup, email reset, giao diện đầy đủ hoặc SR. Đây không phải các API bị bỏ sót trong 52 endpoint hiện có.
 
 ### 14.3. Thứ tự mở rộng đề xuất
 

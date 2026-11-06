@@ -359,3 +359,23 @@ Tổng cộng 20/280 mẫu có nhãn, đều thuộc nhóm crop lớn nhất và
 - Bộ 280 track ban đầu có khoảng 180 track crop dưới 51 px. Ở cỡ đó không đọc được ký tự nào, nên gán chỉ tốn công mà không thêm thông tin.
 - Cách gán chi tiết: `docs/LABELLING.md`. Mỗi mẫu cần ít nhất 2 người; admin mở **Báo cáo ngưỡng** với tối thiểu 2 nhãn mỗi mẫu.
 - Kết quả chỉ đại diện cho biển đủ lớn để người đọc được. Đó cũng là nhóm biển duy nhất máy có thể xếp `readable` đúng.
+
+## Vùng nhận diện (ROI) trên camera Canada Orla (06/11/2026)
+
+- **Câu hỏi:** chỉ cho bộ phát hiện xem vùng làn xe gần camera (phóng to vùng đó lên) có giúp đọc biển tốt hơn không.
+- **Cách đo:** ghép 5 phút bản ghi của camera YouTube "Canada Orla" (Av. Atlântica, 15:14 giờ Brasília ngày 03/11/2026), upload rồi phát như livestream hai lần trên đúng footage đó: không ROI và ROI `[0,42; 0,3; 1; 1]`. Pipeline `pbl6-svtrv2-regional-joint5-v1`, ngưỡng 0,96.
+
+| | Không ROI | Có ROI |
+|---|---|---|
+| Track lưu | 77 | 76 |
+| Track bị loại (dưới 5 ảnh dùng được) | 16 | 6 |
+| Độ tin cậy trung vị | 0,40 | 0,45 |
+| Track có độ tin cậy từ 0,8 | 5 | 7 |
+| Track từ 0,9 | 3 | 3 |
+| `readable` (từ 0,96) | 2 | 1 |
+| Crop trung vị | 51 px | 51 px |
+| Detector, ms/khung | 33 | 40 |
+| Khung bị bỏ | 0 | 0 |
+
+- **Kết luận:** ROI giúp **bám vết**: box chuẩn hơn, nhiều track đủ 5 ảnh hơn, độ tin cậy nhích lên. Số biển `readable` không tăng, vì crop OCR vẫn lấy từ pixel gốc của khung, và giới hạn chính là độ nét của nguồn YouTube.
+- **Hướng tiếp:** gán nhãn người cho crop của chính camera này (tab Gán nhãn), rồi tinh chỉnh OCR và chọn ngưỡng riêng cho camera.
