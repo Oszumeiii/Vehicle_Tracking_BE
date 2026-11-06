@@ -143,9 +143,9 @@ def source_factory(source):
 
 def load_recognizer(snapshot):
     """Joint OCR model of a pipeline snapshot, validated exactly like the upload pipeline (runner.execute)."""
-    from app.recognition.registry import validate_snapshot
+    from app.recognition.registry import PipelineRegistry
 
-    validate_snapshot(snapshot)
+    PipelineRegistry.validate_snapshot(snapshot)
     sys.path.insert(0, snapshot["recognizer"]["module_root"])
     module, factory = snapshot["recognizer"]["factory"].split(":")
     recognizer = getattr(importlib.import_module(module), factory)({**snapshot["recognizer"], "device": snapshot["device"]})

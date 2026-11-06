@@ -9,19 +9,8 @@ from PIL import Image
 import pytest
 import torch
 
-from app.recognition.ctc_decoders import (
-    ctc_prefix_beam_search,
-    ctc_prefix_beam_search_constrained,
-    decode_track,
-    is_valid_plate_format,
-)
-from app.recognition.icpr_adapter import (
-    create_recognizer,
-    decode_predictions,
-    load_state,
-    preprocess_frames,
-    validate_config,
-)
+from app.recognition.ctc_decoders import CTCDecoder
+from app.recognition.icpr_adapter import ICPRRecognizer
 from app.recognition.icpr_model import Config, SingleLRLPRModel
 
 
@@ -56,7 +45,7 @@ def test_preprocessing_matches_notebook_rgb_resize_normalization_and_order():
     rng = np.random.default_rng(47)
     images = [Image.fromarray(rng.integers(0, 256, (18 + i, 71 + i, 3), dtype=np.uint8))
               for i in range(5)]
-    actual = preprocess_frames(images)
+    actual = ICPRRecognizer.preprocess_frames(images)
     assert actual.shape == (1, 5, 3, 48, 192)
     assert actual.dtype == torch.float32
     expected = np.stack([
@@ -74,7 +63,7 @@ def test_preprocessing_matches_notebook_rgb_resize_normalization_and_order():
     Image.new("RGB", (16, 8)), [Image.new("L", (16, 8)) for _ in range(5)]])
 def test_preprocessing_rejects_missing_frames_and_wrong_color_mode(images):
     with pytest.raises(ValueError):
-        preprocess_frames(images)
+        ICPRRecognizer.preprocess_frames(images)
 
 
 def _log_probs(indices, peak=10.0):
@@ -87,21 +76,21 @@ def _log_probs(indices, peak=10.0):
 def test_greedy_ctc_preserves_repeats_separated_by_blank_and_zeros():
     # blank,A,A,blank,A,0,0,B,B,blank => AA0B. 0 is alphabet class 1.
     indices = [0, 11, 11, 0, 11, 1, 1, 12, 12, 0]
-    assert decode_predictions(_log_probs(indices).unsqueeze(0)) == ["AA0B"]
-    assert decode_predictions(torch.zeros((2, 48, 37))) == ["", ""]
+    assert ICPRRecognizer.decode_predictions(_log_probs(indices).unsqueeze(0)) == ["AA0B"]
+    assert ICPRRecognizer.decode_predictions(torch.zeros((2, 48, 37))) == ["", ""]
 
 
 @pytest.mark.parametrize("logits", [torch.zeros((1, 37)), torch.zeros((1, 48, 36)),
     torch.full((1, 48, 37), float("nan"))])
 def test_decoder_rejects_wrong_output_or_non_finite_logits(logits):
     with pytest.raises((ValueError, FloatingPointError)):
-        decode_predictions(logits)
+        ICPRRecognizer.decode_predictions(logits)
 
 
 @pytest.mark.parametrize("text, valid", [("ABC1234", True), ("ABC1D23", True),
     ("AB1234", False), ("ABCD234", False), ("abc1234", False), ("", False)])
 def test_brazil_plate_formats(text, valid):
-    assert is_valid_plate_format(text) is valid
+    assert CTCDecoder.is_valid_plate_format(text) is valid
 
 
 def _chars(text):
@@ -117,29 +106,29 @@ def test_beam_filter_prefers_valid_plate_format_over_higher_scoring_invalid_text
     logits[-2:, 0] = 2.0
     logits[-2, _chars("4")[0]] = 1.5
     lp = torch.log_softmax(logits, dim=-1)
-    plain, _, _ = ctc_prefix_beam_search(lp.numpy(), Config.IDX2CHAR, 8, format_constrained=False)
-    filtered, _, ok = ctc_prefix_beam_search(lp.numpy(), Config.IDX2CHAR, 8, format_constrained=True)
+    plain, _, _ = CTCDecoder.ctc_prefix_beam_search(lp.numpy(), Config.IDX2CHAR, 8, format_constrained=False)
+    filtered, _, ok = CTCDecoder.ctc_prefix_beam_search(lp.numpy(), Config.IDX2CHAR, 8, format_constrained=True)
     assert plain == "ABC123"
     assert filtered == "ABC1234" and ok
 
 
 def test_constrained_beam_only_emits_llldadd():
     lp = _log_probs([0] + sum(([c, 0] for c in _chars("ABC1D23")), []))
-    text, score, ok = ctc_prefix_beam_search_constrained(lp.numpy(), Config.IDX2CHAR, beam_width=8)
+    text, score, ok = CTCDecoder.ctc_prefix_beam_search_constrained(lp.numpy(), Config.IDX2CHAR, beam_width=8)
     assert ok and text == "ABC1D23" and math.isfinite(score)
 
 
 def test_decode_track_reports_uncalibrated_scores():
     lp = _log_probs([0] + sum(([c, 0] for c in _chars("ABC1234")), []), peak=3.0)
-    result = decode_track(lp, "beam_filter", 8)
+    result = CTCDecoder.decode_track(lp, "beam_filter", 8)
     assert result["plate_text"] == result["greedy_text"] == "ABC1234"
     assert result["format_valid"] is True
     assert 0 < result["greedy_symbol_confidence"] <= 1
     assert result["beam_confidence_proxy"] == pytest.approx(math.exp(result["beam_log_score"] / 7))
-    greedy = decode_track(lp, "greedy", 8)
+    greedy = CTCDecoder.decode_track(lp, "greedy", 8)
     assert greedy["beam_log_score"] is None and greedy["beam_confidence_proxy"] is None
     with pytest.raises(ValueError):
-        decode_track(lp, "vote", 8)
+        CTCDecoder.decode_track(lp, "vote", 8)
 
 
 def test_architecture_retains_exact_notebook_state_names_and_shapes():
@@ -176,7 +165,7 @@ def test_checkpoint_load_is_safe_strict_and_forward_has_no_invented_confidence(s
         return real_load(*args, **kwargs)
 
     monkeypatch.setattr(torch, "load", observed_load)
-    recognize = create_recognizer({"checkpoint": str(synthetic_checkpoint), "device": "cpu",
+    recognize = ICPRRecognizer({"checkpoint": str(synthetic_checkpoint), "device": "cpu",
                                    "config": {"decoder": "greedy"}})
     result = recognize([Image.new("RGB", (50 + index, 19), (20 * index, 100, 200))
                         for index in range(5)])
@@ -190,8 +179,19 @@ def test_checkpoint_load_is_safe_strict_and_forward_has_no_invented_confidence(s
         recognize(Image.new("RGB", (50, 19)))
 
 
+def test_predict_log_probs_rejects_missing_frame_weights():
+    class ModelWithoutWeights:
+        def __call__(self, _images):
+            return torch.zeros((1, 48, 37)), None
+
+    with pytest.raises(ValueError, match="did not produce frame fusion weights"):
+        ICPRRecognizer.predict_log_probs(
+            ModelWithoutWeights(), torch.zeros((1, 5, 3, 48, 192))
+        )
+
+
 def test_default_decoder_is_notebook_beam_filter(synthetic_checkpoint):
-    recognize = create_recognizer({"checkpoint": str(synthetic_checkpoint), "config": {}})
+    recognize = ICPRRecognizer({"checkpoint": str(synthetic_checkpoint), "config": {}})
     decoding = recognize([Image.new("RGB", (40, 12)) for _ in range(5)])["decoding"]
     assert decoding["decoder"] == "beam_filter" and decoding["beam_width"] == 8
 
@@ -199,40 +199,40 @@ def test_default_decoder_is_notebook_beam_filter(synthetic_checkpoint):
 def test_checkpoint_checksum_mismatch_is_rejected_before_loading(synthetic_checkpoint, monkeypatch):
     monkeypatch.setattr(torch, "load", lambda *a, **k: pytest.fail("Must not load changed checkpoint"))
     with pytest.raises(ValueError, match="checksum"):
-        create_recognizer({"checkpoint": str(synthetic_checkpoint), "sha256": "0" * 64})
+        ICPRRecognizer({"checkpoint": str(synthetic_checkpoint), "sha256": "0" * 64})
 
 
 def test_missing_model_keys_rejected_without_partial_loading(tmp_path):
     checkpoint = tmp_path / "incomplete.pt"
     torch.save({"primary_head.bias": torch.zeros(37)}, checkpoint)
     with pytest.raises(RuntimeError, match="Missing key"):
-        create_recognizer({"checkpoint": str(checkpoint)})
+        ICPRRecognizer({"checkpoint": str(checkpoint)})
 
 
 def test_wrapped_state_dict_and_prefix_collisions(tmp_path):
     wrapped = tmp_path / "wrapped.pt"
     torch.save({"model_state_dict": {"_orig_mod.primary_head.bias": torch.zeros(37)}}, wrapped)
-    assert list(load_state(wrapped)) == ["primary_head.bias"]
+    assert list(ICPRRecognizer.load_state(wrapped)) == ["primary_head.bias"]
     duplicate = tmp_path / "duplicate.pt"
     torch.save({"module.primary_head.bias": torch.zeros(37), "primary_head.bias": torch.zeros(37)}, duplicate)
     with pytest.raises(ValueError, match="Duplicate"):
-        load_state(duplicate)
+        ICPRRecognizer.load_state(duplicate)
     non_finite = tmp_path / "nan.pt"
     torch.save({"primary_head.bias": torch.full((37,), float("nan"))}, non_finite)
     with pytest.raises(ValueError, match="non-finite"):
-        load_state(non_finite)
+        ICPRRecognizer.load_state(non_finite)
 
 
 @pytest.mark.parametrize("config", [{"decoder": "vote"}, {"beam_width": 0}, {"beam_width": True},
     {"use_tta": "yes"}, {"IMG_WIDTH": 256}, {"unknown_preprocessing": "resize"}, None])
 def test_conflicting_or_unknown_config_is_rejected(config):
     with pytest.raises(ValueError):
-        validate_config(config)
+        ICPRRecognizer.validate_config(config)
 
 
 def test_valid_config_fills_notebook_defaults():
-    assert validate_config({}) == {"decoder": "beam_filter", "beam_width": 8, "use_tta": False}
-    assert validate_config({"decoder": "beam_constrained", "beam_width": 4, "use_tta": True})["beam_width"] == 4
+    assert ICPRRecognizer.validate_config({}) == {"decoder": "beam_filter", "beam_width": 8, "use_tta": False}
+    assert ICPRRecognizer.validate_config({"decoder": "beam_constrained", "beam_width": 4, "use_tta": True})["beam_width"] == 4
 
 
 REAL_CHECKPOINT = Path(__file__).resolve().parents[1] / "models" / "icpr_resnet34c_single_model_best.pt"
@@ -244,7 +244,7 @@ def test_trained_checkpoint_reads_labelled_icpr_track():
     """One labelled ICPR track (5 low-resolution crops); a regression check, not an accuracy score."""
     folder = Path(__file__).parent / "fixtures" / "test_track"
     expected = json.loads((folder / "annotations.json").read_text(encoding="utf-8"))["plate_text"]
-    recognize = create_recognizer({"checkpoint": str(REAL_CHECKPOINT), "sha256": REAL_SHA256, "config": {}})
+    recognize = ICPRRecognizer({"checkpoint": str(REAL_CHECKPOINT), "sha256": REAL_SHA256, "config": {}})
     images = [Image.open(folder / f"lr-{index:03d}.jpg").convert("RGB") for index in range(1, 6)]
     result = recognize(images)
     assert result["raw_text"] == expected == "BCY4440"

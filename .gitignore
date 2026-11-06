@@ -3,7 +3,8 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .env
-data/
+data/*
+!data/test_tracks/
 /video/captures_000000_001000.mp4
 *.egg-info/
 node_modules/
@@ -15,3 +16,4 @@ models/*.pt
 models/*.pth
 models/*.onnx
 models/*.ckpt
+!models/single_model_best_svtrv2_base_regional_pool_warmup_v1.pt

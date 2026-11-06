@@ -34,9 +34,9 @@
       }
     },
     {
-      "id": "pbl6-resnet34c-joint5-v1",
-      "name": "PBL6 · YOLO11l + BoT-SORT → OCR SE-ResNet34-C joint 5 frame (beam_filter)",
-      "version": "pbl6-pipeline-1",
+      "id": "pbl6-svtrv2-regional-joint5-v1",
+      "name": "PBL6 · YOLO11l + BoT-SORT → OCR SVTRv2-Base regional joint 5 frame",
+      "version": "pbl6-svtrv2-regional-1",
       "task": "recognize",
       "detector": {
         "model": "yolo11l",
@@ -66,24 +66,23 @@
         "warmup_frames": 60
       },
       "recognizer": {
-        "version": "trnvnhun/icpr-2026-model/icpr_checkpoints_resnet34c/single_model_best.pt",
-        "checkpoint": "../models/icpr_resnet34c_single_model_best.pt",
-        "sha256": "e934a8644f06e28631a291b01c04a95274a546c19013f874c8b1995b30423c9c",
+        "version": "trnvnhun/svtrv2-base-regional-pool-warmup/single_model_best_svtrv2_base_regional_pool_warmup_v1.pt",
+        "checkpoint": "../models/single_model_best_svtrv2_base_regional_pool_warmup_v1.pt",
+        "sha256": "fe1e58e5fb5938b83cc4ddac1e5bad62c2bbcbd2dd4bb925043913601db5e8d1",
         "module_root": "../app/recognition",
-        "factory": "icpr_adapter:create_recognizer",
+        "factory": "svtr_adapter:SVTRRecognizer",
         "input_mode": "five_frame_joint",
-        "preprocessing_version": "pbl6-rgb-cv2-linear-48x192-normalize-0.5",
+        "preprocessing_version": "svtrv2-rgb-aspect-pad-gray-40x128-normalize-0.5",
         "config": {
           "decoder": "beam_filter",
-          "beam_width": 8,
-          "use_tta": false
+          "beam_width": 8
         }
       }
     },
     {
-      "id": "pbl6-resnet34c-joint5-hfps-v1",
-      "name": "Thử nghiệm · PBL6 lấy mẫu 15/20/25 fps → OCR joint 5 frame (chỉ 1 camera)",
-      "version": "pbl6-pipeline-1",
+      "id": "pbl6-svtrv2-regional-joint5-hfps-v1",
+      "name": "Thử nghiệm · SVTRv2 lấy mẫu 15/20/25 fps → OCR joint 5 frame (chỉ 1 camera)",
+      "version": "pbl6-svtrv2-regional-1",
       "task": "recognize",
       "detector": {
         "model": "yolo11l",
@@ -113,17 +112,16 @@
         "warmup_frames": 60
       },
       "recognizer": {
-        "version": "trnvnhun/icpr-2026-model/icpr_checkpoints_resnet34c/single_model_best.pt",
-        "checkpoint": "../models/icpr_resnet34c_single_model_best.pt",
-        "sha256": "e934a8644f06e28631a291b01c04a95274a546c19013f874c8b1995b30423c9c",
+        "version": "trnvnhun/svtrv2-base-regional-pool-warmup/single_model_best_svtrv2_base_regional_pool_warmup_v1.pt",
+        "checkpoint": "../models/single_model_best_svtrv2_base_regional_pool_warmup_v1.pt",
+        "sha256": "fe1e58e5fb5938b83cc4ddac1e5bad62c2bbcbd2dd4bb925043913601db5e8d1",
         "module_root": "../app/recognition",
-        "factory": "icpr_adapter:create_recognizer",
+        "factory": "svtr_adapter:SVTRRecognizer",
         "input_mode": "five_frame_joint",
-        "preprocessing_version": "pbl6-rgb-cv2-linear-48x192-normalize-0.5",
+        "preprocessing_version": "svtrv2-rgb-aspect-pad-gray-40x128-normalize-0.5",
         "config": {
           "decoder": "beam_filter",
-          "beam_width": 8,
-          "use_tta": false
+          "beam_width": 8
         }
       }
     }

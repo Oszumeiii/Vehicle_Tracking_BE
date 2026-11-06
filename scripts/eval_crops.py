@@ -36,7 +36,7 @@ def crops_of(candidate_rows, jpeg, cfg):
     for row in candidate_rows:
         frame = cv2.imdecode(np.frombuffer(jpeg[row["frame_index"]], np.uint8), cv2.IMREAD_COLOR)
         h, w = frame.shape[:2]
-        x1, y1, x2, y2 = vt.crop_bounds(row["box"], w, h, cfg["crop_padding"])
+        x1, y1, x2, y2 = vt.CropSelector.crop_bounds(row["box"], w, h, cfg["crop_padding"])
         images.append(Image.fromarray(cv2.cvtColor(frame[y1:y2, x1:x2], cv2.COLOR_BGR2RGB)))
     return images
 
@@ -52,17 +52,17 @@ class BothSelections(vt.TrackSession):
         rows = self.active[tid]
         picks = {}
         for mode in MODES:
-            chosen, reason = vt.select_five(rows, {**self.cfg, "crop_selection": mode})
+            chosen, reason = vt.CropSelector.select_five(rows, {**self.cfg, "crop_selection": mode})
             picks[mode] = (chosen, reason)
         if picks["current"][0]:
-            hidden = vt.hidden_or_cut(sorted((r for r in rows if r["confidence"] >= self.cfg["crop_confidence"]),
+            hidden = vt.CropSelector.hidden_or_cut(sorted((r for r in rows if r["confidence"] >= self.cfg["crop_confidence"]),
                                              key=lambda r: r["frame_index"]))
             self.compared.append(dict(track_id=tid, observations=len(rows), hidden_observations=len(hidden),
                                       picks={m: [dict(r) for r in c] for m, (c, _) in picks.items()},
                                       jpeg={r["frame_index"]: self._jpeg_bytes[r["frame_index"]]
                                             for m in MODES for r in picks[m][0]}))
         elif self.short:
-            chosen, _ = vt.select_five(rows, {**self.cfg, "crop_selection": "robust", "min_frames": 4})
+            chosen, _ = vt.CropSelector.select_five(rows, {**self.cfg, "crop_selection": "robust", "min_frames": 4})
             if chosen:
                 self.shorts.append(dict(track_id=tid, observations=len(rows), chosen=[dict(r) for r in chosen],
                                         jpeg={r["frame_index"]: self._jpeg_bytes[r["frame_index"]] for r in chosen}))
@@ -71,9 +71,9 @@ class BothSelections(vt.TrackSession):
 
 def read(recognizer, images):
     from app.live.runner import plate_confidence
-    from app.recognition.fusion import normalize_plate
+    from app.recognition.fusion import PlateFusion
     result = recognizer(images)
-    text = normalize_plate(result.get("raw_text") or "") or None
+    text = PlateFusion.normalize_plate(result.get("raw_text") or "") or None
     return text, plate_confidence(result)
 
 
@@ -118,12 +118,12 @@ def main(argv=None):
     args = parser.parse_args(argv)
     snapshot = json.loads(args.payload.read_text(encoding="utf-8-sig"))["pipeline_snapshot"]
     model, recognizer = load_models(snapshot)
-    cfg = {**vt.video_config(args.video, snapshot), "max_track_seconds": 30,
+    cfg = {**vt.TrackingConfig.video_config(args.video, snapshot), "max_track_seconds": 30,
            "exclude_zones": [list(map(float, z.split(","))) for z in args.zones.split(";") if z]}
-    vt.warm_up_detector(model, cfg)
+    vt.PlateDetector.warm_up_detector(model, cfg)
     session = BothSelections(model, cfg, retain_images=True, short=args.short_tracks)
     with session:
-        for index, timestamp, image, gray in vt.read_frames(args.video, args.seconds or 0):
+        for index, timestamp, image, gray in vt.VideoFrameReader.read_frames(args.video, args.seconds or 0):
             session.push(index, timestamp, image, gray)
         session.close()
     rows = []
@@ -134,10 +134,10 @@ def main(argv=None):
             chosen = track["picks"][mode]
             images = crops_of(chosen, track["jpeg"], cfg)
             text, confidence = read(recognizer, images)
-            hidden = vt.hidden_or_cut(chosen)
+            hidden = vt.CropSelector.hidden_or_cut(chosen)
             row[mode] = dict(text=text, confidence=round(float(confidence or 0), 4),
                              status=classify(text, confidence, args.threshold),
-                             widths=[round(vt._width(r)) for r in chosen], frames=[r["frame_index"] for r in chosen],
+                             widths=[round(vt.CropSelector._width(r)) for r in chosen], frames=[r["frame_index"] for r in chosen],
                              hidden_picked=len(hidden))
             row["images"][mode] = images
         rows.append(row)
@@ -163,18 +163,18 @@ def main(argv=None):
     sheet(sorted(changed, key=lambda r: -r["robust"]["confidence"]), args.out / "sheet.jpg")
     if args.short_tracks:
         from app.live.runner import SHORT_TRACK_MARGIN
-        from app.recognition.runner import repeat_sharpest
+        from app.recognition.runner import PredictionRunner
         threshold = round(args.threshold + SHORT_TRACK_MARGIN, 6)
         shorts = []
         for track in session.shorts:
             images = crops_of(track["chosen"], track["jpeg"], cfg)
             sharpness = [cv2.Laplacian(cv2.cvtColor(np.asarray(i), cv2.COLOR_RGB2GRAY), cv2.CV_64F).var()
                          for i in images]
-            text, confidence = read(recognizer, repeat_sharpest(images, sharpness))
+            text, confidence = read(recognizer, PredictionRunner.repeat_sharpest(images, sharpness))
             shorts.append(dict(track_id=track["track_id"], observations=track["observations"], images={"short": images},
                                short=dict(text=text, confidence=round(float(confidence or 0), 4),
                                           status=classify(text, confidence, threshold),
-                                          widths=[round(vt._width(r)) for r in track["chosen"]])))
+                                          widths=[round(vt.CropSelector._width(r)) for r in track["chosen"]])))
         report["short"] = dict(
             tracks=len(shorts), threshold=threshold,
             readable=sum(r["short"]["status"] == "readable" for r in shorts),

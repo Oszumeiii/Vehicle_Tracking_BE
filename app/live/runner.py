@@ -14,9 +14,9 @@ from PIL import Image
 from app.live import DEFAULT_MIN_CONFIDENCE
 from app.live.recorder import ClipMaker, Recorder
 from app.live.source import TIMEOUT, LiveReader, SourceError, StreamEnded
-from app.recognition.fusion import levenshtein
-from app.recognition.runner import _predict_joint, build_appearance, ocr_inputs, write_json
-from app.recognition.video_tracking import TrackSession, export_retained, tracking_config, warm_up_detector
+from app.recognition.fusion import PlateFusion
+from app.recognition.runner import PredictionRunner, AppearanceBuilder, ResultWriter
+from app.recognition.video_tracking import TrackSession, EvidenceWriter, TrackingConfig, PlateDetector
 
 
 def utc(value):
@@ -92,7 +92,7 @@ class DuplicateLinker:
             if not -self.max_gap <= gap <= self.max_gap or earlier["first_seconds"] >= first_seconds:
                 continue
             same_text = (text and earlier["text"] and min(len(text), len(earlier["text"])) >= 5
-                         and levenshtein(text, earlier["text"]) <= self.max_edit)
+                         and PlateFusion.levenshtein(text, earlier["text"]) <= self.max_edit)
             if same_text or box_iou(earlier["last_box"], first_box) >= self.min_iou:
                 match = earlier["root"]
                 break
@@ -149,7 +149,7 @@ class LiveRunner:
         warmed = getattr(self.model, "warmed", self.warmed)
         if key in warmed:
             return
-        warm_up_detector(self.model, cfg)
+        PlateDetector.warm_up_detector(self.model, cfg)
         self.recognizer([Image.new("RGB", (192, 48), (shade, shade, shade)) for shade in range(0, 250, 50)])
         warmed.add(key)
 
@@ -186,7 +186,7 @@ class LiveRunner:
         return status
 
     def _run_epoch(self, epoch, info, connection, stop):
-        cfg = {**tracking_config(info["width"], info["height"], info["fps"], 0, self.tracking_snapshot,
+        cfg = {**TrackingConfig.tracking_config(info["width"], info["height"], info["fps"], 0, self.tracking_snapshot,
                                  info.get("video_id", "live")), "max_track_seconds": self.max_track_seconds,
                "exclude_zones": self.exclude_zones, "detect_roi": self.detect_roi}
         self._warm_up(cfg)
@@ -325,13 +325,13 @@ class LiveRunner:
         key = f"e{epoch:03d}-t{int(candidate['track_id']):06d}"
         folder = self.out / "tracks" / key
         folder.mkdir(parents=True, exist_ok=False)
-        manifest = export_retained([candidate], cfg, folder)
-        appearance = build_appearance(candidate, manifest, folder, self.data_dir, candidate["first_seconds"],
+        manifest = EvidenceWriter.export_retained([candidate], cfg, folder)
+        appearance = AppearanceBuilder.build_appearance(candidate, manifest, folder, self.data_dir, candidate["first_seconds"],
                                       candidate["last_seconds"], "live_pts")
         detections = appearance["detections"]
         started = time.perf_counter()
-        prediction = _predict_joint(self.recognizer,
-                                    ocr_inputs(self.data_dir / d["crop_storage_key"] for d in detections),
+        prediction = PredictionRunner.predict_joint(self.recognizer,
+                                    PredictionRunner.ocr_inputs(self.data_dir / d["crop_storage_key"] for d in detections),
                                     self.data_dir)
         ocr_seconds = time.perf_counter() - started
         for detection in detections:
@@ -351,7 +351,7 @@ class LiveRunner:
                       frames=len(detections), observations=candidate["observations"], captured_from=captured_from,
                       captured_to=captured_to, capture_clock=capture_clock, sampling_scale=self.sampling_scale,
                       appearance=appearance)
-        write_json(folder / "track.json", record)
+        ResultWriter.write_json(folder / "track.json", record)
         self.tracks += 1
         if self.recording:
             self.spans[key] = (candidate["first_seconds"], candidate["last_seconds"])

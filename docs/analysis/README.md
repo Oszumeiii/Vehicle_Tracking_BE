@@ -12,6 +12,8 @@ Nội dung gồm bối cảnh, phạm vi, vai trò, 30 yêu cầu chức năng, 
 
 Pipeline theo notebook [PBL6 PIPELINE](https://www.kaggle.com/code/trnvnhun/pbl6-pipeline): Adaptive Sampling → empty-scene gate → YOLO11l → BoT-SORT → 5 crop/track → OCR SE-ResNet34-C nhận đồng thời 5 crop và trả một prediction theo appearance, decoder `beam_filter`. Tài liệu không áp quy tắc bỏ phiếu 3/5 vào model này. Ảnh đơn dùng prepare và kiểm duyệt thủ công khi chưa có adapter/checkpoint OCR ảnh phù hợp. Kiểm thử và smoke test được phân biệt với đánh giá accuracy trên nhãn chuẩn.
 
+Ghi chú: bộ tài liệu 1.9.1 phía trên là bản phân tích đóng băng trước khi đổi OCR. Pipeline hiện tại dùng SVTRv2-Base regional; xem [hướng dẫn model OCR hiện tại](../OCR_KAGGLE.md), [tích hợp model](../MODEL_INTEGRATION.md) và [vận hành](../OPERATIONS.md) để biết cấu hình đang dùng.
+
 ## Chỉnh sửa nội dung
 
 Sửa các nguồn dưới đây rồi dựng lại; không sửa trực tiếp ba bản tổng hợp vì chúng được sinh tự động.

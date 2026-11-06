@@ -1,76 +1,102 @@
-# Pipeline và OCR từ notebook Kaggle PBL6
+# SVTRv2 OCR model
 
-Nguồn chuẩn: notebook nhóm [PBL6 PIPELINE](https://www.kaggle.com/code/trnvnhun/pbl6-pipeline) (Kaggle T4, Ultralytics 8.4.150). Checkpoint OCR: dataset [`trnvnhun/icpr-2026-model`](https://www.kaggle.com/datasets/trnvnhun/icpr-2026-model), file `icpr_checkpoints_resnet34c/single_model_best.pt` (Apache-2.0). Thay thế model cũ `huantranvan/icpr-2026-lrp-reg` v4 (32×128).
-
-Luồng: **Video → adaptive sampling → empty-scene gate → YOLO11l → BoT-SORT → 5 crop cùng ID (theo chất lượng) → OCR joint 5 frame → beam_filter → gộp track**.
-
-| Bước | Notebook | Backend |
-| --- | --- | --- |
-| Sampling | `AdaptiveSelector`, LOW/MED/HIGH = 8/12/15 fps, ngưỡng 2/6 | `app/recognition/video_tracking.py`, `sampling` trong profile |
-| Empty-scene gate | MOG2, probe 0.25 s, 3 lần xác nhận, foreground 0.003, warm-up 60 frame | `EmptySceneGate`, `empty_scene_gate` trong profile |
-| Detector | `license-plate-finetune-v1l.pt` @ `251a30d7…`, imgsz 1280, conf 0.10, iou 0.7, lọc box (w≥12, h≥5, tỉ lệ 1.1–7) | `detect_plates`, `models/license-plate-finetune-v1l.pt` |
-| Tracker | BoT-SORT, buffer 1.5 s, đồng hồ theo PTS | `SampledTrackerClock` |
-| Chọn 5 crop | `crop_quality` + `score_rows` (nét 0.35, chiều cao 0.30, conf 0.25, không chạm mép 0.10), pool ≥ 8 hoặc nửa tốt nhất, trải đều theo thời gian | `select_five` |
-| Crop | padding 0.15, pixel từ frame JPEG của sampler | `export_crops` (kiểm tra lại pixel crop = vùng keyframe) |
-| OCR | `SingleLRLPRModel`, input `[B,5,3,48,192]`, logits `[B,48,37]` | `icpr_model.py`, `icpr_adapter.py` |
-| Decoder | `beam_filter`, beam 8, TTA tắt, AMP trên CUDA | `ctc_decoders.py`, `recognizer.config` |
-| Gộp track | `merge_tracks` (lệch ≤ 1 ký tự, cách ≤ 3 s, ≥ 5 ký tự) | `statistics.vehicle_groups` |
-
-**Detector:** phần mô tả notebook ghi "YOLO11n" nhưng code tải `license-plate-finetune-v1l.pt`, là YOLO11**l** (scale `l`, ~25M tham số; v1n mới là YOLO11n). Backend theo code đã chạy: profile khai báo `detector.model=yolo11l`. Muốn nhẹ hơn trên CPU, đổi sang checkpoint v1n và `model=yolo11n` (registry chấp nhận cả hai); khi đó kết quả không còn giống notebook.
-
-## Kiến trúc và tiền xử lý OCR
-
-STN affine (FP32) → SE-ResNet34-C đủ 4 stage `[3,4,6,3]`, stride cuối `(2,1)` → `QualityAwareFrameFusion` (trọng số theo frame và theo cột) → `HeightAttentionPool` → Transformer 3 lớp → primary CTC head. 37 lớp: blank `0` và `0-9A-Z`.
-
-- Đọc crop RGB, resize **192×48** bằng OpenCV `INTER_LINEAR`, `(x/255 − 0.5)/0.5`, HWC → CHW, đúng 5 crop theo thời gian.
-- Nhánh super-resolution `sr_decoder.*` chỉ dùng lúc train; adapter bỏ các key này rồi `load_state_dict(strict=True)` cho phần còn lại.
-- Load bằng `torch.load(..., weights_only=True)`; chấp nhận state_dict thuần hoặc bọc trong `state_dict`/`model_state_dict`/`model`, bỏ tiền tố `module.`/`_orig_mod.`.
-- CUDA dùng autocast float16 (notebook `OCR_USE_AMP=True`), CPU dùng float32.
-
-## Decoder và điểm số
-
-`recognizer.config` hỗ trợ `decoder` (`greedy`, `beam_plain`, `beam_filter`, `beam_constrained`; mặc định `beam_filter`), `beam_width` (1–64, mặc định 8), `use_tta` (mặc định `false`). Option khác bị từ chối.
-
-`beam_filter` lấy ứng viên beam tốt nhất khớp định dạng Brazil cũ `LLLDDDD` hoặc Mercosul `LLLDLDD`; nếu không có ứng viên hợp lệ thì trả ứng viên tốt nhất. Mỗi prediction joint lưu `decoding`:
-
-- `plate_text` (= `raw_text`), `greedy_text`, `format_valid`;
-- `greedy_symbol_confidence`: trung bình hình học xác suất các ký tự greedy;
-- `beam_log_score`, `beam_confidence_proxy = exp(beam_log_score / số ký tự)`; notebook dùng ngưỡng 0.80 để lọc hiển thị.
-
-Các điểm này **không phải xác suất đã hiệu chuẩn**; `ocr_score` vẫn `null`. `frame_weights` là trọng số fusion của model (trung bình theo cột), không phải confidence.
-
-Kết quả notebook trên tập test 3000 mẫu (`icpr_results_resnet34c/test_results.json`): greedy exact 76.7%, CER 6.03%; `beam_filter` exact 77.3%, CER 5.90%, format hợp lệ 99.4%. Đây là số trên dataset ICPR, chưa phải độ chính xác trên video của ứng dụng.
+The active video-recognition profile is `pbl6-svtrv2-regional-joint5-v1` in
+[`config/pipelines.kaggle.json`](../config/pipelines.kaggle.json). It passes five
+ordered RGB crops from a video track to SVTRv2-Base regional and returns one
+joint prediction. The old SE-ResNet34-C adapter remains in the source only to
+support older pipeline snapshots; its accuracy and confidence calibration do not
+apply to this model.
 
 ## Checkpoint
 
-| File | SHA-256 | Kích thước |
+The checkpoint is tracked with Git LFS (107,437,431 bytes exceeds
+[GitHub's 100 MiB regular-file limit](https://docs.github.com/en/repositories/working-with-files/managing-large-files/about-large-files-on-github)). After installing Git LFS, run `git lfs install`
+and `git lfs pull` to materialize the weights at:
+
+```text
+models/single_model_best_svtrv2_base_regional_pool_warmup_v1.pt
+```
+
+Verify the exact file before running a recognition profile:
+
+| File | SHA-256 | Size |
 | --- | --- | --- |
-| `models/icpr_resnet34c_single_model_best.pt` | `e934a8644f06e28631a291b01c04a95274a546c19013f874c8b1995b30423c9c` | 126.084.235 byte |
-| `models/license-plate-finetune-v1l.pt` | `f3d25e066e4ff41c64c2bcbf4fd35fa85abaad5a37769b61c804de8f3291ff2c` | 51.189.266 byte |
-
-Checkpoint không commit vào Git; `config/pipelines.kaggle.json` ghim checksum. Tải lại bằng Kaggle CLI và Hugging Face Hub (cần xác thực Kaggle trên máy):
+| `single_model_best_svtrv2_base_regional_pool_warmup_v1.pt` | `fe1e58e5fb5938b83cc4ddac1e5bad62c2bbcbd2dd4bb925043913601db5e8d1` | 107,437,431 bytes |
 
 ```powershell
-kaggle datasets download trnvnhun/icpr-2026-model -f icpr_checkpoints_resnet34c/single_model_best.pt -p data/kaggle-ocr --unzip
-Copy-Item data/kaggle-ocr/single_model_best.pt models/icpr_resnet34c_single_model_best.pt
-.\.venv\Scripts\python.exe -c "from huggingface_hub import hf_hub_download; import shutil; shutil.copyfile(hf_hub_download('morsetechlab/yolov11-license-plate-detection', 'license-plate-finetune-v1l.pt', revision='251a30d7daedca065f56e04b0af04052c907c68f', cache_dir='data/model-cache'), 'models/license-plate-finetune-v1l.pt')"
-Get-FileHash models/icpr_resnet34c_single_model_best.pt, models/license-plate-finetune-v1l.pt -Algorithm SHA256
+Get-FileHash models/single_model_best_svtrv2_base_regional_pool_warmup_v1.pt -Algorithm SHA256
 ```
 
-So hash với bảng trên trước khi chạy. Sai checksum thì `/api/v2/pipelines` trả `ready=false` và tạo job trả `503`.
+The profile pins this checksum. A missing or mismatched checkpoint makes the
+profile report `ready=false`, and job creation returns `503`. Provenance for the
+checkpoint is recorded in [`models/icpr-source.json`](../models/icpr-source.json).
 
-## Khác biệt có chủ đích so với notebook
+## Model and preprocessing
 
-- Không tạo contact sheet, ảnh annotate hay `index.html`; giao diện dùng crop/keyframe qua API.
-- `merge_tracks` chỉ là gợi ý trong `statistics.vehicle_groups`; mỗi track vẫn là một kết quả riêng để kiểm duyệt.
-- Ảnh đơn (`scene`) dùng cùng detector và bộ lọc box, giữ box có confidence ≥ `crop_confidence`; model OCR joint không chạy trên ảnh đơn.
+The `svtr_adapter:SVTRRecognizer` class owns the loaded model, device and decoder
+settings; calling the instance recognizes one five-frame track. The old
+`create_recognizer` name aliases this class for persisted snapshots.
+The inference implementation is in `app/recognition/svtr_adapter.py`,
+`svtr_config.py`, `svtr_backbone.py`, and `svtr_model.py`. The model uses an
+STN, SVTRv2-Base backbone, regional evidence fusion and height pooling, with a
+37-class CTC output (blank plus `0-9A-Z`). The input is exactly five ordered
+frames.
 
-## Kiểm thử
+Each PIL RGB crop is resized with aspect ratio preserved to fit a 128×40 canvas.
+Unused pixels are gray (RGB 128), and OpenCV `INTER_LINEAR` resizing is followed
+by normalization to `[-1, 1]`, then HWC-to-CHW conversion. The resulting tensor
+has shape `[1, 5, 3, 40, 128]`. CUDA inference uses float16 autocast; CPU uses
+float32.
+
+The adapter loads tensor-only checkpoints with `torch.load(weights_only=True)`,
+checks the pinned SHA-256, and requires a strict state-dict match. Decoder
+configuration supports `greedy`, `beam_plain`, `beam_filter`, and
+`beam_constrained`; the profile uses `beam_filter` with beam width 8. Unsupported
+configuration values, including TTA, are rejected.
+
+The output includes one `raw_text`, `decoding` metadata, and five normalized
+`frame_weights`. The regional fusion may reserve weight for an unknown feature;
+the adapter normalizes the relative weights over the five input frames to meet
+the worker contract. `frame_weights` are not confidence scores.
+`beam_confidence_proxy` is a ranking heuristic, not a calibrated probability;
+`ocr_score` remains `null`.
+
+## Evaluation limits
+
+The available model evaluation is on ICPR/Brazil-Mercosul data: 3,000 test
+samples reported 79.13% greedy exact accuracy, 79.63% `beam_filter` exact
+accuracy, and 99.8% format-valid output. These figures do not establish accuracy
+on Vietnamese plates or on end-to-end video detection/tracking. The previous
+SE-ResNet34-C threshold calibration and live confidence values are not validated
+for SVTRv2. Recalibrate with independent labels before relying on `readable`
+status or confidence thresholds; see [EVALUATION.md](EVALUATION.md).
+
+## Tests
+
+Run the focused adapter test in the configured inference environment, which must
+include PyTorch, Pillow, NumPy, OpenCV, and pytest:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_icpr_adapter.py tests/test_ml_adapter.py -q
+.\.venv\Scripts\python.exe -m pytest tests/test_svtr_adapter.py -q
 ```
 
-Test kiểm tra tên/shape state_dict, tiền xử lý 48×192, các decoder và định dạng biển, load an toàn/checksum, gate, chọn 5 crop theo chất lượng và `merge_tracks`, bằng trọng số tổng hợp, không đo accuracy. Riêng `test_trained_checkpoint_reads_labelled_icpr_track` chạy checkpoint thật (tự bỏ qua nếu chưa tải) trên một track ICPR có nhãn trong `tests/fixtures/test_track` và phải đọc đúng `BCY4440`; đây là kiểm tra hồi quy một mẫu, không phải số đo độ chính xác.
+The tests check preprocessing shape/padding/normalization, checkpoint checksum,
+strict loading, the configured class factory, and the five-frame prediction
+contract against the labelled crops in `data/test_tracks`.
 
-Ngày 14/10/2026 đã chạy ML runner thật trên CPU với hai checkpoint trên và `Pipeline/validation/new_short_video.avi` (30 frame): 13 frame được sampling, 2 track đủ 5 crop, OCR trả `ASL1231` và `LRV1121` (`format_valid=true`, proxy 0.50 và 0.67); kết quả qua `validateResult` của worker NestJS. Video không có nhãn chuẩn nên lần chạy này chỉ chứng minh pipeline hoạt động, không chứng minh đọc đúng.
+Run a reproducible evaluation and write the predictions, frame weights, input
+hashes and runtime versions:
+
+```shell
+python -m scripts.evaluate_test_tracks --output data/test_tracks_report.json
+```
+
+The supplied track is read as `BCY4440`, matching its annotation (1/1 tracks,
+zero character errors). The recorded CPU run is in
+[`validation/svtr-test-tracks.json`](validation/svtr-test-tracks.json). This is a
+single-track regression check, not an estimate of accuracy on a larger dataset.
+
+The SVTRv2 source attribution and Apache-2.0 license are in
+[`third_party/openocr-svtrv2/`](../third_party/openocr-svtrv2/). The original
+SE-ResNet34-C checkpoint metadata remains in the provenance file for historical
+job snapshots.

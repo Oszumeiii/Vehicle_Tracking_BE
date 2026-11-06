@@ -6,3 +6,4 @@
 *.pt binary
 *.pth binary
 *.cmd text eol=crlf
+models/single_model_best_svtrv2_base_regional_pool_warmup_v1.pt filter=lfs diff=lfs merge=lfs -text
