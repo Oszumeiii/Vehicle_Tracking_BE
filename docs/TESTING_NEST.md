@@ -17,7 +17,11 @@ quả hoàn tất là fixture được khai báo rõ; một test gọi worker v�
 
 Nếu không đặt `TEST_DATABASE_URL`, helper tìm PostgreSQL 18/17/16/15 trong
 `C:/Program Files/PostgreSQL/<version>/bin` trên Windows hoặc dùng `initdb` và
-`pg_ctl` trên PATH ở Linux/macOS. Có thể đặt `PG_BIN` để chọn thư mục binary:
+`pg_ctl` trên PATH ở Linux/macOS.
+
+Mỗi file test có một cluster riêng (`initdb --no-sync`, khoảng 3 giây). `pg_ctl` được chạy không có pipe, vì server nó khởi động sẽ giữ pipe stdout của tiến trình con. Trước đây Node chờ pipe đó đến hết thời gian chờ, mất khoảng 75 giây mỗi file trên Windows. Cả bộ 106 test giờ chạy khoảng 2 phút.
+
+Có thể đặt `PG_BIN` để chọn thư mục binary:
 
 ```powershell
 $env:PG_BIN = 'C:/Program Files/PostgreSQL/18/bin'

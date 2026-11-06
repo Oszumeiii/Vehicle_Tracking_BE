@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { randomBytes, randomUUID, scryptSync } from 'node:crypto';
 import { access, mkdir, readFile, rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
@@ -10,6 +10,29 @@ import { Database } from '../src/database/database';
 import { migrate } from '../src/database/migrate';
 
 const execute = promisify(execFile);
+
+/**
+ * Runs pg_ctl without pipes. The server it starts inherits the child's stdout/stderr, so waiting
+ * for the pipes to close (execFile) blocks until the timeout: about 75 s per test file on Windows.
+ */
+function pgCtl(binary: string, args: string[], timeout: number): Promise<void> {
+  return new Promise((done, reject) => {
+    const child = spawn(binary, args, { stdio: 'ignore', windowsHide: true });
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error(`pg_ctl ${args.at(-1)} timed out`));
+    }, timeout);
+    child.once('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once('exit', (code) => {
+      clearTimeout(timer);
+      if (code === 0) done();
+      else reject(new Error(`pg_ctl ${args.at(-1)} exited with ${code}`));
+    });
+  });
+}
 const projectData = resolve(process.cwd(), 'data');
 
 export interface TestDatabase {
@@ -125,21 +148,17 @@ export async function startTestDatabase(): Promise<TestDatabase> {
       );
       const options = `-h 127.0.0.1 -p ${port}${process.platform === 'win32' ? '' : ` -k ${root}`}`;
       try {
-        await execute(pgctl, ['-D', cluster, '-l', log, '-o', options, '-w', '-t', '60', 'start'], {
-          windowsHide: true,
-          timeout: 75_000,
-          maxBuffer: 2 * 1024 * 1024,
-        });
+        await pgCtl(
+          pgctl,
+          ['-D', cluster, '-l', log, '-o', options, '-w', '-t', '60', 'start'],
+          75_000,
+        );
       } catch (error) {
         const detail = await readFile(log, 'utf8').catch(() => 'No PostgreSQL log was produced.');
         throw new Error(`Isolated PostgreSQL startup failed: ${detail}`, { cause: error });
       }
       stopServer = async () => {
-        await execute(pgctl, ['-D', cluster, '-m', 'fast', '-w', '-t', '30', 'stop'], {
-          windowsHide: true,
-          timeout: 45_000,
-          maxBuffer: 2 * 1024 * 1024,
-        });
+        await pgCtl(pgctl, ['-D', cluster, '-m', 'fast', '-w', '-t', '30', 'stop'], 45_000);
       };
       connectionUrl = `postgresql://plate_test@127.0.0.1:${port}/postgres`;
     }
