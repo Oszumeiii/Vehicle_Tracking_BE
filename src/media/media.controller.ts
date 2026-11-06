@@ -14,8 +14,16 @@ import {
   UseInterceptors,
   HttpCode,
   ConflictException,
+  HttpException,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiBody, ApiConsumes, ApiTags, ApiResponse } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiConsumes,
+  ApiQuery,
+  ApiTags,
+  ApiResponse,
+} from '@nestjs/swagger';
 import type { Response } from 'express';
 import { Database } from '../database/database';
 import { z } from 'zod';
@@ -27,6 +35,8 @@ import { MediaResponse } from '../common/api-models';
 import { AuthGuard } from '../auth/auth.guard';
 import { AuditLog } from '../audit/audit';
 import { Storage, MediaUploadInterceptor } from './storage';
+import { diskLow } from '../common/disk';
+import { settings } from '../common/config';
 
 const placeAndTime = z
   .object({
@@ -65,6 +75,13 @@ export class MediaController {
   @ApiFailures(413, 415, 503)
   @UseInterceptors(MediaUploadInterceptor)
   @ApiConsumes('multipart/form-data')
+  @ApiQuery({
+    name: 'reuse',
+    required: false,
+    enum: ['true', 'false'],
+    description:
+      'true: if you already uploaded this exact file, return that media (duplicate: true) instead of storing a copy.',
+  })
   @ApiBody({
     schema: {
       type: 'object',
@@ -72,8 +89,34 @@ export class MediaController {
       properties: { file: { type: 'string', format: 'binary' } },
     },
   })
-  async upload(@Req() req: { user: Actor }, @UploadedFile() file: Express.Multer.File) {
+  async upload(
+    @Req() req: { user: Actor },
+    @UploadedFile() file: Express.Multer.File,
+    @Query('reuse') reuse?: string,
+  ) {
+    if ((await diskLow(settings().dataDir)).low) {
+      await this.storage.discardUpload(file);
+      throw new HttpException(
+        'Not enough free disk space on the server; free some space before uploading.',
+        507,
+      );
+    }
     const value = await this.storage.receive(file);
+    // With ?reuse=true (the web app), the same file uploaded again by the same user returns
+    // the first copy and the new bytes are dropped; other clients still get a new media.
+    const same =
+      reuse === 'true'
+        ? (
+            await this.db.query(
+              'SELECT * FROM media_assets WHERE owner_id=$1 AND sha256=$2 ORDER BY uploaded_at LIMIT 1',
+              [req.user.id, value.sha256],
+            )
+          ).rows[0]
+        : undefined;
+    if (same) {
+      await (await this.storage.quarantine(`media/${value.id}`)).purge().catch(() => {});
+      return { ...mediaView(same), duplicate: true };
+    }
     try {
       const row = (
         await this.db.query(
@@ -94,7 +137,7 @@ export class MediaController {
           ],
         )
       ).rows[0];
-      return mediaView(row);
+      return { ...mediaView(row), duplicate: false };
     } catch (error) {
       const q = await this.storage.quarantine(`media/${value.id}`);
       await q.purge();

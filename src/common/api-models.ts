@@ -68,6 +68,12 @@ export class MediaResponse {
     description: 'Where the footage was filmed; null until set.',
   })
   location!: CameraLocationResponse | null;
+  @ApiProperty({
+    required: false,
+    description:
+      'Upload only: true when the same user had already uploaded this exact file; the existing media is returned and the new bytes are dropped.',
+  })
+  duplicate?: boolean;
 }
 
 export class AcceptedJobResponse {

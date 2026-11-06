@@ -1056,3 +1056,59 @@ test('successful no-plate rerun has empty results and supersedes older detection
     .set('Authorization', `Bearer ${ownerToken}`)
     .expect(200);
 });
+
+test('a repeated upload of the same file returns the first copy; a full disk refuses uploads', async () => {
+  // Bytes no fixture uses (a PNG still decodes with trailing data).
+  const unique = Buffer.concat([image, Buffer.from('repeat-upload')]);
+  const upload = (token: string) =>
+    api
+      .post('/api/v2/media?reuse=true')
+      .set('Authorization', `Bearer ${token}`)
+      .attach('file', unique, 'again.png')
+      .expect(201);
+  const first = (await upload(ownerToken)).body;
+  const again = (await upload(ownerToken)).body;
+  assert.equal(again.duplicate, true);
+  assert.equal(again.id, first.id);
+  // Another user's upload of the same bytes is their own media.
+  const theirs = (await upload(strangerToken)).body;
+  assert.notEqual(theirs.id, first.id);
+  // One row and one folder per user for those bytes: the repeated upload left nothing behind.
+  const rows = (
+    await fixture.database.query('SELECT owner_id FROM media_assets WHERE sha256=$1', [
+      first.sha256,
+    ])
+  ).rows;
+  assert.equal(rows.filter((row) => row.owner_id === owner.id).length, 1);
+  assert.equal(
+    (await readdir(join(mediaRoot, 'media'))).filter((name) => name === again.id).length,
+    1,
+  );
+
+  const previous = process.env.PLATE_MIN_FREE_GB;
+  process.env.PLATE_MIN_FREE_GB = '100000000';
+  try {
+    const refused = await api
+      .post('/api/v2/media')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .attach('file', Buffer.concat([image, Buffer.from([0])]), 'full.png')
+      .expect(507);
+    assert.match(refused.body.detail, /disk space/);
+    assert.deepEqual(await readdir(join(mediaRoot, 'incoming')).catch(() => []), []);
+  } finally {
+    if (previous === undefined) delete process.env.PLATE_MIN_FREE_GB;
+    else process.env.PLATE_MIN_FREE_GB = previous;
+  }
+
+  await api.get('/api/v2/system/storage').set('Authorization', `Bearer ${ownerToken}`).expect(403);
+  const storage = (
+    await api.get('/api/v2/system/storage').set('Authorization', `Bearer ${adminToken}`).expect(200)
+  ).body;
+  assert.ok(storage.free_bytes > 0 && storage.total_bytes >= storage.free_bytes);
+  assert.equal(storage.min_free_bytes, 5 * 2 ** 30);
+  assert.ok(storage.media_bytes >= unique.length * 2);
+  // The owner's and the stranger's copies of the same bytes.
+  const duplicate = storage.duplicates.find((d: any) => d.media_ids.includes(first.id));
+  assert.equal(duplicate.copies, 2);
+  assert.equal(duplicate.extra_bytes, unique.length);
+});
