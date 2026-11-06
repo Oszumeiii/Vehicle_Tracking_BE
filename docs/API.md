@@ -95,7 +95,7 @@ Action `confirm` chấp nhận text máy; `correct` bắt buộc text mới; `un
     - `media`: video upload, `url` là `/media/{id}/content`;
     - `demo`: track của camera demo; cắt từ video demo khi mở lần đầu (vài giây), sau đó lấy từ cache;
     - `none`: không còn video.
-  - `GET /api/v2/recognition-results/{id}/video` → `video/mp4` (hỗ trợ Range). Header `X-Plate-First-Seen-Seconds` cho biết giây biển xuất hiện trong video. Hết thời gian giữ thì `404`. Nhận cả `?token=` để dùng trực tiếp trong `<video src>`.
+  - `GET /api/v2/recognition-results/{id}/video` → `video/mp4` (hỗ trợ Range). Header `X-Plate-First-Seen-Seconds` cho biết giây biển xuất hiện trong video. Hết thời gian giữ thì `404`. Nhận cả `?asset_token=` để dùng trực tiếp trong `<video src>`.
 - **Bản ghi camera:**
   - `GET /api/v2/stream-sources/{id}/recording/coverage` → `{items:[{from,to}]}`, các khoảng còn bản ghi.
   - `GET /api/v2/stream-sources/{id}/recording?from=ISO&to=ISO` (tối đa 600 s) → `video/mp4`. Sai khoảng thời gian trả `400`, không còn bản ghi trả `404`.
@@ -123,7 +123,7 @@ Action `confirm` chấp nhận text máy; `correct` bắt buộc text mới; `un
   - `GET /api/v2/stream-sources/{id}/live.m3u8`: playlist HLS gồm 6 đoạn 10 s mới nhất của phiên gần nhất; phiên đã kết thúc có `#EXT-X-ENDLIST`; chưa có đoạn nào thì `404`.
   - `GET /api/v2/stream-sources/{id}/live/{session}/{epoch}/{nnnnnn}.ts`: một đoạn MPEG-TS. API chuyển đoạn MP4 của bản ghi sang TS khi được gọi (không mã hóa lại) và cache 1 giờ. Chỉ phục vụ đoạn đã đóng.
   - `GET /api/v2/stream-sources/{id}/demo-video`: file video của camera demo (hỗ trợ Range).
-  - Ba endpoint trên nhận `?token=` cho trình phát không gửi được header; playlist tải bằng `?token=` sẽ gắn token vào URL các đoạn.
+  - Ba endpoint trên nhận `?asset_token=` cho trình phát không gửi được header; playlist tải bằng `?asset_token=` sẽ gắn token đó vào URL các đoạn.
 - `GET /api/v2/stream-sources/{id}/snapshot`: keyframe mới nhất của camera (JPEG), để vẽ `exclude_zones` theo tọa độ chuẩn hóa trên khung hình thật. Camera chưa có track trả `204` (không có nội dung).
 - Camera trả về có thêm `video_id` và `embed_url` (`https://www.youtube-nocookie.com/embed/{id}`) để nhúng trình phát cạnh danh sách biển số. Trình phát chạy lệch nhận diện vài giây. Link kênh (`/@x/live`) có `embed_url=null`.
 
@@ -219,4 +219,4 @@ Lỗi: `401` thiếu/hết phiên, `403` thiếu vai trò, `404` không có/khô
 
 - Result search accepts `match=exact|contains|fuzzy`; the default remains `exact`. Partial matching uses the reviewed effective plate text, so rejected plates do not reappear through machine predictions.
 - Job and result responses include upload media metadata (`media_type`, `media_duration_seconds`, `media_original_name`). Live sources have null upload metadata. Result summaries also expose the primary detection ID and bounding boxes for evidence previews.
-- Browser media elements may send `?token=<access_token>` only on GET/HEAD requests to `/api/v2/media/{id}/content` and `/api/v2/detections/{id}/artifacts/{crop|frame|enhanced}`. Session expiry and ownership checks still apply. An Authorization header takes precedence; other endpoints require the header.
+- Browser media elements (`<img>`, `<video>`) cannot send headers. Get a signed asset token with `POST /api/v2/auth/asset-token` (Bearer header) and add `?asset_token=<token>` to GET/HEAD requests for media content, detection artifacts, result videos, camera recordings, demo videos and the HLS playlist/segments. The token is `<session id>.<expiry>.<HMAC>`, signed with the session's token hash: it lasts `PLATE_ASSET_TOKEN_MINUTES` (default 60) and never outlives the session, signing out ends it, and it is not accepted as a bearer token. Ownership checks still apply. An Authorization header takes precedence. The old `?token=<access_token>` is deprecated and will be removed.
