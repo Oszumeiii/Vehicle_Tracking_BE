@@ -18,10 +18,15 @@ RUN npm run build && npm prune --omit=dev
 # Node, the built API/worker and its runtime modules on Python 3.12 (the notebook's version).
 FROM python:3.12-slim-bookworm AS runtime
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
-RUN apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 \
+# Debian's ffmpeg instead of imageio-ffmpeg's static build: that build segfaults (exit -11)
+# as soon as it resolves a host name in a container, so YouTube and RTSP cameras never
+# connected; local files decoded fine. imageio_ffmpeg.get_ffmpeg_exe() honours
+# IMAGEIO_FFMPEG_EXE, so the live reader, clips and the API's remux all use this one.
+RUN apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
     && python -m venv /opt/venv
-ENV PLATE_PIPELINE_PYTHON=/opt/venv/bin/python \
+ENV IMAGEIO_FFMPEG_EXE=/usr/bin/ffmpeg \
+    PLATE_PIPELINE_PYTHON=/opt/venv/bin/python \
     PLATE_DATA_DIR=/app/data \
     PLATE_CACHE_DIR=/app/data/model-cache \
     PLATE_PIPELINES_CONFIG=config/pipelines.kaggle.json \
