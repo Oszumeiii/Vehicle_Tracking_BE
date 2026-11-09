@@ -7,14 +7,17 @@ import { resolve } from 'node:path';
 import type { Request, Response, NextFunction } from 'express';
 import { AppModule } from './app.module';
 import { ApiErrors } from './common/http';
-import { settings } from './common/config';
+import { settings, trustProxy } from './common/config';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 
 export async function createApp() {
   await mkdir(resolve(settings().dataDir, 'media'), { recursive: true });
-  const app = await NestFactory.create(AppModule, {
+  const trust = trustProxy(process.env.PLATE_TRUST_PROXY);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     logger: process.env.NODE_ENV === 'test' ? false : ['log', 'warn', 'error'],
     abortOnError: false,
   });
+  if (trust !== false) app.set('trust proxy', trust);
   app.useGlobalFilters(new ApiErrors());
   app.use('/api', (_req: Request, res: Response, next: NextFunction) => {
     res.setHeader('Cache-Control', 'private, no-store');

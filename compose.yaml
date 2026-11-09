@@ -1,6 +1,13 @@
+# Docker's json-file logs grow without limit by default; keep about 50 MB per service.
+x-logging: &logging
+  driver: json-file
+  options: { max-size: 10m, max-file: "5" }
+
 services:
   postgres:
     image: postgres:18-alpine
+    logging: *logging
+    restart: unless-stopped
     environment:
       POSTGRES_USER: plate
       POSTGRES_DB: plate
@@ -20,7 +27,9 @@ services:
   api:
     profiles: [app]
     build: { context: ., target: api }
-    image: vehicle-tracking-api
+    # PLATE_IMAGE_PREFIX=ghcr.io/oszumeiii/ pulls the images CI publishes (docs/DEPLOY.md).
+    image: ${PLATE_IMAGE_PREFIX:-}vehicle-tracking-api:${PLATE_IMAGE_TAG:-latest}
+    logging: *logging
     env_file: .env
     environment: &app-env
       DATABASE_URL: postgresql://plate:${POSTGRES_PASSWORD}@postgres:5432/plate
@@ -30,6 +39,9 @@ services:
       PLATE_PIPELINES_CONFIG: config/pipelines.kaggle.json
       HOST: 0.0.0.0
       PORT: 3000
+      # Requests reach the API through nginx (web) and maybe Caddy, all on the private
+      # Docker network: trust those hops so req.ip is the real client (throttle, audit log).
+      PLATE_TRUST_PROXY: loopback, uniquelocal
     volumes: &app-volumes
       - ./data:/app/data
       - ./models:/app/models:ro
@@ -49,7 +61,8 @@ services:
   worker:
     profiles: [app]
     build: { context: ., target: worker }
-    image: vehicle-tracking-worker
+    image: ${PLATE_IMAGE_PREFIX:-}vehicle-tracking-worker:${PLATE_IMAGE_TAG:-latest}
+    logging: *logging
     env_file: .env
     environment:
       <<: *app-env
@@ -74,11 +87,66 @@ services:
     # Vehicle_Tracking_FE checked out next to this repository.
     build: { context: ../Vehicle_Tracking_FE }
     image: vehicle-tracking-web
+    logging: *logging
     ports:
       - "127.0.0.1:${WEB_PORT:-8080}:80"
     depends_on:
       api: { condition: service_healthy }
     restart: unless-stopped
 
+  # pg_dump into data/backups every PLATE_BACKUP_HOURS (same folder and format as
+  # start-all), keeping PLATE_BACKUP_DAYS days. Restore: docs/DEPLOY.md.
+  backup:
+    profiles: [app]
+    image: postgres:18-alpine
+    logging: *logging
+    environment:
+      PGHOST: postgres
+      PGUSER: plate
+      PGDATABASE: plate
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      KEEP_DAYS: ${PLATE_BACKUP_DAYS:-14}
+      EVERY_HOURS: ${PLATE_BACKUP_HOURS:-24}
+    volumes:
+      - ./data/backups:/backups
+    entrypoint:
+      - sh
+      - -c
+      - |
+        while true; do
+          f=/backups/plate-$$(date +%Y%m%d-%H%M%S).dump
+          if pg_dump -Fc -f "$$f.part" && mv "$$f.part" "$$f"; then echo "backup $$f"
+          else rm -f "$$f.part"; echo "backup failed" >&2; fi
+          find /backups -name 'plate-*.dump' -mtime +$$KEEP_DAYS -delete
+          sleep $$((EVERY_HOURS * 3600))
+        done
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: unless-stopped
+
+  # HTTPS in front of web for a real domain: set PLATE_DOMAIN, point its DNS here and
+  # open ports 80/443, then: docker compose --profile app --profile public up -d
+  # Caddy gets and renews the Let's Encrypt certificate by itself (docs/DEPLOY.md).
+  caddy:
+    profiles: [public]
+    image: caddy:2.10-alpine
+    logging: *logging
+    environment:
+      PLATE_DOMAIN: ${PLATE_DOMAIN:-localhost}
+    volumes:
+      - ./config/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    # Let's Encrypt needs the standard ports; others only suit a local test.
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+      - "${HTTPS_PORT:-443}:443/udp"
+    depends_on:
+      web: { condition: service_started }
+    restart: unless-stopped
+
 volumes:
   plate-postgres:
+  caddy-data:
+  caddy-config:
