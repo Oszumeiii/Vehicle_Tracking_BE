@@ -53,7 +53,7 @@ Sau khi đã có `.env`, tài khoản admin và môi trường inference, nhấp
 
 Kiểm tra stack đang chạy (API, DB, web, model, camera; thêm `--upload FILE` hoặc `--live CAMERA` để thử end-to-end): đặt `PLATE_SMOKE_EMAIL`/`PLATE_SMOKE_PASSWORD` rồi `npm run smoke`. Xem [DEMO.md](docs/DEMO.md).
 
-Máy khác trong nhóm có thể chạy cả hệ thống bằng Docker (cần Docker Desktop và GPU NVIDIA), không phải cài Node/Python/CUDA: `docker compose --profile app up -d --build`, xem [docs/DOCKER.md](docs/DOCKER.md).
+Máy khác trong nhóm có thể chạy cả hệ thống bằng Docker (cần Docker Desktop và GPU NVIDIA), không phải cài Node/Python/CUDA: `docker compose --profile app up -d --build`, xem [docs/DOCKER.md](docs/DOCKER.md). Đưa lên server có HTTPS, sao lưu tự động và image dựng sẵn: [docs/DEPLOY.md](docs/DEPLOY.md).
 
 Mở Swagger tại `http://127.0.0.1:3000/docs`. `POST /api/v2/auth/login`, lấy `access_token`, bấm **Authorize** và nhập token. Mọi endpoint nghiệp vụ đều cần Bearer token. `/health` chỉ là liveness; `/health/ready` kiểm tra database/schema, không xác nhận model hoặc worker đang chạy.
 

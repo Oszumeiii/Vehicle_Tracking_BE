@@ -1,0 +1,11 @@
+# HTTPS edge for the "public" compose profile (docs/DEPLOY.md). Caddy gets and renews
+# the certificate for PLATE_DOMAIN; "localhost" uses Caddy's own local CA instead.
+# Caddy ignores X-Forwarded-For sent by clients and sets it to the real address, which
+# nginx passes on to the API (PLATE_TRUST_PROXY in compose.yaml).
+{$PLATE_DOMAIN} {
+	reverse_proxy web:80 {
+		# Live tracks and alerts are server-sent events: pass each one on at once.
+		flush_interval -1
+	}
+	header -Server
+}

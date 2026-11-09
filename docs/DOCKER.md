@@ -41,6 +41,7 @@ docker compose --profile app ps          # api và postgres phải là healthy
   docker compose exec -e PLATE_ADMIN_PASSWORD api node dist/src/cli.js create-admin --email EMAIL
   ```
   Đặt `$env:PLATE_ADMIN_PASSWORD` trong PowerShell trước khi chạy. Database dùng chung với `start-all`, nên tài khoản cũ vẫn đăng nhập được.
+- Service `backup` dump database vào `data/backups` mỗi ngày. Đưa ra Internet với HTTPS (Caddy): [DEPLOY.md](DEPLOY.md).
 - Dừng: `docker compose --profile app down`. Dữ liệu vẫn giữ trong volume `plate-postgres` và thư mục `data/`.
 
 ## Cách hoạt động
