@@ -16,13 +16,15 @@ COPY tests tests
 RUN npm run build && npm prune --omit=dev
 
 # Node, the built API/worker and its runtime modules on Python 3.12 (the notebook's version).
-FROM python:3.12-slim-bookworm AS runtime
+FROM python:3.12-slim-trixie AS runtime
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
 # Debian's ffmpeg instead of imageio-ffmpeg's static build: that build segfaults (exit -11)
 # as soon as it resolves a host name in a container, so YouTube and RTSP cameras never
 # connected; local files decoded fine. imageio_ffmpeg.get_ffmpeg_exe() honours
 # IMAGEIO_FFMPEG_EXE, so the live reader, clips and the API's remux all use this one.
-RUN apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2.0-0 ffmpeg \
+# Trixie, for ffmpeg 7.1: bookworm's 5.1 prints showinfo pts_time with 6 significant
+# digits (64137.7), so frames 33 ms apart got equal times and the live reader reconnected.
+RUN apt-get update && apt-get install -y --no-install-recommends libgl1 libglib2.0-0t64 ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
     && python -m venv /opt/venv
 ENV IMAGEIO_FFMPEG_EXE=/usr/bin/ffmpeg \
