@@ -86,6 +86,22 @@ Trình duyệt ─HTTPS─> Caddy ──> web (nginx) ──/api──> api
 - SSE (track, cảnh báo) đi thẳng: Caddy `flush_interval -1`, nginx `proxy_buffering off`.
 - Upload không bị giới hạn ở proxy; API tự kiểm `PLATE_MAX_UPLOAD_MIB`.
 
+### Máy không mở được cổng 80/443: Cloudflare Tunnel
+
+Máy thuê theo giờ hay máy sau NAT thường chỉ mở cổng SSH. Khi đó dùng service `tunnel` thay cho Caddy: tunnel tự kết nối ra Cloudflare, Cloudflare cấp HTTPS cho tên miền.
+
+1. Thêm tên miền vào Cloudflare (đổi nameserver ở nơi mua tên miền sang của Cloudflare).
+2. Cloudflare dashboard → Zero Trust → Networks → Tunnels → Create a tunnel (Cloudflared), đặt tên, chép token.
+3. Trong tab Public Hostname: hostname `plates.<tên miền>`, service `HTTP`, URL `web:80`.
+4. Đặt `CLOUDFLARE_TUNNEL_TOKEN=<token>` trong `.env`, rồi:
+
+   ```bash
+   docker compose --profile app --profile tunnel up -d
+   ```
+
+- Gói Free của Cloudflare chặn mỗi request quá **100 MB**: upload video lớn hơn sẽ lỗi.
+- Cloudflare gửi IP người dùng trong `X-Forwarded-For`, nên giới hạn đăng nhập và nhật ký truy cập vẫn ghi đúng người.
+
 ## 5. Image dựng sẵn trên GHCR (không bắt buộc)
 
 Image worker khoảng 13 GB, build trên server mất lâu. Workflow `Images` build image `api` và `worker` rồi đẩy lên `ghcr.io/oszumeiii/` khi đẩy tag phiên bản, hoặc chạy tay trong tab Actions:
