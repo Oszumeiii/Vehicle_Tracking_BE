@@ -207,10 +207,16 @@ export class LiveManager {
           failures,
           until: Date.now() + Math.min(30, 2 ** (failures - 1)) * 60_000,
         });
+        const message = error instanceof Error ? error.message : String(error);
+        // Once per streak: an always-on camera that cannot restart is otherwise silent.
+        if (failures === 1)
+          console.warn(
+            `Always-on camera "${camera.name}" cannot restart (pipeline ${auto.pipeline_id}): ${message}`,
+          );
         if (last)
           await recordEvent(this.database, last.id, 'error', {
             code: 'AUTO_RESTART_FAILED',
-            message: error instanceof Error ? error.message : String(error),
+            message,
           });
         continue;
       }

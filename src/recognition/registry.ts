@@ -42,7 +42,11 @@ export class PipelineRegistry {
       const document = JSON.parse((await readFile(config, 'utf8')).replace(/^\uFEFF/, ''));
       const profiles = document.pipelines;
       if (!Array.isArray(profiles)) throw new Error();
-      const ids = profiles.map((p) => p.id);
+      // aliases: former ids of a renamed profile, so cameras and API calls that stored
+      // the old id keep working after a model upgrade.
+      if (profiles.some((p) => p.aliases !== undefined && !Array.isArray(p.aliases)))
+        throw new Error();
+      const ids = profiles.flatMap((p) => [p.id, ...(p.aliases ?? [])]);
       if (
         ids.some((id) => typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(id)) ||
         new Set(ids).size !== ids.length
@@ -56,6 +60,7 @@ export class PipelineRegistry {
 
   private async snapshot(profile: PipelineSnapshot, base: string): Promise<PipelineSnapshot> {
     const snapshot = structuredClone(profile);
+    delete snapshot.aliases; // Lookup only; jobs and sessions record the current id.
     try {
       const python = process.env.PLATE_PIPELINE_PYTHON;
       if (!python || !(await isFile(path.resolve(python))))
@@ -246,7 +251,9 @@ export class PipelineRegistry {
 
   async resolve(id: string): Promise<PipelineSnapshot> {
     const { profiles, base } = await this.profiles();
-    const profile = profiles.find((value) => value.id === id);
+    const profile =
+      profiles.find((value) => value.id === id) ??
+      profiles.find((value) => value.aliases?.includes(id));
     if (!profile) throw new NotFoundException('Unknown pipeline');
     return this.snapshot(profile, base);
   }
