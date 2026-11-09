@@ -35,7 +35,10 @@ lịch sử này không xác nhận pipeline SVTRv2 mới. Pipeline hiện tại
 `pbl6-svtrv2-regional-joint5-v1`; test focused của adapter SVTRv2 strict-load
 checkpoint, kiểm tra preprocess và prediction contract khi checkpoint có mặt.
 Việc này chưa đo accuracy trên biển số Việt Nam. Chi tiết tại
-[OCR_KAGGLE.md](docs/OCR_KAGGLE.md).
+[OCR_KAGGLE.md](docs/OCR_KAGGLE.md). Ngày 09/11/2026, SVTRv2 được đo lại trên
+ICPR (3000 track test và 1000 validation): đọc đúng 79,6% / 81,4%, và ngưỡng
+`readable` 0.96 vẫn đạt precision ≥ 95%; xem
+[EVALUATION.md](docs/EVALUATION.md#kết-quả-hiện-tại--svtrv2-base-regional-09112026).
 
 Đợt rà soát source ngày **11/10/2026**: **50 test Node và 98 test Python đạt**;
 TypeScript build và Prettier đạt. Node chạy đủ các suite theo hai đợt: 18 API +

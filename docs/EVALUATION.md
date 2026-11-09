@@ -168,9 +168,41 @@ Kiểm thử riêng bộ chấm:
 
 `readable` là nhãn tham khảo: nó chỉ đổi trạng thái hiển thị và bộ lọc `confidence_status`. Cảnh báo watchlist và việc gom lượt xuất hiện vẫn chạy với mọi track đọc ra chữ; mỗi cảnh báo kèm `confidence_status` để người xem biết mức tin cậy.
 
+### Kết quả hiện tại — SVTRv2-Base regional (09/11/2026)
+
+Chạy lại `scripts/calibrate_icpr.py` với payload của pipeline đang dùng `pbl6-svtrv2-regional-joint5-v1` (checkpoint sha256 `fe1e58e5…`, `beam_filter`, beam 8), cùng 3000 track test và 1000 track validation như lần đo SE-ResNet34-C bên dưới. RTX 4060 Laptop: 5 phút cho test, 1,5 phút cho validation.
+
+**Đọc đúng toàn biển** (không ngưỡng):
+
+| Model | Test | Validation | CER test |
+|---|---|---|---|
+| SE-ResNet34-C (cũ) | 77,1% | 78,0% | 5,95% |
+| **SVTRv2 (hiện tại)** | **79,6%** | **81,4%** | **5,21%** |
+
+**Precision của nhãn `readable`** (khoảng tin cậy Wilson 95%):
+
+| Ngưỡng | Test: precision | Test: coverage | Validation: precision | Validation: coverage |
+|---|---|---|---|---|
+| 0.85 | 87,2% (85,9–88,4) | 90,1% | 87,7% (85,4–89,6) | 91,5% |
+| 0.90 | 90,8% (89,6–91,8) | 85,0% | 90,8% (88,7–92,6) | 85,8% |
+| 0.95 | 95,2% (94,3–96,0) | 75,4% | 96,0% (94,3–97,2) | 74,3% |
+| **0.96** | **96,0% (95,1–96,8)** | **73,0%** | **96,8% (95,3–97,9)** | **72,5%** |
+| 0.97 | 97,3% (96,5–97,9) | 68,5% | 97,7% (96,3–98,6) | 68,6% |
+| 0.98 | 98,8% (98,1–99,2) | 61,4% | 98,6% (97,3–99,3) | 63,2% |
+| 0.99 | 99,6% (97,6–99,9) | 7,8% | 100% (94,8–100) | 7,0% |
+
+**Kết luận:**
+- Gộp hai tập (4000 track), ngưỡng nhỏ nhất có **cận dưới ≥ 95%** vẫn là **0.96** (precision 96,2%, cận dưới 95,5%). Giữ nguyên mặc định `min_confidence=0.96`; không cần migration.
+- Ở cùng ngưỡng, SVTRv2 gắn `readable` cho **72,9%** track so với 68,9% của model cũ: nhiều hơn khoảng 4 điểm phần trăm, precision giữ nguyên.
+- Độ chính xác tăng ở mọi cỡ crop; nhóm 40–49 px (đông nhất, gần cỡ crop live) tăng từ 73,7% lên 77,4% trên test.
+- Confidence của SVTRv2 dồn sát 0,99: từ 0.98 lên 0.99 coverage rơi từ 61% xuống 8%. Không nên đặt ngưỡng 0.99.
+- **Giới hạn bổ sung:** nhóm không ghi lại SVTRv2 được train trên phần nào của ICPR. Nếu tập test từng được dùng khi train hoặc chọn checkpoint, các số trên lạc quan hơn thực tế. Các giới hạn 1–3 của lần đo cũ (bên dưới) vẫn áp dụng.
+
+Kết quả gốc: `data/evaluation/icpr/svtrv2/{test,validation}/report.json` (không commit).
+
 ### Kết quả lịch sử — SE-ResNet34-C (26/10/2026)
 
-Các số bên dưới được đo với checkpoint SE-ResNet34-C cũ; **không xác nhận hoặc hiệu chỉnh ngưỡng cho SVTRv2 hiện tại**. Ngưỡng `min_confidence=0.96` đang dùng trong ứng dụng được giữ nguyên cho tương thích, nhưng cần chạy lại hiệu chỉnh bằng payload pipeline SVTRv2 và nhãn độc lập trước khi coi là đáng tin cậy.
+Các số bên dưới được đo với checkpoint SE-ResNet34-C cũ, trước khi chuyển sang SVTRv2; kết quả hiện tại ở mục trên.
 
 **Dữ liệu:** bộ ICPR 2026 LRLPR mà nhóm dùng để train model (Kaggle `trnvnhun/icpr-2026-low-resolution-plate-dataset`). Mỗi track có 5 ảnh độ phân giải thấp và biển số do người gán.
 - **Tập test**, 3000 track: chỉ dùng để chấm, không dùng để train hay chọn checkpoint.

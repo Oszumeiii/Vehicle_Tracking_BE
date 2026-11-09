@@ -35,6 +35,7 @@
     },
     {
       "id": "pbl6-svtrv2-regional-joint5-v1",
+      "aliases": ["pbl6-resnet34c-joint5-v1"],
       "name": "PBL6 · YOLO11l + BoT-SORT → OCR SVTRv2-Base regional joint 5 frame",
       "version": "pbl6-svtrv2-regional-1",
       "task": "recognize",
@@ -81,6 +82,7 @@
     },
     {
       "id": "pbl6-svtrv2-regional-joint5-hfps-v1",
+      "aliases": ["pbl6-resnet34c-joint5-hfps-v1"],
       "name": "Thử nghiệm · SVTRv2 lấy mẫu 15/20/25 fps → OCR joint 5 frame (chỉ 1 camera)",
       "version": "pbl6-svtrv2-regional-1",
       "task": "recognize",
