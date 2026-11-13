@@ -51,6 +51,8 @@ npm run worker -- --once
 
 Sau khi đã có `.env`, tài khoản admin và môi trường inference, nhấp đúp `start-all.cmd` (hoặc chạy `.\start-all.cmd`). Script bật Docker Desktop/PostgreSQL, build, sao lưu DB vào `data/backups/` nếu có migration mới (`pg_dump -Fc`, khôi phục bằng `pg_restore`), migrate, cảnh báo nếu thiếu checkpoint trong `models/`, rồi mở API, worker và FE (`../Vehicle_Tracking_FE`) mỗi cái một cửa sổ và mở trình duyệt. Dịch vụ đang chạy sẽ được giữ nguyên nên chạy lại không làm gián đoạn job. Tùy chọn: `-SkipBuild`, `-NoBrowser`, `-FrontendDir <đường dẫn>`. Đóng cửa sổ nào thì dừng dịch vụ đó; đóng cửa sổ worker khi job đang chạy sẽ đánh dấu job `WORKER_INTERRUPTED`.
 
+Để không phải bấm tay sau mỗi lần mở máy, chạy một lần `.\scripts\autostart.ps1`: script đặt một shortcut trong thư mục Startup của tài khoản Windows (không cần quyền admin), mỗi lần đăng nhập sẽ tự chạy `start-all -NoBrowser` sau 30 giây và ghi kết quả vào `data/logs/autostart.log`. `-Status` xem đã cài chưa và lần chạy gần nhất; `-Remove` gỡ. Máy phải không ngủ khi cắm sạc thì trang mới truy cập được liên tục.
+
 Kiểm tra stack đang chạy (API, DB, web, model, camera; thêm `--upload FILE` hoặc `--live CAMERA` để thử end-to-end): đặt `PLATE_SMOKE_EMAIL`/`PLATE_SMOKE_PASSWORD` rồi `npm run smoke`. Xem [DEMO.md](docs/DEMO.md).
 
 Máy khác trong nhóm có thể chạy cả hệ thống bằng Docker (cần Docker Desktop và GPU NVIDIA), không phải cài Node/Python/CUDA: `docker compose --profile app up -d --build`, xem [docs/DOCKER.md](docs/DOCKER.md). Đưa lên server có HTTPS, sao lưu tự động và image dựng sẵn: [docs/DEPLOY.md](docs/DEPLOY.md).
