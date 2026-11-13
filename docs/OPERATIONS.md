@@ -77,6 +77,21 @@ Cấu hình mặc định là `PLATE_PIPELINES_CONFIG=config/pipelines.kaggle.js
 
 Cả hai profile dùng kiểm duyệt, tra cứu và CSV chung. Với OCR, mở đầy đủ 5 crop và frame nguồn để kiểm tra chuỗi nhận diện và việc ghép track trước khi `confirm` hoặc `correct`. Nếu không có track đủ 5 frame, job vẫn có thể `succeeded` với danh sách kết quả rỗng và thống kê loại track.
 
+## Cảnh báo sự cố trên giao diện
+
+Tài khoản Admin thấy một dải cảnh báo ở đầu mọi trang khi `GET /api/v2/system/health` có sự cố; giao diện hỏi lại mỗi phút. Cách xử lý từng loại:
+
+| Cảnh báo | Nguyên nhân thường gặp | Xử lý |
+|---|---|---|
+| Worker không chạy | Cửa sổ WORKER bị đóng, worker lỗi lúc khởi động | Chạy lại `start-all.cmd` (hoặc `docker compose --profile app up -d worker`), xem lỗi trong cửa sổ WORKER |
+| Camera 24/7 không chạy | Pipeline bị đổi tên mà thiếu `aliases`, luồng nguồn hỏng, ổ đầy | Đọc phần chi tiết của cảnh báo; sửa `auto_settings.pipeline_id` hoặc khai `aliases` trong `config/pipelines*.json` |
+| Chưa sao lưu database | Service `backup` không chạy | `docker compose up -d backup`; xem `docker compose logs backup` |
+| Pipeline không sẵn sàng | Thiếu checkpoint (`git lfs pull`), sai checksum, sai `PLATE_PIPELINE_PYTHON` | Sửa theo chi tiết; cảnh báo tự hết trong 5 phút |
+| Job chờ quá lâu | Worker không chạy hoặc GPU đang bận phiên live | Kiểm tra worker và tab **Video & tác vụ** |
+| Ổ đĩa gần đầy | Bản ghi và bằng chứng live | Trang quản trị, mục **Dung lượng**; giảm thời gian giữ hoặc xóa dữ liệu cũ |
+
+`start-all` bật luôn service `backup` (dump mỗi `PLATE_BACKUP_HOURS` giờ vào `data/backups`, giữ `PLATE_BACKUP_DAYS` ngày), nên chạy trên laptop cũng có sao lưu định kỳ. Database và ảnh nằm cùng một ổ: thỉnh thoảng chép `data/backups` sang máy khác.
+
 ## Đăng nhập bị chặn tạm
 
 Đăng nhập sai 5 lần với cùng email từ cùng một địa chỉ (hoặc 30 lần từ một địa chỉ với mọi email) trong 15 phút thì API trả `429` kèm `Retry-After`, kể cả khi lần sau nhập đúng mật khẩu. Hết thời gian chờ thì tự mở lại; đăng nhập đúng xóa bộ đếm của email đó.

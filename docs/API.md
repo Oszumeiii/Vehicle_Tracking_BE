@@ -12,6 +12,13 @@ Mặc định `http://127.0.0.1:3000`. Ngoại trừ login và health, gửi `Au
 - `GET /api/v2/users?limit=50&offset=0`: Admin xem tài khoản.
 - `POST /api/v2/users`: Admin gửi `{email,password,display_name,role}` → `201`. Mật khẩu tối thiểu 12 ký tự.
 - `PATCH /api/v2/users/{id}`: Admin gửi các trường `display_name`, `role`, `is_active`, `password` cần thay đổi. Khóa/đổi mật khẩu thu hồi phiên. Không khóa hoặc hạ quyền Admin hoạt động cuối cùng.
+- `GET /api/v2/system/health`: chỉ Admin. Những sự cố trước đây chỉ thấy trong log. Trả `ok`, `checked_at`, `worker_running`, `last_backup_at` và `issues[]`, mỗi mục gồm `code`, `severity` (`error`/`warning`), `subject` (tên camera hoặc pipeline), `detail`, `since`. Các `code`:
+  - `WORKER_DOWN`: không tiến trình worker nào giữ khóa database, nên job và camera không chạy.
+  - `CAMERA_DOWN`: camera 24/7 không có phiên nào quá 3 phút; `detail` là lỗi tự khởi động lại gần nhất (ví dụ `Unknown pipeline`) hoặc mã lỗi của phiên cuối.
+  - `BACKUP_OVERDUE` (warning): bản `data/backups/*.dump` mới nhất cũ hơn 2 × `PLATE_BACKUP_HOURS`, hoặc chưa có bản nào. Đặt `PLATE_BACKUP_HOURS=0` nếu sao lưu ở nơi khác.
+  - `PIPELINE_UNAVAILABLE`: pipeline `ready=false` (thiếu checkpoint, sai checksum, thiếu Python). Kết quả được nhớ 5 phút vì phải băm checkpoint.
+  - `JOBS_WAITING` (warning): có job upload nằm hàng đợi quá `PLATE_HEALTH_QUEUE_MINUTES` phút (mặc định 30).
+  - `DISK_LOW`: ổ dữ liệu dưới `PLATE_MIN_FREE_GB`.
 - `GET /api/v2/system/storage`: chỉ Admin. Ổ đĩa (`free_bytes`, `total_bytes`), ngưỡng `min_free_bytes`, `low`, dung lượng video upload (`media_bytes`), bằng chứng live (`live_evidence_bytes`), bản ghi đệm (`recording_bytes`), các file upload trùng (`duplicates`) và hạn lưu cùng dung lượng bằng chứng của từng camera (`cameras`).
 - `GET /api/v2/audit-logs`: chỉ Admin (user thường nhận `403`). **Nhật ký truy cập**, mới nhất trước, query `user_id`, `action` (khớp đúng như `auth.login`, hoặc tiền tố kết thúc bằng dấu chấm như `camera.`), `from`, `to`, phân trang. Mỗi dòng gồm `id`, `user_id`, `user_email`, `action`, `target_type`, `target_id`, `details`, `ip`, `created_at`.
   - Hành động được ghi:

@@ -18,6 +18,7 @@ import { WatchlistController } from './live/watchlist.controller';
 import { EvaluationController } from './evaluation/evaluation.controller';
 import { AuditController } from './audit/audit.controller';
 import { StorageController } from './system/storage.controller';
+import { SystemHealthController } from './system/health.controller';
 import { AuditLog } from './audit/audit';
 import { LiveEventsHub } from './live/events.hub';
 import { PipelineRegistry } from './recognition/registry';
@@ -95,6 +96,7 @@ class HealthController {
     EvaluationController,
     AuditController,
     StorageController,
+    SystemHealthController,
   ],
   providers: [
     AuthGuard,
