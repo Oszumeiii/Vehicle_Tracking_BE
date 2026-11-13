@@ -28,7 +28,7 @@ Demo khoảng 10 phút, đi qua cả hai nguồn của hệ thống: video uploa
    - **ghi vào ban ngày theo giờ Brazil** (khoảng 11:00–22:00 UTC, tức 18:00–05:00 giờ Việt Nam). Đo trên một vòng 3 phút có vùng loại trừ: clip ghi lúc 4h sáng ở Brazil cho khoảng 2 track, còn clip ghi lúc 13h (`camboriu-day.mp4`) cho **35 track, trong đó 9 track `readable`**, bỏ 0,3% frame. Luồng YouTube thật cũng vậy: demo vào ban ngày Việt Nam là đêm ở Camboriú, nên camera video demo thường đông xe hơn;
    - có thể ghi bằng yt-dlp + ffmpeg (`-c:v copy`, xem `app/live/source.py:resolve_youtube` để lấy URL HLS).
 4. **Một video ngắn** (15–60 s) để demo phần upload.
-5. **Chạy thử lần cuối** trước giờ demo: nhấp đúp `start-all.cmd`.
+5. **Chạy thử lần cuối** trước giờ demo: nhấp đúp `start-all.cmd`. Đăng nhập bằng tài khoản Admin và kiểm tra **không có dải cảnh báo** ở đầu trang (worker, camera 24/7, sao lưu, pipeline); có thì xử lý theo [OPERATIONS.md](OPERATIONS.md#cảnh-báo-sự-cố-trên-giao-diện).
    - Lần đầu script tự sao lưu DB vào `data/backups/` rồi migrate.
    - Chạy script kiểm tra (`scripts/smoke.mjs`) bằng tài khoản dùng để demo:
      ```powershell
