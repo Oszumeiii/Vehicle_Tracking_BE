@@ -12,6 +12,7 @@ import { hostRunner } from './recognition/host-runner';
 import { GpuGate, LiveManager, liveSettings, spawnLiveProcess, SpawnLive } from './live/manager';
 import { Retention } from './live/retention';
 import { SharedLiveHost } from './live/host';
+import { WORKER_LOCK } from './system/health.controller';
 
 /** Jobs processed in parallel by this worker; each job runs its own ML subprocess. */
 export function workerConcurrency(value = process.env.PLATE_WORKER_CONCURRENCY ?? '1') {
@@ -34,7 +35,7 @@ export async function runWorker(
 ) {
   const lock = await database.pool.connect();
   try {
-    const result = await lock.query('SELECT pg_try_advisory_lock(762143901) AS acquired');
+    const result = await lock.query(`SELECT pg_try_advisory_lock(${WORKER_LOCK}) AS acquired`);
     if (!result.rows[0].acquired)
       throw new Error('Another recognition worker already owns this database');
   } catch (error) {
@@ -142,7 +143,7 @@ export async function runWorker(
   } finally {
     process.off('SIGTERM', stop);
     process.off('SIGINT', stop);
-    await lock.query('SELECT pg_advisory_unlock(762143901)').catch(() => {});
+    await lock.query(`SELECT pg_advisory_unlock(${WORKER_LOCK})`).catch(() => {});
     lock.off('error', onLockError);
     lock.release(lostLock);
   }

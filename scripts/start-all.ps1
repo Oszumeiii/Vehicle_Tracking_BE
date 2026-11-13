@@ -67,6 +67,9 @@ try {
 
   Step 'PostgreSQL'
   Run @('docker', 'compose', 'up', '-d', '--wait', 'postgres')
+  # Daily pg_dump into data/backups (PLATE_BACKUP_HOURS/PLATE_BACKUP_DAYS in .env); naming
+  # the service starts it without the rest of the app profile.
+  Run @('docker', 'compose', 'up', '-d', 'backup')
 
   if (-not $SkipBuild) {
     Step 'Build backend'
