@@ -1235,7 +1235,7 @@ API17 bổ sung bộ lọc `origin`, `stream_source_id`, `live_session_id`, `cap
 
 ### 11.4. Endpoint vận hành
 
-`GET /` trả thông tin dịch vụ; `GET /health` là liveness; `GET /health/ready` kiểm kết nối PostgreSQL và toàn bộ version/checksum migration, trả `503` khi thiếu/sai schema. Các endpoint này không tính trong 21 API nghiệp vụ. Swagger được phục vụ ở `/docs`; tài liệu API không chứng minh frontend đã xây hoặc worker/model đang chạy.
+`GET /` trả thông tin dịch vụ; `GET /health` là liveness; `GET /health/ready` kiểm kết nối PostgreSQL và toàn bộ version/checksum migration, trả `503` khi thiếu/sai schema. Các endpoint này không tính trong 21 API nghiệp vụ. Swagger được phục vụ ở `/docs`; tài liệu API không chứng minh frontend đã xây hoặc worker/model đang chạy. Từ 13/11/2026 có thêm `GET /api/v2/system/health` (chỉ Admin): báo worker không chạy, camera 24/7 không tự khởi động lại, sao lưu quá hạn, pipeline thiếu model, job chờ lâu và ổ gần đầy; giao diện hiện các mục này thành dải cảnh báo trên mọi trang.
 
 ### 11.5. Mã phản hồi và lỗi
 
@@ -1286,13 +1286,19 @@ Không có profile thì chỉ PostgreSQL chạy, như `start-all`. `data/` và `
 
 Khi đóng gói hoặc chuyển host, phải đưa theo migration SQL, mã `app/recognition`, checkpoint detector/OCR đúng checksum, đồng thời cấu hình storage dùng chung giữa API/worker. Đường dẫn local trong snapshot phục vụ tái lập trên môi trường đã cấu hình; không trả ra API. `ready=true` của profile chỉ xác nhận file/cấu hình/checksum, không thay thế một job smoke test để kiểm chứng Python/CUDA và model load.
 
+**Bổ sung 09–13/11/2026 (triển khai công khai):**
+- **HTTPS và IP thật:** profile `public` chạy Caddy (tự xin chứng chỉ Let's Encrypt) hoặc profile `tunnel` chạy Cloudflare Tunnel khi máy không mở được cổng 80/443. `PLATE_TRUST_PROXY` cho API đọc đúng IP người dùng sau proxy, để giới hạn đăng nhập sai và nhật ký truy cập không bị gộp về một IP.
+- **Bản đang dùng để demo:** laptop của nhóm (RTX 4060) chạy `start-all`, công khai qua Tailscale Funnel (HTTPS, tên miền `*.ts.net` miễn phí). `scripts/autostart.ps1` cho hệ thống tự chạy khi đăng nhập Windows. Một lần thử trên máy thuê theo giờ (RTX 5060 Ti) cho thấy toàn bộ stack chạy được bằng Docker trên Ubuntu; hướng dẫn ở `docs/DEPLOY.md`.
+- **Sao lưu:** service `backup` chạy `pg_dump` mỗi `PLATE_BACKUP_HOURS` giờ vào `data/backups`, giữ `PLATE_BACKUP_DAYS` ngày; `start-all` cũng bật service này.
+- **Đổi model:** profile pipeline khai id cũ trong `aliases`, nên camera 24/7 và job còn lưu id cũ vẫn chạy sau khi nhóm chuyển OCR sang SVTRv2 (06/11/2026).
+
 ### 12.3 An toàn dữ liệu và vận hành
 
 - Session token được sinh ngẫu nhiên và DB chỉ lưu hash; password dùng scrypt. Khóa tài khoản hoặc đổi mật khẩu thu hồi các phiên của tài khoản.
 - Nguồn và bằng chứng chỉ được đọc qua endpoint kiểm tra quyền. Không public thư mục data. Media content hỗ trợ Range, `206` và `416`; lỗi trả JSON và không lộ path server.
 - Review và nhập kết quả dùng transaction PostgreSQL. Xóa sử dụng quarantine file rồi commit DB, restore khi transaction lỗi. PostgreSQL và filesystem không tạo thành transaction phân tán; cần kiểm tra rác/dữ liệu sau sự cố nguồn điện hoặc ổ đĩa.
-- `/health` là liveness. `/health/ready` kiểm tra database cùng tập version/checksum migration. Không endpoint health nào hiện xác nhận worker đang sống hoặc GPU đủ bộ nhớ.
-- Backup phải ghép một bản database nhất quán với storage tương ứng. Khôi phục cần đối chiếu các storage key và checkpoint trước khi mở lại job; đây là quy trình vận hành đề xuất, chưa có API backup/restore.
+- `/health` là liveness. `/health/ready` kiểm tra database cùng tập version/checksum migration. `GET /api/v2/system/health` (Admin) xác nhận worker còn giữ khóa database, camera 24/7 có phiên, bản sao lưu còn mới và pipeline sẵn sàng; chưa endpoint nào xác nhận GPU đủ bộ nhớ.
+- Backup phải ghép một bản database nhất quán với storage tương ứng. Khôi phục cần đối chiếu các storage key và checkpoint trước khi mở lại job; đây là quy trình vận hành đề xuất, chưa có API backup/restore. Phần database đã tự động (service `backup`, cảnh báo `BACKUP_OVERDUE` khi quá hạn); ảnh và video trong `data/` vẫn phải chép tay sang máy khác.
 - Logging không được ghi password hoặc access token. Quyền đọc log/checkpoint chỉ dành cho người vận hành host. API chỉ trả thông báo lỗi an toàn; log giữ chi tiết để chẩn đoán.
 
 ### 12.4 Các quyết định thiết kế
@@ -1493,9 +1499,9 @@ Các sơ đồ PlantUML và SVG đi kèm là sản phẩm mô hình hóa mã ngu
 1. **OCR ảnh đơn chưa có model tương thích được cấu hình.** Endpoint ảnh và prepare hoạt động; người dùng kiểm duyệt thủ công. Model joint-five hiện có không được ép đọc bằng cách nhân bản ảnh.
 2. **Tracking không phải định danh xe.** Track có thể ghép sai; reject ghi lại kết luận nhưng không tự sửa track. Cùng biển số ở nhiều nguồn vẫn là nhiều appearance.
 3. **Một worker và filesystem riêng.** Advisory lock chủ động giới hạn một worker trên DB. Chưa có hàng đợi phân tán, object storage, scale nhiều worker hoặc cơ chế tự reconcile mọi crash giữa DB/file.
-4. **Readiness có phạm vi.** Health kiểm DB/schema, pipelines.ready kiểm file/config/checksum; chỉ job thực mới kiểm được toàn runtime/model/thiết bị. Chưa có endpoint xác nhận heartbeat worker đang sống.
+4. **Readiness có phạm vi.** Health kiểm DB/schema, pipelines.ready kiểm file/config/checksum; chỉ job thực mới kiểm được toàn runtime/model/thiết bị. Chưa có endpoint xác nhận heartbeat worker đang sống. Cập nhật 13/11/2026: `GET /api/v2/system/health` đã báo worker dừng, camera 24/7 không chạy, sao lưu quá hạn và pipeline không sẵn sàng; phần chưa kiểm được là bộ nhớ GPU và chất lượng luồng nguồn.
 5. **Đánh giá chất lượng còn tách riêng.** Test và smoke không thay ground truth độc lập; chưa xác nhận accuracy Việt Nam, SLA hoặc tải đồng thời production.
-6. **Live trên một GPU.** Host dùng chung chạy được ba camera trên GPU 8 GB (đo được); bốn camera bỏ 4-30% frame vì CPU/GIL. Job video joint chạy cùng camera nhưng bị giữ ở tốc độ thời gian thực; job khác phải chờ khi có camera chạy. Camera YouTube 720p cho confidence thấp hơn hẳn 1080p (2/318 track `readable` ở ngưỡng 0,96). Camera RTSP mới thử với camera giả lập (mediamtx), chưa thử camera thật. Chất lượng phụ thuộc băng thông (1080p cần khoảng 4 Mbit/s). Nhãn `readable` dựa trên ngưỡng 0,96, hiệu chỉnh offline trên ICPR (precision 96,9% trên test). Kết quả này là cận trên; trên camera thật chưa xác nhận bằng nhãn người gán độc lập. Lượt xuất hiện là gợi ý theo chuỗi đọc được.
+6. **Live trên một GPU.** Host dùng chung chạy được ba camera trên GPU 8 GB (đo được); bốn camera bỏ 4-30% frame vì CPU/GIL. Job video joint chạy cùng camera nhưng bị giữ ở tốc độ thời gian thực; job khác phải chờ khi có camera chạy. Camera YouTube 720p cho confidence thấp hơn hẳn 1080p (2/318 track `readable` ở ngưỡng 0,96). Camera RTSP mới thử với camera giả lập (mediamtx), chưa thử camera thật. Chất lượng phụ thuộc băng thông (1080p cần khoảng 4 Mbit/s). Nhãn `readable` dựa trên ngưỡng 0,96, hiệu chỉnh offline trên ICPR: precision 96,9% trên test với SE-ResNet34-C, và 96,0% với SVTRv2 đang dùng (đo lại 09/11/2026: đọc đúng toàn biển 79,6%, tỷ lệ gắn `readable` 73,0%). Kết quả này là cận trên; trên camera thật chưa xác nhận bằng nhãn người gán độc lập. Lượt xuất hiện là gợi ý theo chuỗi đọc được.
 7. **Chất lượng đọc trên luồng YouTube Brazil.** Crop biển trung vị khoảng 46-51 px và bị nén, nên phần lớn biển rơi vào nhóm tin cậy thấp. Vùng nhận diện (ROI) giảm số track bị loại từ 16 xuống 6 trên cùng 5 phút footage, nhưng số biển đạt 0,96 gần như không đổi. Cần nhãn người trên camera Brazil để tinh chỉnh OCR và hiệu chỉnh ngưỡng riêng từng camera. Từ ngày 06/11/2026, nhóm dùng mô hình OCR SVTRv2-Base (pipeline `pbl6-svtrv2-regional-joint5-v1`).
 8. **Phạm vi nghiệp vụ giới hạn.** Chưa có bãi xe, chủ phương tiện, xử phạt, hủy job, chia sẻ dữ liệu, public signup, email reset, giao diện đầy đủ hoặc SR. Đây không phải các API bị bỏ sót trong 52 endpoint hiện có.
 
