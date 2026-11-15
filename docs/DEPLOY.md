@@ -132,7 +132,7 @@ docker compose --profile app --profile public up -d --build    # hoặc pull nh�
 
 ## 7. Sao lưu và khôi phục
 
-Service `backup` chạy `pg_dump` vào `data/backups/plate-<thời gian>.dump`, mỗi `PLATE_BACKUP_HOURS` giờ (mặc định 24), giữ `PLATE_BACKUP_DAYS` ngày (mặc định 14). Cùng thư mục và định dạng với bản backup của `start-all`.
+Service `backup` chạy `pg_dump` vào `data/backups/plate-<thời gian>.dump`, mỗi `PLATE_BACKUP_HOURS` giờ (mặc định 24), giữ `PLATE_BACKUP_DAYS` ngày (mặc định 14). Cùng thư mục và định dạng với bản backup của `start-all`. Lần dump lỗi (ví dụ PostgreSQL chưa kịp khởi động) được thử lại sau 1 phút.
 
 - Sao lưu ngay: `docker compose --profile app restart backup` (service dump một lần mỗi khi khởi động).
 - Khôi phục (ghi đè database hiện tại; dừng api và worker trước):
