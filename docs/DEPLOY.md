@@ -154,3 +154,20 @@ Không có server hay IP tĩnh thì chạy trên laptop có GPU và mở ra ngo�
 - **Tailscale**: `tailscale serve --bg 8080` mở `https://<tên máy>.<tailnet>.ts.net` cho các máy trong cùng tailnet; người xem phải cài Tailscale và được mời vào tailnet. Không giới hạn dung lượng upload.
 
 Cloudflare gửi IP người dùng trong `X-Forwarded-For`; IP này là địa chỉ công khai nên API dừng ở đó và ghi đúng người dùng.
+
+## Giao diện trên Vercel, API ở máy có GPU
+
+Vercel chỉ chạy được phần giao diện (file tĩnh). API, worker và PostgreSQL vẫn ở máy có GPU và mở ra ngoài bằng tunnel hoặc tên miền riêng; trình duyệt gọi thẳng API, nên upload, SSE và video không đi qua Vercel và API vẫn thấy IP thật của người dùng.
+
+1. Trong repo FE (đã có `vercel.json`): `npx vercel link`, đặt `VITE_API_URL=https://<địa chỉ API>/api/v2` cho môi trường Production (`npx vercel env add VITE_API_URL production`), rồi `npx vercel deploy --prod`.
+2. Trong `.env` của BE thêm địa chỉ Vercel vào `CORS_ORIGINS`, ví dụ `CORS_ORIGINS=https://<project>.vercel.app`, và khởi động lại API.
+3. Nếu tunnel đang trỏ vào Vite dev (`start-all`), cho `/api` đi thẳng tới API. Vite tự trả lời preflight CORS và không cho phép origin lạ, nên mọi request từ Vercel sẽ bị trình duyệt chặn:
+
+   ```bash
+   tailscale funnel --bg --set-path /api http://127.0.0.1:3000/api
+   tailscale funnel --bg --set-path /health http://127.0.0.1:3000/health
+   ```
+
+Đổi địa chỉ API thì phải đổi `VITE_API_URL` và deploy lại, vì địa chỉ này nằm trong bản build.
+
+Máy nằm trong cùng tailnet (kể cả chính máy chạy API) phân giải tên `*.ts.net` ra địa chỉ nội bộ `100.x`. Chrome coi đó là mạng nội bộ và hỏi quyền "truy cập thiết bị trong mạng cục bộ" khi trang Vercel gọi API; bấm cho phép, hoặc trên các máy đó dùng thẳng địa chỉ tunnel. Người dùng ngoài tailnet không gặp.
