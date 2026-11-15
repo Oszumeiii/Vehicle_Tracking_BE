@@ -115,10 +115,16 @@ services:
       - |
         while true; do
           f=/backups/plate-$$(date +%Y%m%d-%H%M%S).dump
-          if pg_dump -Fc -f "$$f.part" && mv "$$f.part" "$$f"; then echo "backup $$f"
-          else rm -f "$$f.part"; echo "backup failed" >&2; fi
+          # A failed dump retries after a minute, not after a full interval: when Docker starts
+          # this container together with postgres, the first attempt comes before the database
+          # accepts connections.
+          if pg_dump -Fc -f "$$f.part" && mv "$$f.part" "$$f"; then
+            echo "backup $$f"; wait=$$((EVERY_HOURS * 3600))
+          else
+            rm -f "$$f.part"; echo "backup failed, retrying in 60 s" >&2; wait=60
+          fi
           find /backups -name 'plate-*.dump' -mtime +$$KEEP_DAYS -delete
-          sleep $$((EVERY_HOURS * 3600))
+          sleep $$wait
         done
     depends_on:
       postgres: { condition: service_healthy }
