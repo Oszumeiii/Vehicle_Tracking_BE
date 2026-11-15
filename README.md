@@ -107,7 +107,7 @@ Vì mỗi track là một job, review, xem crop, xuất CSV và tra cứu biển
 1. `POST /api/v2/stream-sources` với body `{ "name": "...", "url": "https://www.youtube.com/watch?v=...", "exclude_zones": [[x1, y1, x2, y2]] }`.
    Vùng loại trừ là hình chữ nhật chuẩn hóa 0..1. Detection có tâm nằm trong vùng bị bỏ qua, dùng cho biển tên đường hay bảng quảng cáo cố định mà detector nhầm là biển số.
 2. `POST /api/v2/stream-sources/{id}/sessions` với body `{ "pipeline_id": "pbl6-svtrv2-regional-joint5-v1" }` trả `202` và phiên `queued`. Mỗi camera chỉ có một phiên hoạt động. Tùy chọn:
-   - `min_confidence` (mặc định 0.96): từ ngưỡng này track được đánh dấu `readable`. Ngưỡng được hiệu chỉnh trên tập ICPR có nhãn để precision đạt 95%, xem [EVALUATION.md](docs/EVALUATION.md#kết-quả-hiệu-chỉnh-offline-trên-icpr-26102026);
+   - `min_confidence` (mặc định 0.85): từ ngưỡng này track được đánh dấu `readable`. Trên tập ICPR có nhãn, 0.85 cho precision khoảng 87% và 0.96 cho 96%; nhóm chọn 0.85 vì ở 0.96 camera live gần như không có track `readable`, xem [EVALUATION.md](docs/EVALUATION.md#kết-quả-hiệu-chỉnh-offline-trên-icpr-26102026);
    - `max_track_seconds` (mặc định 30): chốt track của xe đỗ hoặc xe chờ đèn.
 3. Theo dõi real-time qua `GET /api/v2/live-events/stream` (SSE: trạng thái, stats, từng biển số vừa đọc, cảnh báo watchlist; xem [API.md](docs/API.md#sự-kiện-real-time-sse)), hoặc poll `GET /api/v2/live-sessions/{id}`:
    - `status` đi từ `queued`, `starting`, `running` (`reconnecting` khi rớt mạng), qua `stopping`, đến một trong `stopped`, `ended`, `failed`, `interrupted`;

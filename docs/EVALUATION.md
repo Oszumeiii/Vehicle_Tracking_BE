@@ -164,7 +164,7 @@ Kiểm thử riêng bộ chấm:
 
 ## Hiệu chỉnh ngưỡng tin cậy live
 
-`min_confidence` (mặc định **0.96**) quyết định track live nào được đánh dấu `readable`. Ngưỡng chỉ được hiệu chỉnh bằng **nhãn độc lập**; review trong ứng dụng không phải nhãn và không được dùng làm ground truth.
+`min_confidence` (mặc định **0.85** từ 15/11/2026, trước đó 0.96) quyết định track live nào được đánh dấu `readable`. Ngưỡng chỉ được hiệu chỉnh bằng **nhãn độc lập**; review trong ứng dụng không phải nhãn và không được dùng làm ground truth.
 
 `readable` là nhãn tham khảo: nó chỉ đổi trạng thái hiển thị và bộ lọc `confidence_status`. Cảnh báo watchlist và việc gom lượt xuất hiện vẫn chạy với mọi track đọc ra chữ; mỗi cảnh báo kèm `confidence_status` để người xem biết mức tin cậy.
 
@@ -192,7 +192,7 @@ Chạy lại `scripts/calibrate_icpr.py` với payload của pipeline đang dùn
 | 0.99 | 99,6% (97,6–99,9) | 7,8% | 100% (94,8–100) | 7,0% |
 
 **Kết luận:**
-- Gộp hai tập (4000 track), ngưỡng nhỏ nhất có **cận dưới ≥ 95%** vẫn là **0.96** (precision 96,2%, cận dưới 95,5%). Giữ nguyên mặc định `min_confidence=0.96`; không cần migration.
+- Gộp hai tập (4000 track), ngưỡng nhỏ nhất có **cận dưới ≥ 95%** vẫn là **0.96** (precision 96,2%, cận dưới 95,5%). Lúc đo, mặc định `min_confidence=0.96` được giữ nguyên.
 - Ở cùng ngưỡng, SVTRv2 gắn `readable` cho **72,9%** track so với 68,9% của model cũ: nhiều hơn khoảng 4 điểm phần trăm, precision giữ nguyên.
 - Độ chính xác tăng ở mọi cỡ crop; nhóm 40–49 px (đông nhất, gần cỡ crop live) tăng từ 73,7% lên 77,4% trên test.
 - Confidence của SVTRv2 dồn sát 0,99: từ 0.98 lên 0.99 coverage rơi từ 61% xuống 8%. Không nên đặt ngưỡng 0.99.
@@ -246,7 +246,9 @@ Track live mất nhãn `readable` nhiều hơn trên ICPR. Lý do: confidence tr
 2. Checkpoint được chọn theo điểm trên validation, nên số đo của tập validation hơi lạc quan; tập test thì không bị ảnh hưởng.
 3. Chưa xác nhận trên live bằng nhãn người. Cách xác nhận: tạo bộ mẫu trong tab **Gán nhãn** từ camera có biển lớn (crop từ 50 px trở lên), mỗi mẫu cần ít nhất 2 người gán, rồi xem precision ở ngưỡng 0.96 trong **Báo cáo ngưỡng**.
 
-**Camera đã tạo trước thay đổi:** migration `0009_live_threshold.sql` đổi `auto_settings.min_confidence` từ đúng 0.85 (mặc định cũ) sang 0.96. Camera đặt giá trị khác giữ nguyên. Camera cố ý chọn đúng 0.85 không phân biệt được nên cũng bị đổi; muốn giữ thì đặt lại bằng `PATCH /api/v2/stream-sources/{id}`. Phiên bật tay không truyền `min_confidence` sẽ dùng 0.96.
+**Mặc định hạ về 0.85 (15/11/2026):** ở 0.96, camera live của nhóm gần như không có track `readable` (camera 24/7: 0 trong 433 track của một phiên, các phiên trước khoảng 1%), vì biển nhỏ và xa nên confidence thấp hơn ICPR. Nhóm chọn lại 0.85 để có track `readable` trên live và chấp nhận precision thấp hơn: trên ICPR với SVTRv2 là khoảng 87% (cứ 8 track `readable` thì khoảng 1 track sai) thay vì 96%, và trên live có thể thấp hơn nữa. Track `readable` vì vậy vẫn cần người duyệt trước khi dùng làm bằng chứng. Migration `0019_live_threshold_085.sql` đổi `auto_settings.min_confidence` từ đúng 0.96 sang 0.85; camera đặt giá trị khác giữ nguyên. Track đã ghi giữ trạng thái cũ.
+
+**Camera đã tạo trước thay đổi 0.85 → 0.96:** migration `0009_live_threshold.sql` đổi `auto_settings.min_confidence` từ đúng 0.85 (mặc định cũ) sang 0.96. Camera đặt giá trị khác giữ nguyên. Camera cố ý chọn đúng 0.85 không phân biệt được nên cũng bị đổi; muốn giữ thì đặt lại bằng `PATCH /api/v2/stream-sources/{id}`. Phiên bật tay không truyền `min_confidence` sẽ dùng 0.96.
 
 **Chạy lại** (cần `kaggle` CLI đã đăng nhập; dữ liệu khoảng 690 MB, nằm trong `data/`, không commit):
 

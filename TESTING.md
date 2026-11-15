@@ -37,7 +37,7 @@ checkpoint, kiểm tra preprocess và prediction contract khi checkpoint có m�
 Việc này chưa đo accuracy trên biển số Việt Nam. Chi tiết tại
 [OCR_KAGGLE.md](docs/OCR_KAGGLE.md). Ngày 09/11/2026, SVTRv2 được đo lại trên
 ICPR (3000 track test và 1000 validation): đọc đúng 79,6% / 81,4%, và ngưỡng
-`readable` 0.96 vẫn đạt precision ≥ 95%; xem
+`readable` 0.96 vẫn đạt precision ≥ 95% (mặc định hiện là 0.85, precision khoảng 87%); xem
 [EVALUATION.md](docs/EVALUATION.md#kết-quả-hiện-tại--svtrv2-base-regional-09112026).
 
 Đợt rà soát source ngày **11/10/2026**: **50 test Node và 98 test Python đạt**;
