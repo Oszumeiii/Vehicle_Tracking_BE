@@ -413,3 +413,29 @@ Tổng cộng 20/280 mẫu có nhãn, đều thuộc nhóm crop lớn nhất và
 
 - **Kết luận:** ROI giúp **bám vết**: box chuẩn hơn, nhiều track đủ 5 ảnh hơn, độ tin cậy nhích lên. Số biển `readable` không tăng, vì crop OCR vẫn lấy từ pixel gốc của khung, và giới hạn chính là độ nét của nguồn YouTube.
 - **Hướng tiếp:** gán nhãn người cho crop của chính camera này (tab Gán nhãn), rồi tinh chỉnh OCR và chọn ngưỡng riêng cho camera.
+
+## Biển bị sót do bộ bám vết (16/11/2026)
+
+- **Hiện tượng:** xem video thấy nhiều xe đi qua mà hệ thống không ghi biển nào.
+- **Cách đo:** chạy pipeline `pbl6-svtrv2-regional-joint5-v1` ngoài hệ thống trên hai đoạn ngắn, mỗi cấu hình một lượt trên đúng footage đó. Bản tham chiếu soi **mọi khung hình** với ảnh detector 1920 px (không chạy được thời gian thực). "Biển đọc rõ của tham chiếu" là biển tham chiếu đọc với độ tin cậy từ 0,85; một cấu hình "thấy" biển đó khi có track cùng thời điểm với chuỗi lệch tối đa 1 ký tự.
+  - A: 45 giây đầu video `04_5phut_00h30m-00h35m.mp4` (2560×1440, xe chạy nhanh qua khung).
+  - B: 60 giây đầu bản ghi camera Canada Orla (1920×1080, xe chạy chậm, biển nhỏ).
+
+| Cấu hình | A: track lưu | A: thấy biển đọc rõ của tham chiếu (8) | A: track từ 0,85 | B: track lưu | B: track từ 0,5 | Detector, giây GPU mỗi giây video |
+|---|---|---|---|---|---|---|
+| Trước khi sửa (8/12/15 fps, 1280 px) | 0 | 0 | 0 | 21 | 9 | 0,2 |
+| Lấy mẫu 15/20/25 fps | 4 | 2 | 2 | 28 | 7 | 0,4 |
+| Ảnh detector 1920 px | 0 | 0 | 0 | 26 | 11 | 0,5 |
+| Cho phép track 4 ảnh | 0 | 0 | 0 | 21 | 9 | 0,2 |
+| **`association_reach` 1,5 (đang dùng)** | **9** | **8** | **8** | **25** | **8** | **0,2** |
+| `association_reach` 1 | 9 | 8 | 7 | 25 | 8 | 0,2 |
+| `association_reach` 1 + 15/20/25 fps | 11 | 8 | 8 | 29 | 7 | 0,4 |
+| Tham chiếu (mọi khung, 1920 px) | 12 | 8 | 8 | 36 | 10 | 2,0 |
+
+- **Nguyên nhân:** trên đoạn A detector vẫn thấy biển (212 box trong 278 khung lấy mẫu) nhưng không track nào được lưu, và cũng không track nào bị báo loại. BoT-SORT ghép box bằng IoU; ở 8 khung/giây biển của xe đang chạy dịch xa hơn kích thước của nó giữa hai khung, IoU bằng 0, track mới không bao giờ được xác nhận nên biến mất không dấu vết. Tăng FPS chỉ giảm một phần; tăng cỡ ảnh detector hay hạ số ảnh tối thiểu không có tác dụng.
+- **Cách sửa:** nới box trước khi tính IoU (`tracking.association_reach`, mặc định 1,5 lần bề rộng biển). Không tốn thêm GPU.
+- **Giới hạn:**
+  - Hai đoạn ngắn, không có nhãn người: "đúng" ở đây là khớp với bản tham chiếu, và bản tham chiếu cũng đọc sai được. Trên đoạn A, trong 8 biển thấy lại có 5 biển trùng đúng từng ký tự; 3 biển lệch 1 ký tự (ví dụ `MKY3950`/`MKY3350`), chưa biết bên nào đúng.
+  - Trên đoạn B (xe chậm) số track tăng 21 → 25 nhưng số track độ tin cậy cao không tăng: ở đó giới hạn là độ nét của nguồn, như phần ROI ở trên.
+  - Chưa đo trên cảnh đông xe sát nhau, nơi box nới rộng có thể ghép nhầm hai biển gần nhau.
+
