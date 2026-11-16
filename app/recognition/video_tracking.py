@@ -170,6 +170,44 @@ class SampledTrackerClock:
         return tracker.update(boxes, image)
 
 
+def plate_tracker(args, reach=0.):
+    """BoT-SORT whose association tolerates the gap between sampled frames.
+
+    A plate is small and, at 8 sampled frames a second, a passing car moves it by more than
+    its own size between two frames: the boxes do not overlap, the stock IoU match fails and
+    the new track is never confirmed, so the plate is lost without a trace. With reach > 0
+    both boxes are grown by reach x their width on every side before the IoU is taken, which
+    lets a detection match a track up to about 2 x reach plate widths away. Plates of
+    different cars are further apart than that.
+    """
+    from ultralytics.trackers.bot_sort import BOTSORT
+    if not reach:
+        return BOTSORT(args)
+
+    def grown(tracks):
+        boxes = np.array([track.xyxy for track in tracks], dtype=np.float32).reshape(-1, 4)
+        margin = reach * (boxes[:, 2] - boxes[:, 0])
+        boxes[:, 0] -= margin
+        boxes[:, 1] -= margin
+        boxes[:, 2] += margin
+        boxes[:, 3] += margin
+        return boxes
+
+    class ReachTracker(BOTSORT):
+        def get_dists(self, tracks, detections):
+            if not len(tracks) or not len(detections):
+                return np.zeros((len(tracks), len(detections)), dtype=np.float32)
+            a, b = grown(tracks)[:, None, :], grown(detections)[None, :, :]
+            width = np.clip(np.minimum(a[..., 2], b[..., 2]) - np.maximum(a[..., 0], b[..., 0]), 0, None)
+            height = np.clip(np.minimum(a[..., 3], b[..., 3]) - np.maximum(a[..., 1], b[..., 1]), 0, None)
+            overlap = width * height
+            union = ((a[..., 2] - a[..., 0]) * (a[..., 3] - a[..., 1])
+                     + (b[..., 2] - b[..., 0]) * (b[..., 3] - b[..., 1]) - overlap)
+            return (1 - overlap / np.maximum(union, 1e-9)).astype(np.float32)
+
+    return ReachTracker(args)
+
+
 QUALITY_WEIGHTS = dict(sharp=0.35, height=0.30, conf=0.25, edge=0.10)
 TOP_FRACTION = 0.5
 MIN_POOL = 8
@@ -204,11 +242,10 @@ class TrackSession:
     """
 
     def __init__(self, model, cfg, detections_file=None, gate_file=None, retain_images=False):
-        from ultralytics.trackers.bot_sort import BOTSORT
         self.model, self.cfg = model, cfg
         self.selector = AdaptiveSelector(cfg["fps"], **cfg["sampling"])
         self.gate = EmptySceneGate(**cfg["empty_scene_gate"])
-        self.tracker = BOTSORT(SimpleNamespace(**cfg["botsort"]))
+        self.tracker = plate_tracker(SimpleNamespace(**cfg["botsort"]), cfg.get("association_reach", 0))
         self.clock = SampledTrackerClock(self.tracker, cfg["fps"])
         self.max_track_seconds = cfg.get("max_track_seconds") or 0
         if not math.isfinite(self.max_track_seconds) or self.max_track_seconds < 0:
@@ -739,6 +776,8 @@ class TrackingConfig:
                     device="cpu" if snapshot["device"] == "cpu" else 0,
                     crop_confidence=tracking["crop_confidence"], crop_padding=tracking["crop_padding"],
                     min_frames=tracking.get("min_frames", 5),
+                    # Absent in snapshots made before the option existed: they keep plain IoU.
+                    association_reach=tracking.get("association_reach", 0),
                     sampling=dict(snapshot["sampling"]), empty_scene_gate=dict(snapshot["empty_scene_gate"]),
                     botsort=dict(tracker_type="botsort", track_high_thresh=.25, track_low_thresh=.10,
                                  new_track_thresh=.25,

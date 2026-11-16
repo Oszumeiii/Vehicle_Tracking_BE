@@ -385,3 +385,45 @@ def test_four_crop_tracks_are_kept_when_the_pipeline_allows_them(tmp_path):
     with pytest.raises(ValueError, match="invalid selection"):
         AppearanceBuilder.build_appearance({"track_id": "1", "first_frame": 1, "last_frame": 3}, [
             {"selected_order": i, "frame_index": i} for i in (1, 2, 3)], folder, tmp_path, 0, 1, "video_pts")
+
+
+class MovingPlate:
+    """One 60x20 plate that moves 90 px (1.5 plate widths) between sampled frames."""
+
+    def __init__(self):
+        self.frame = 0
+
+    def predict(self, images, **kwargs):
+        from ultralytics.engine.results import Boxes
+        results = []
+        for image in images:
+            x = 20 + 90 * self.frame
+            self.frame += 1
+            results.append(SimpleNamespace(boxes=Boxes(np.asarray([[x, 80, x + 60, 100, .9, 0]], dtype=np.float32),
+                                                       image.shape[:2])))
+        return results
+
+
+@pytest.mark.parametrize("reach,tracks", [(0, 0), (1.5, 1)])
+def test_association_reach_follows_a_plate_that_moves_more_than_its_size_between_frames(reach, tracks):
+    from app.recognition.video_tracking import TrackSession
+    snapshot = {"device": "cpu", "sampling": SAMPLING, "empty_scene_gate": {**GATE, "enabled": False},
+                "tracking": {**TRACKING, "association_reach": reach}}
+    cfg = TrackingConfig.tracking_config(960, 180, 10., 0, snapshot, "moving")
+    assert cfg["association_reach"] == reach
+    found = []
+    with TrackSession(MovingPlate(), cfg) as session:
+        for index in range(1, 9):
+            found += session.push(index, (index - 1) / 10, np.full((180, 960, 3), 180, np.uint8))
+        found += session.close()
+    assert len(found) == tracks
+    # Without reach the boxes never overlap: only the first frame's detection ever becomes a track.
+    assert [r["observations"] for r in session.rejections] == ([] if tracks else [1])
+    if tracks:
+        assert found[0]["observations"] >= 7 and len(found[0]["rows"]) == 5
+
+
+def test_snapshots_without_association_reach_keep_plain_iou():
+    cfg = TrackingConfig.tracking_config(320, 180, 10., 0, {"device": "cpu", "sampling": SAMPLING, "tracking": TRACKING,
+                                                           "empty_scene_gate": GATE}, "old")
+    assert cfg["association_reach"] == 0

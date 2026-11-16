@@ -5,6 +5,7 @@
 - User chốt Adaptive Sampling → YOLO11 → BoT-SORT, sau đó giao crop cho model thành viên đã train.
 - Detector theo notebook [PBL6 PIPELINE](https://www.kaggle.com/code/trnvnhun/pbl6-pipeline): **YOLO11l**, checkpoint `morsetechlab/yolov11-license-plate-detection/license-plate-finetune-v1l.pt`, revision `251a30d7daedca065f56e04b0af04052c907c68f` (mô tả notebook ghi YOLO11n nhưng code dùng v1l). Trước YOLO có adaptive sampling 8/12/15 fps và empty-scene gate.
 - BoT-SORT `with_reid=false`; mỗi track đủ điều kiện xuất đúng **5 crop từ 5 frame khác nhau**, chọn trong nhóm crop nét/lớn nhất rồi trải đều theo thời gian, giữ keyframe nguồn. Một keyframe có thể chứa nhiều biển số.
+- Ghép box vào track: `tracking.association_reach` (mặc định 1,5) nới mỗi box thêm 1,5 lần bề rộng biển về mọi phía trước khi tính IoU, vì ở 8 khung/giây biển của xe đang chạy dịch xa hơn kích thước của chính nó giữa hai khung; `0` là IoU gốc của BoT-SORT. Số đo: `docs/EVALUATION.md`.
 - Quy tắc 5 LR + 5 HR thuộc dữ liệu train cũ, không áp lên đầu vào inference hiện tại.
 - Nhận diện hiện tại: SVTRv2-Base regional nhận đồng thời 5 crop RGB, resize giữ tỉ lệ vào canvas 128×40, checkpoint `single_model_best_svtrv2_base_regional_pool_warmup_v1.pt`, decoder `beam_filter`. Adapter SE-ResNet34-C vẫn tồn tại để chạy snapshot job lịch sử; pipeline mới dùng SVTRv2. Chi tiết ở [OCR_KAGGLE.md](OCR_KAGGLE.md).
 

@@ -142,6 +142,8 @@ export class PipelineRegistry {
         crop_padding: 0.15,
         crop_confidence: 0.25,
         min_frames: 5,
+        // Plate widths a detection may be from its track between two sampled frames (0: plain IoU).
+        association_reach: 1.5,
       };
       if (Object.keys(snapshot.tracking ?? {}).some((k) => !(k in tracking)))
         throw new Error('Unsupported tracking option');
@@ -158,6 +160,8 @@ export class PipelineRegistry {
         tracking.crop_confidence < 0.1 ||
         tracking.crop_confidence > 1 ||
         ![4, 5].includes(tracking.min_frames) ||
+        tracking.association_reach < 0 ||
+        tracking.association_reach > 5 ||
         // Four-crop tracks are read only by the joint model (one crop is repeated).
         (tracking.min_frames === 4 &&
           !(recognize && snapshot.recognizer?.input_mode === 'five_frame_joint'))
