@@ -7,7 +7,7 @@ thread, while decoding, tracking and evidence writing overlap.
 
 Commands are JSON lines on stdin:
   {"cmd": "start", "session": ID, "payload": PATH, "out": DIR,
-   "min_confidence": 0.96, "max_track_seconds": 30}
+   "min_confidence": 0.85, "max_track_seconds": 30}
   {"cmd": "stop", "session": ID}
   {"cmd": "clip", "session": ID, "track": KEY}   clip a track outside the clip policy
   {"cmd": "job", "job": ID, "payload": PATH}   an upload job (recognition-input.json)

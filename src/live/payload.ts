@@ -6,8 +6,12 @@ const YOUTUBE_HOSTS = ['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu
 
 export type Zone = [number, number, number, number];
 
-/** Readable from this OCR confidence: precision 0.95 on labelled ICPR tracks (docs/EVALUATION.md). */
-export const DEFAULT_MIN_CONFIDENCE = 0.96;
+/**
+ * Readable from this OCR confidence. 0.96 reaches precision 0.95 on labelled ICPR tracks but
+ * marks almost nothing readable on the live cameras; the team chose 0.85 (about 0.87
+ * precision on ICPR, docs/EVALUATION.md).
+ */
+export const DEFAULT_MIN_CONFIDENCE = 0.85;
 
 /** True for a YouTube watch, live or short link; the live process resolves it with yt-dlp. */
 export function isYoutubeUrl(url: string) {

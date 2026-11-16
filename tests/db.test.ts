@@ -289,6 +289,13 @@ test('threshold migration moves cameras saved with the old 0.85 default to 0.96 
   assert.deepEqual(await saved(cameras.old), { ...settings.old, min_confidence: 0.96 });
   assert.deepEqual(await saved(cameras.custom), settings.custom);
   assert.deepEqual(await saved(cameras.none), {});
+  // 0019 lowers the default again: only cameras on the previous default follow it.
+  await db.query(
+    await readFile(resolve('src/database/migrations/0019_live_threshold_085.sql'), 'utf8'),
+  );
+  assert.deepEqual(await saved(cameras.old), settings.old);
+  assert.deepEqual(await saved(cameras.custom), settings.custom);
+  assert.deepEqual(await saved(cameras.none), {});
 });
 
 test('only live jobs carry a clip', async () => {

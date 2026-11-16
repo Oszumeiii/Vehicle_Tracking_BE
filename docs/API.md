@@ -109,7 +109,7 @@ Action `confirm` chấp nhận text máy; `correct` bắt buộc text mới; `un
 - `PATCH /api/v2/stream-sources/{id}`: `url` (chỉ camera RTSP, để đổi mật khẩu; loại khác trả `422`), `name`, `exclude_zones`, `always_on`, `auto_settings` (`{pipeline_id, min_confidence?, max_track_seconds?, max_height?}`; `always_on` cần `pipeline_id` của profile joint), `keyframe_retention_hours`, `track_retention_days` (`null` là giữ mãi), `location` (`null` để xóa vị trí), `detect_roi` (`null` để bỏ vùng nhận diện). Áp dụng từ phiên kế tiếp.
   - Camera phát lại video upload còn đổi được `loop` (`true`/`false`); loại camera khác gửi `loop` trả `422`.
 - `DELETE /api/v2/stream-sources/{id}`: `204`; camera đã có phiên trả `409`.
-- `POST /api/v2/stream-sources/{id}/sessions`: `{pipeline_id,min_confidence?,max_track_seconds?,max_height?}` → `202`, phiên `queued`. `min_confidence` mặc định 0.96 (hiệu chỉnh trên ICPR, xem [EVALUATION.md](EVALUATION.md#kết-quả-hiệu-chỉnh-offline-trên-icpr-26102026)). `max_height` là 480, 720 hoặc 1080 (mặc định).
+- `POST /api/v2/stream-sources/{id}/sessions`: `{pipeline_id,min_confidence?,max_track_seconds?,max_height?}` → `202`, phiên `queued`. `min_confidence` mặc định 0.85 (precision khoảng 87% trên ICPR; 0.96 cho 96% nhưng camera live gần như không có track `readable`, xem [EVALUATION.md](EVALUATION.md#kết-quả-hiệu-chỉnh-offline-trên-icpr-26102026)). `max_height` là 480, 720 hoặc 1080 (mặc định).
   - Chỉ profile `five_frame_joint`, nếu không thì trả `422`.
   - Camera đang có phiên hoạt động trả `409`; pipeline chưa sẵn sàng trả `503`.
 - `GET /api/v2/live-sessions`: lọc `stream_source_id`, `status`, phân trang.
