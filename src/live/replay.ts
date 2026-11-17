@@ -2,6 +2,7 @@ import { stat } from 'node:fs/promises';
 import type { QueryResult } from 'pg';
 import { safeStorage } from '../recognition/engine';
 import { demoVideoFile } from './payload';
+import { restoreLocal } from '../media/cloud';
 
 interface Queryable {
   query(text: string, values?: any[]): Promise<QueryResult>;
@@ -38,6 +39,7 @@ export async function replaySource(
       ).rows[0];
       if (!media) return null;
       path = safeStorage(dataDir, media.storage_key);
+      await restoreLocal(path, media.storage_key);
       loop = Boolean(camera.replay_loop);
       recordedAt = loop ? null : (media.recorded_at ?? null);
     } else return null;

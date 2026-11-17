@@ -17,10 +17,14 @@ import { extname, isAbsolute, relative, resolve, sep, basename } from 'node:path
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { diskStorage } from 'multer';
+import type { Response } from 'express';
 import { settings } from '../common/config';
 import { newId } from '../common/http';
+import { cloudStore } from './cloud';
 import { z } from 'zod';
 const run = promisify(execFile);
+/** Long enough to start a video; the page asks again for every view. */
+const CLOUD_LINK_SECONDS = 600;
 const metadataSchema = z
   .object({
     media_type: z.enum(['image', 'video']),
@@ -98,6 +102,25 @@ export class Storage {
     } catch {
       throw new NotFoundException('Artifact not found.');
     }
+  }
+  /**
+   * Send a stored file; one pushed to the bucket and freed from the disk is answered with a
+   * short-lived link to the bucket instead (the browser follows the redirect).
+   */
+  async send(response: Response, key: string, type?: string) {
+    let file: string;
+    try {
+      file = await this.file(key);
+    } catch (error) {
+      const store = cloudStore();
+      // Invalid keys and files that exist but cannot be served stay 404.
+      if (!store || (await stat(this.path(key)).catch(() => null))) throw error;
+      response.setHeader('Cache-Control', 'private, no-store');
+      response.redirect(302, store.presign(key, CLOUD_LINK_SECONDS));
+      return;
+    }
+    if (type) response.type(type);
+    response.sendFile(file);
   }
   async discardUpload(file?: Express.Multer.File) {
     if (file) {

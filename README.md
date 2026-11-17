@@ -59,6 +59,8 @@ Kiểm tra stack đang chạy (API, DB, web, model, camera; thêm `--upload FILE
 
 Máy khác trong nhóm có thể chạy cả hệ thống bằng Docker (cần Docker Desktop và GPU NVIDIA), không phải cài Node/Python/CUDA: `docker compose --profile app up -d --build`, xem [docs/DOCKER.md](docs/DOCKER.md). Đưa lên server có HTTPS, sao lưu tự động và image dựng sẵn: [docs/DEPLOY.md](docs/DEPLOY.md).
 
+Ổ đầy: có thể đẩy crop, keyframe và video upload lên Cloudflare R2 (hoặc dịch vụ chuẩn S3) bằng `npm run cloud:push`, rồi xóa bản trên máy; web vẫn xem được ảnh qua link tạm của bucket. Xem [docs/CLOUD_STORAGE.md](docs/CLOUD_STORAGE.md).
+
 Mở Swagger tại `http://127.0.0.1:3000/docs`. `POST /api/v2/auth/login`, lấy `access_token`, bấm **Authorize** và nhập token. Mọi endpoint nghiệp vụ đều cần Bearer token. `/health` chỉ là liveness; `/health/ready` kiểm tra database/schema, không xác nhận model hoặc worker đang chạy.
 
 ## Chuẩn bị inference

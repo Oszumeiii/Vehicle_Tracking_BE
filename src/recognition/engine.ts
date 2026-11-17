@@ -7,6 +7,7 @@ import type { PoolClient } from 'pg';
 import { Database } from '../database/database';
 import { fusePredictions, normalizePlate } from './fusion';
 import { sha256 } from './registry';
+import { restoreLocal } from '../media/cloud';
 
 type Row = Record<string, any>;
 export interface WorkerOptions {
@@ -710,6 +711,14 @@ export async function processOne(
     checkInterrupted(options);
     await mkdir(folder, { recursive: true });
     job.input_path = safeStorage(options.dataDir, job.storage_key);
+    await restoreLocal(job.input_path, job.storage_key).catch((error) => {
+      throw Object.assign(
+        new Error(`Input could not be restored from cloud storage: ${error.message}`),
+        {
+          code: 'INPUT_CHANGED',
+        },
+      );
+    });
     const actualSource = await realpath(job.input_path).catch(() => {
       throw Object.assign(new Error('Input is missing'), { code: 'INPUT_CHANGED' });
     });

@@ -13,6 +13,8 @@
     "worker": "node dist/src/worker.js",
     "db:migrate": "node dist/src/cli.js migrate",
     "admin:create": "node dist/src/cli.js create-admin",
+    "cloud:check": "node dist/src/cli.js cloud-check",
+    "cloud:push": "node dist/src/cli.js cloud-push",
     "smoke": "node scripts/smoke.mjs",
     "test": "npm run build && node --test --test-concurrency=1 dist/tests/*.test.js",
     "format": "prettier --write \"src/**/*.ts\" \"tests/*.ts\" package.json tsconfig.json",

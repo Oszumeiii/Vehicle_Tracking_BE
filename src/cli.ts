@@ -1,10 +1,13 @@
 import 'reflect-metadata';
 import 'dotenv/config';
 import { randomBytes, randomUUID, scryptSync } from 'node:crypto';
-import { copyFile, mkdir, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { settings } from './common/config';
 import { safeStorage } from './recognition/engine';
+import { cloudStore, type CloudStore } from './media/cloud';
+import { cloudPush } from './media/cloud-push';
 import { Database } from './database/database';
 import { migrate } from './database/migrate';
 import { sampleLiveTracks } from './evaluation/sampling';
@@ -105,6 +108,28 @@ export async function exportLiveSamples(
   return { out, samples: picked.length };
 }
 
+/** Write, read back, link and delete a small object: proves the keys and bucket work. */
+export async function cloudCheck(store: CloudStore) {
+  const key = `healthcheck/${randomUUID()}.json`;
+  const folder = await mkdtemp(path.join(tmpdir(), 'plate-cloud-'));
+  try {
+    const file = path.join(folder, 'probe.json');
+    const body = JSON.stringify({ at: new Date().toISOString() });
+    await writeFile(file, body);
+    await store.put(key, file);
+    if ((await store.head(key)) !== Buffer.byteLength(body))
+      throw new Error('Uploaded size differs.');
+    const linked = await fetch(store.presign(key, 60));
+    if (!linked.ok || (await linked.text()) !== body)
+      throw new Error(`Presigned link failed (${linked.status}).`);
+    await store.remove(key);
+    if ((await store.head(key)) !== null) throw new Error('Delete did not remove the object.');
+    return 'Cloud storage OK: upload, read, presigned link and delete all work.';
+  } finally {
+    await rm(folder, { recursive: true, force: true });
+  }
+}
+
 export async function main(args = process.argv.slice(2)): Promise<void> {
   const [command] = args;
   if (command === 'export-live-samples') {
@@ -112,6 +137,49 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     try {
       const result = await exportLiveSamples(args, database);
       console.log(`Exported ${result.samples} live samples to ${result.out}`);
+    } finally {
+      await database.onModuleDestroy();
+    }
+    return;
+  }
+  if (command === 'cloud-check' || command === 'cloud-push') {
+    const store = cloudStore();
+    if (!store)
+      throw new Error(
+        'Cloud storage is off: set PLATE_R2_ACCOUNT_ID (or PLATE_S3_ENDPOINT), PLATE_S3_BUCKET, ' +
+          'PLATE_S3_ACCESS_KEY_ID and PLATE_S3_SECRET_ACCESS_KEY in .env (docs/CLOUD_STORAGE.md).',
+      );
+    if (command === 'cloud-check') {
+      console.log(`Bucket: ${store.label}`);
+      console.log(await cloudCheck(store));
+      return;
+    }
+    const flags = new Set(args);
+    const days = Number(argument(args, '--older-than-days') ?? 0);
+    if (!Number.isFinite(days) || days < 0) throw new Error('--older-than-days must be >= 0.');
+    const limit = argument(args, '--max-gb');
+    const maxGb = limit === undefined ? undefined : Number(limit);
+    if (maxGb !== undefined && !(maxGb > 0)) throw new Error('--max-gb must be a positive number.');
+    const media = flags.has('--media') || flags.has('--all');
+    const evidence = flags.has('--evidence') || flags.has('--all') || !media;
+    const database = new Database();
+    try {
+      const summary = await cloudPush(database, settings().dataDir, store, {
+        evidence,
+        media,
+        freeLocal: flags.has('--free-local'),
+        olderThanDays: days,
+        dryRun: flags.has('--dry-run'),
+        concurrency: 8,
+        maxGb,
+      });
+      const mb = (bytes: number) => `${(bytes / 1048576).toFixed(1)} MB`;
+      console.log(
+        `Uploaded ${summary.uploaded} (${mb(summary.uploadedBytes)}), already there ${summary.alreadyThere}, ` +
+          `freed ${summary.freed} local file(s) (${mb(summary.freedBytes)}), kept ${summary.kept} replayed video(s), ` +
+          `${summary.overLimit} over --max-gb, failed ${summary.failed}. Bucket now ${mb(summary.bucketBytes)}.`,
+      );
+      if (summary.failed) process.exitCode = 1;
     } finally {
       await database.onModuleDestroy();
     }
@@ -125,7 +193,9 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     throw new Error(
       'Run npm run build first, then use: npm run db:migrate | npm run admin:create -- --email EMAIL' +
         ' | node dist/src/cli.js live-payload --pipeline ID --url YOUTUBE_URL --out FILE' +
-        ' | node dist/src/cli.js export-live-samples --source CAMERA_ID --out DIR [--per-bin N]',
+        ' | node dist/src/cli.js export-live-samples --source CAMERA_ID --out DIR [--per-bin N]' +
+        ' | node dist/src/cli.js cloud-check' +
+        ' | node dist/src/cli.js cloud-push [--evidence|--media|--all] [--free-local] [--older-than-days N] [--max-gb N] [--dry-run]',
     );
   }
   const database = new Database();

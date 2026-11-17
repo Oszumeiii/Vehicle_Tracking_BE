@@ -50,6 +50,7 @@ import { PipelineRegistry } from '../recognition/registry';
 import { Storage } from '../media/storage';
 import { LiveEventsHub } from './events.hub';
 import { removeFolder } from './files';
+import { forgetInCloud } from '../media/cloud';
 import {
   DEFAULT_MIN_CONFIDENCE,
   DEMO_VIDEO_DIR,
@@ -422,7 +423,7 @@ export class LiveController {
       res.status(204).end();
       return;
     }
-    res.sendFile(await this.storage.file(frame.frame_storage_key));
+    await this.storage.send(res, frame.frame_storage_key);
   }
 
   @Get('live-events/stream')
@@ -794,6 +795,7 @@ export class LiveController {
       details: { results: jobs.length },
     });
     for (const job of jobs) await removeFolder(this.storage.path(`recognition/${job}`));
+    void forgetInCloud(jobs.map((job) => `recognition/${job}/`));
     await removeFolder(this.storage.path(`live/${id}`));
   }
 
