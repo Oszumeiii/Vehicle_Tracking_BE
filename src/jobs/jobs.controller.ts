@@ -32,6 +32,7 @@ import {
   PipelineResponse,
 } from '../common/api-models';
 import { Storage } from '../media/storage';
+import { forgetInCloud } from '../media/cloud';
 import { AuthGuard } from '../auth/auth.guard';
 import { AuditLog } from '../audit/audit';
 import { PipelineRegistry } from '../recognition/registry';
@@ -94,6 +95,7 @@ export class JobOperations {
     }
     // A cleanup failure leaves only an inaccessible trash folder; the deletion is committed.
     await quarantined?.purge().catch(() => {});
+    void forgetInCloud([`recognition/${id}/`]);
   }
 }
 

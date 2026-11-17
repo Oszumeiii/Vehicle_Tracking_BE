@@ -443,7 +443,7 @@ export class ResultsController {
       ).rows[0]?.input_storage_key;
     // Pruned live keyframes have no key left; their crops stay available.
     if (!key) throw new NotFoundException('Artifact not found.');
-    response.sendFile(await this.storage.file(key));
+    await this.storage.send(response, key);
   }
 
   @Get('recognition-jobs/:id/export')

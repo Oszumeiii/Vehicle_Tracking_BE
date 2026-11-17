@@ -5,6 +5,7 @@ import { auditRetentionDays } from '../audit/audit';
 import { Database } from '../database/database';
 import { safeStorage, WorkerOptions } from '../recognition/engine';
 import { folderBytes, removeFolder } from './files';
+import { forgetInCloud } from '../media/cloud';
 
 export interface RetentionSettings {
   intervalMs: number;
@@ -127,9 +128,10 @@ export class Retention {
           [id],
         )
       ).rows.map((row) => row.frame_storage_key);
-      for (const key of keys)
-        if (!kept.includes(key))
-          await rm(safeStorage(this.options.dataDir, key), { force: true }).catch(() => {});
+      const gone = keys.filter((key) => !kept.includes(key));
+      for (const key of gone)
+        await rm(safeStorage(this.options.dataDir, key), { force: true }).catch(() => {});
+      await forgetInCloud(gone);
       await this.database.query('UPDATE recognition_jobs SET evidence_bytes=$2 WHERE id=$1', [
         id,
         await folderBytes(safeStorage(this.options.dataDir, `recognition/${id}`)),
@@ -153,6 +155,7 @@ export class Retention {
     ).rows;
     for (const { id } of deleted)
       await removeFolder(safeStorage(this.options.dataDir, `recognition/${id}`));
+    await forgetInCloud(deleted.map(({ id }) => `recognition/${id}/`));
     return deleted.length;
   }
 
@@ -206,6 +209,7 @@ export class Retention {
       for (const name of names)
         if (!known.has(name) && (await old(path.join(recognition, name), HOUR))) {
           await removeFolder(path.join(recognition, name));
+          await forgetInCloud([`recognition/${name}/`]);
           removed++;
         }
     }

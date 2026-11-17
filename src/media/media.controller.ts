@@ -35,6 +35,7 @@ import { MediaResponse } from '../common/api-models';
 import { AuthGuard } from '../auth/auth.guard';
 import { AuditLog } from '../audit/audit';
 import { Storage, MediaUploadInterceptor } from './storage';
+import { forgetInCloud } from './cloud';
 import { diskLow } from '../common/disk';
 import { settings } from '../common/config';
 
@@ -212,9 +213,8 @@ export class MediaController {
   )
   @ApiFailures(404)
   async content(@Req() req: { user: Actor }, @Param('id') id: string, @Res() response: Response) {
-    const media = await this.owner.media(req.user, id),
-      path = await this.storage.file(media.storage_key);
-    response.type(media.mime_type).sendFile(path);
+    const media = await this.owner.media(req.user, id);
+    await this.storage.send(response, media.storage_key, media.mime_type);
   }
   @Delete(':id')
   @HttpCode(204)
@@ -251,5 +251,6 @@ export class MediaController {
     });
     // The committed deletion stays successful if filesystem cleanup must be retried.
     await quarantined?.purge().catch(() => {});
+    void forgetInCloud([`media/${id}/`]);
   }
 }

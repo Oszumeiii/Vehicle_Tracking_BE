@@ -450,7 +450,7 @@ export class EvaluationController {
     ).rows[0];
     const key = which === 'crop' ? detection?.crop_storage_key : detection?.frame_storage_key;
     if (!key) throw new NotFoundException('Artifact not found.');
-    response.sendFile(await this.storage.file(key));
+    await this.storage.send(response, key);
   }
 
   @Get(':id/report')
