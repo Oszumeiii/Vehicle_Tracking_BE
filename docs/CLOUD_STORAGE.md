@@ -69,6 +69,29 @@ npm run cloud:push -- --all --free-local --older-than-days 7 --max-gb 9.5
 | `--max-gb N` | Dừng đẩy trước khi phần dữ liệu của hệ thống trong bucket vượt N GB. File cũ được đẩy trước; file còn lại để ở máy. |
 | `--dry-run` | Không ghi gì, chỉ báo số file và số MB. |
 
+## Tự động chuyển crop và keyframe lên bucket
+
+Thay vì chạy `cloud:push` bằng tay, worker có thể tự làm việc này. Thêm vào `.env`:
+
+```
+PLATE_CLOUD_EVIDENCE_AFTER_HOURS=1   # kết quả cũ hơn 1 giờ thì ảnh chuyển lên bucket
+# PLATE_CLOUD_MAX_GB=9.5             # dừng trước khi bucket vượt mức này (mặc định 9.5)
+# PLATE_CLOUD_SYNC_MINUTES=60        # bao lâu chạy một lần (mặc định 60 phút)
+```
+
+Mỗi lần chạy, worker làm các bước sau:
+
+1. Lấy ảnh crop và keyframe (`.png`, `.jpg`) của các job đã xong, cũ hơn số giờ đặt ở trên. File cũ được xử lý trước.
+2. Đẩy từng ảnh lên bucket, kiểm tra kích thước trên bucket khớp với file, rồi mới xóa bản trên máy.
+3. Khi bucket sắp vượt `PLATE_CLOUD_MAX_GB`, worker dừng đẩy. Ảnh còn lại để ở máy, và log của worker ghi số file bị giữ lại.
+
+Một số điểm cần biết:
+
+- **Những gì không chuyển:** `track.json`, clip `.mp4` và video upload vẫn ở trên máy. Muốn chuyển video upload thì dùng `npm run cloud:push -- --media --free-local`.
+- **Xem ảnh trên web:** vẫn bình thường. Ảnh không còn trên máy thì API chuyển hướng tới link tạm 10 phút của bucket. Lệnh lấy mẫu gán nhãn (`sample-labels`) tự tải lại ảnh từ bucket.
+- **Xóa:** retention, xóa job, xóa phiên hay xóa video thì xóa luôn bản trên bucket.
+- **Khi cấu hình sai:** nếu chưa cấu hình bucket (4 biến ở trên) thì tính năng này không làm gì và worker ghi một dòng cảnh báo.
+
 ## Hạn mức miễn phí
 
 Theo bảng giá Cloudflare tại thời điểm viết (nên kiểm tra lại trên trang Cloudflare):

@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { settings } from './common/config';
 import { safeStorage } from './recognition/engine';
-import { cloudStore, type CloudStore } from './media/cloud';
+import { cloudStore, restoreLocal, type CloudStore } from './media/cloud';
 import { cloudPush } from './media/cloud-push';
 import { Database } from './database/database';
 import { migrate } from './database/migrate';
@@ -71,11 +71,17 @@ export async function exportLiveSamples(
     ).rows;
     for (const detection of evidence) {
       const crop = detection.crop_storage_key as string;
+      // Evidence moved to the bucket (cloud sync) is fetched back first.
+      await restoreLocal(safeStorage(dataDir, crop), crop);
       await copyFile(
         safeStorage(dataDir, crop),
         path.join(folder, `crop_${detection.selected_order}${path.extname(crop)}`),
       );
-      if (detection.frame_storage_key)
+      if (detection.frame_storage_key) {
+        await restoreLocal(
+          safeStorage(dataDir, detection.frame_storage_key),
+          detection.frame_storage_key,
+        );
         await copyFile(
           safeStorage(dataDir, detection.frame_storage_key),
           path.join(
@@ -83,6 +89,7 @@ export async function exportLiveSamples(
             `frame_${detection.selected_order}${path.extname(detection.frame_storage_key)}`,
           ),
         );
+      }
     }
     predictions.push({
       sample_id: row.job_id,
