@@ -78,6 +78,7 @@ test('Registry pins local code/checkpoints, sanitizes public metadata and refuse
     assert.equal(snapshot.detector.sha256, await sha256(path.join(root, 'detector.pt')));
     assert.equal(snapshot.tracking.crop_padding, 0.15);
     assert.equal(snapshot.tracking.ocr_padding, 0);
+    assert.equal(snapshot.tracking.ocr_deskew_degrees, 15);
     assert.deepEqual(snapshot.sampling, {
       low_fps: 8,
       med_fps: 12,
