@@ -330,7 +330,8 @@ class LiveRunner:
                                       candidate["last_seconds"], "live_pts")
         detections = appearance["detections"]
         started = time.perf_counter()
-        paths, boxes = PredictionRunner.detection_inputs(detections, self.data_dir, cfg.get("ocr_padding"))
+        paths, boxes = PredictionRunner.detection_inputs(detections, self.data_dir, cfg.get("ocr_padding"),
+                                                       cfg.get("ocr_deskew_degrees"))
         prediction = PredictionRunner.predict_joint(self.recognizer, paths, self.data_dir, boxes)
         ocr_seconds = time.perf_counter() - started
         for detection in detections:

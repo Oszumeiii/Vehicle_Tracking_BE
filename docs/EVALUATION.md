@@ -464,6 +464,24 @@ Tổng cộng 20/280 mẫu có nhãn, đều thuộc nhóm crop lớn nhất và
 - Dữ liệu và script: `data/evaluation/ocr_padding/` (không commit).
 - **Theo cỡ biển** (cùng 55 track, cắt sát): biển rộng dưới 70 px đọc đúng SVTRv2 11/25, SE-ResNet34-C 15/25; biển từ 70 px chỉ 3/30 với SVTRv2 so với 12/30 với SE-ResNet34-C. Thu nhỏ ảnh còn 48 px trước khi đọc giúp SVTRv2 một chút (3 → 6/30 ở biển lớn) nhưng vẫn kém xa model cũ. Biển lớn và gần camera là nơi SVTRv2 thua rõ nhất.
 
+## Biển nghiêng (21/11/2026)
+
+- **Hiện tượng:** sau khi cắt sát (mục trên), biển rõ vẫn bị đọc sai vài ký tự, thường ở cuối biển (`ENZ2E12` → `ENZ2E32`, `TQE1J16` → `TQE3336`).
+- **Nguyên nhân:** camera đặt cao và lệch so với làn xe, nên biển trong ảnh nghiêng. Trên 55 track có nhãn, góc nghiêng trung vị là 9,5°, và 93% track nghiêng từ 4° trở lên. Ảnh train ICPR là biển gần như nằm ngang; khi resize vào khung 128×40 (SVTRv2) hoặc 192×48 (SE-ResNet34-C), dòng chữ nghiêng chéo qua khung và ký tự ở hai đầu bị cắt hoặc méo.
+- **Cách sửa:** `tracking.ocr_deskew_degrees` (mặc định 15). Mỗi track đo một góc nghiêng: với từng crop (box detector cộng 5%), nhị phân Otsu, xoay từ −15° đến 15° bước 0,5°, chọn góc mà tổng điểm đen theo từng hàng có phương sai lớn nhất; góc của track là trung vị 5 góc. Crop được xoay quanh tâm box rồi cắt đúng cỡ biển khi nằm ngang. Crop lưu làm bằng chứng không đổi.
+- **Kết quả** (cùng 55 track và nhãn của mục trên, O=Q và I=J; chạy qua đúng đường code `PredictionRunner.detection_inputs` + `predict_joint`; tham số chọn trước, không tinh chỉnh trên bộ này):
+
+| OCR | Xoay thẳng | Đúng cả biển (55) | Tỷ lệ ký tự sai | Độ tin cậy ≥ 0,85: đúng / số track |
+|---|---|---|---|---|
+| SVTRv2 (đang dùng) | không | 18 | 21,8% | 15 / 31 |
+| **SVTRv2** | **có** | **29** | **11,9%** | **27 / 46** |
+| SE-ResNet34-C | không | 26 | 15,3% | 22 / 34 |
+| **SE-ResNet34-C** | **có** | **44** | **4,7%** | **44 / 54** |
+
+- 8 biển trong ảnh chụp màn hình user gửi (camera "BC – Pau da Viola", phiên 16:24 UTC; một track là đèn hậu, một biển quá mờ để gán nhãn): phiên đó còn đọc nguyên crop có viền 15% vì API chạy từ trước khi #79 được merge, nên chỉ đúng 2/6. Cắt sát + xoay thẳng: SVTRv2 5/6, SE-ResNet34-C 5/6.
+- **Ghi nhận:** trên footage này SE-ResNet34-C cũ vẫn tốt hơn SVTRv2 rõ rệt (44 so với 29 biển đúng). Pipeline `pbl6-resnet34c-joint5-v2` được thêm để chọn theo camera; pipeline mặc định chưa đổi.
+- **Giới hạn:** nhãn do Claude đọc từ crop, chưa phải nhãn người; một khung cảnh, ban ngày. Cách đo góc dựa vào nền biển sáng chữ tối, nên chưa kiểm tra trên biển nền tối hoặc biển bị lóa.
+
 ## Xe bị sót trên camera Balneário Camboriú (21/11/2026)
 
 - **Câu hỏi:** người dùng thấy nhiều xe đi qua mà không có kết quả. Xe bị mất ở bước nào, và phần nào do khâu theo dõi (không phải do OCR đọc sai rồi tìm không ra)?

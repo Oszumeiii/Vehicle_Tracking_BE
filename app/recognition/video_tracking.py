@@ -802,6 +802,8 @@ class TrackingConfig:
                     crop_confidence=tracking["crop_confidence"], crop_padding=tracking["crop_padding"],
                     # Absent in snapshots made before the option existed: OCR reads the whole crop.
                     ocr_padding=tracking.get("ocr_padding"),
+                    # Absent in older snapshots: the plate is read as cut, not levelled.
+                    ocr_deskew_degrees=tracking.get("ocr_deskew_degrees"),
                     min_frames=tracking.get("min_frames", 5),
                     # Absent in snapshots made before the option existed: they keep plain IoU.
                     association_reach=tracking.get("association_reach", 0),

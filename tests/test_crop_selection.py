@@ -102,3 +102,53 @@ def test_ocr_reads_the_detector_box_plus_its_own_margin_from_the_stored_crop():
     # A crop clipped by the frame edge: the region stays inside the stored image.
     edge = dict(bbox=[2., 0., 102., 40.], crop_bbox=[0, 0, 117, 46], crop_width=117, crop_height=46)
     assert PredictionRunner.ocr_box(edge, .05) == [0, 0, 107, 42]
+
+
+def leaning_plate(angle, folder):
+    """A 200 x 60 white plate with a row of dark characters on a dark car, leaning `angle`
+    degrees (cv2 sign); stored as a crop with its detection (box = the plate's extent)."""
+    import cv2
+    import numpy as np
+
+    canvas = np.full((200, 320, 3), 40, np.uint8)
+    cv2.rectangle(canvas, (60, 70), (260, 130), (235, 235, 235), -1)
+    for x in range(72, 250, 26):
+        cv2.rectangle(canvas, (x, 82), (x + 16, 118), (20, 20, 20), -1)
+    matrix = cv2.getRotationMatrix2D((160, 100), angle, 1)
+    canvas = cv2.warpAffine(canvas, matrix, (320, 200), borderValue=(40, 40, 40))
+    ys, xs = np.where(canvas[:, :, 0] > 150)
+    box = [float(xs.min()), float(ys.min()), float(xs.max() + 1), float(ys.max() + 1)]
+    path = folder / f"plate_{angle}.png"
+    cv2.imwrite(str(path), canvas)
+    return dict(bbox=box, crop_bbox=[0, 0, 320, 200], crop_width=320, crop_height=200, crop_storage_key=path.name)
+
+
+def test_skew_angle_levels_a_leaning_plate(tmp_path):
+    import cv2
+    from app.recognition.runner import PredictionRunner
+
+    for lean in (-9, 0, 6, 12):
+        detection = leaning_plate(lean, tmp_path)
+        gray = cv2.imread(str(tmp_path / detection["crop_storage_key"]), cv2.IMREAD_GRAYSCALE)
+        left, top, right, bottom = PredictionRunner.ocr_box(detection, .05)
+        assert abs(PredictionRunner.skew_angle(gray[top:bottom, left:right], 15) + lean) <= 1, lean
+
+
+def test_deskew_reads_the_level_plate_one_angle_per_track(tmp_path):
+    from PIL import Image
+    import numpy as np
+    from app.recognition.runner import PredictionRunner
+
+    detections = [leaning_plate(lean, tmp_path) for lean in (8, 9, 10)]
+    assert PredictionRunner.ocr_regions(detections, tmp_path, None, 15) == [None] * 3, "old snapshots read the whole crop"
+    plain = PredictionRunner.ocr_regions(detections, tmp_path, 0, 0)
+    assert plain == [PredictionRunner.ocr_box(d, 0) for d in detections] and all(len(b) == 4 for b in plain)
+    regions = PredictionRunner.ocr_regions(detections, tmp_path, 0, 15)
+    assert all(r[:4] == b for r, b in zip(regions, plain))
+    assert len({r[4] for r in regions}) == 1 and abs(regions[0][4] + 9) <= 1, "the track's median lean"
+    with Image.open(tmp_path / detections[1]["crop_storage_key"]) as picture:
+        level = PredictionRunner.ocr_image(picture, regions[1])
+    # The level plate is about 200 x 60 (plus the small margin), not the 218 x 90 box it leaned in.
+    assert 195 <= level.width <= 220 and 58 <= level.height <= 72, level.size
+    bright = (np.asarray(level.convert("L")) > 150).mean(axis=1)
+    assert bright[:3].mean() < .5 and bright[len(bright) // 2] > .3, "plate rows in the middle, car above"

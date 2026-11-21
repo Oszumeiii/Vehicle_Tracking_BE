@@ -71,10 +71,59 @@ class PredictionRunner:
         return [left, top, right, bottom]
 
     @staticmethod
+    def skew_angle(gray, limit):
+        """Rotation in degrees (cv2 sign, counter-clockwise) that levels a plate's text rows.
+
+        The plate is Otsu-binarised and rotated in 0.5 degree steps within +-limit; the angle
+        whose row profile has the largest variance (rows of characters and rows of plate
+        background separated most sharply) wins. Live plates on the Balneario Camboriu
+        cameras lean ~10 degrees while the OCR checkpoints were trained on level ICPR plates
+        (docs/EVALUATION.md "Biển nghiêng").
+        """
+        import cv2
+        import numpy as np
+        if gray.size == 0:
+            return 0.0
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        height, width = binary.shape
+        best, best_angle = -1.0, 0.0
+        for angle in np.arange(-limit, limit + 0.25, 0.5):
+            matrix = cv2.getRotationMatrix2D((width / 2, height / 2), float(angle), 1)
+            rows = cv2.warpAffine(binary, matrix, (width, height), flags=cv2.INTER_NEAREST).sum(1)
+            variance = float(rows.astype(float).var())
+            if variance > best:
+                best, best_angle = variance, float(angle)
+        return best_angle
+
+    @staticmethod
     def ocr_image(picture, box):
-        """The RGB image the recognizer receives: the stored crop, cut to box when given."""
+        """The RGB image the recognizer receives: the stored crop, cut to box when given.
+
+        A five-value box [left, top, right, bottom, angle] is the plate rotated by `angle`
+        about its centre first, then cut to the size the level plate has inside that box.
+        """
         image = picture.convert("RGB")
-        return image if box is None else image.crop(tuple(box))
+        if box is None:
+            return image
+        if len(box) == 4 or not box[4]:
+            return image.crop(tuple(box[:4]))
+        import cv2
+        import numpy as np
+        from PIL import Image
+        left, top, right, bottom, angle = box
+        width, height = right - left, bottom - top
+        cx, cy = (left + right) / 2, (top + bottom) / 2
+        matrix = cv2.getRotationMatrix2D((cx, cy), angle, 1)
+        level = cv2.warpAffine(np.asarray(image), matrix, image.size, flags=cv2.INTER_LINEAR,
+                               borderMode=cv2.BORDER_REPLICATE)
+        # A w x h plate turned by t fills a box of w*cos+h*sin by w*sin+h*cos: solve for w, h.
+        cos, sin = math.cos(math.radians(abs(angle))), math.sin(math.radians(abs(angle)))
+        det = max(cos * cos - sin * sin, 0.5)
+        plate_w = max((width * cos - height * sin) / det, width * 0.8) * 1.04
+        plate_h = max((height * cos - width * sin) / det, height * 0.45) * 1.08
+        region = (max(0, round(cx - plate_w / 2)), max(0, round(cy - plate_h / 2)),
+                  min(image.width, round(cx + plate_w / 2)), min(image.height, round(cy + plate_h / 2)))
+        return Image.fromarray(level).crop(region)
 
     @staticmethod
     def predict_crop(recognizer, path, data_dir, box=None):
@@ -129,10 +178,33 @@ class PredictionRunner:
         return [paths[i] for i in order], [boxes[i] for i in order]
 
     @staticmethod
-    def detection_inputs(detections, data_dir, padding):
+    def ocr_regions(detections, data_dir, padding, deskew=None):
+        """Per detection, the region of its stored crop the OCR reads (see ocr_box, ocr_image).
+
+        deskew (tracking.ocr_deskew_degrees; None/0 off, and off whenever padding is None)
+        levels the plate: one angle per track, the median of the angles measured on each
+        crop (the detector box plus 5 %), since the plate's lean barely changes along a track.
+        """
+        boxes = [PredictionRunner.ocr_box(d, padding) for d in detections]
+        if padding is None or not deskew:
+            return boxes
+        import cv2
+        import statistics
+        angles = []
+        for detection in detections:
+            gray = cv2.imread(str(data_dir / detection["crop_storage_key"]), cv2.IMREAD_GRAYSCALE)
+            if gray is None:
+                raise ValueError(f"Cannot read crop {detection['crop_storage_key']}")
+            left, top, right, bottom = PredictionRunner.ocr_box(detection, 0.05)
+            angles.append(PredictionRunner.skew_angle(gray[top:bottom, left:right], deskew))
+        angle = statistics.median(angles)
+        return [box + [angle] for box in boxes]
+
+    @staticmethod
+    def detection_inputs(detections, data_dir, padding, deskew=None):
         """ocr_inputs() for a track's detections, reading `padding` around each detector box."""
         return PredictionRunner.ocr_inputs((data_dir / d["crop_storage_key"] for d in detections),
-                                           [PredictionRunner.ocr_box(d, padding) for d in detections])
+                                           PredictionRunner.ocr_regions(detections, data_dir, padding, deskew))
 
     @staticmethod
     def predict_joint(recognizer, paths, data_dir, boxes=None):
@@ -323,6 +395,7 @@ class RecognitionRunner:
         joint = not prepare and snapshot["recognizer"].get("input_mode", "single_crop") == "five_frame_joint"
         # Absent in snapshots made before the option existed: they read the whole stored crop.
         ocr_padding = snapshot.get("tracking", {}).get("ocr_padding")
+        ocr_deskew = snapshot.get("tracking", {}).get("ocr_deskew_degrees")
         if joint and (payload["media_type"] != "video" or payload["input_mode"] != "scene"):
             raise ValueError("Joint five-frame OCR supports scene video only")
         if not prepare and snapshot["recognizer"]["module_root"] not in sys.path:
@@ -358,7 +431,7 @@ class RecognitionRunner:
                 frames = [d["frame_index"] for d in detections]
                 if len(frames) not in (4, 5) or len(set(frames)) != len(frames) or frames != sorted(frames):
                     raise ValueError("Joint OCR requires four or five ordered, distinct video frames")
-                paths, boxes = PredictionRunner.detection_inputs(detections, data_dir, ocr_padding)
+                paths, boxes = PredictionRunner.detection_inputs(detections, data_dir, ocr_padding, ocr_deskew)
                 prediction = PredictionRunner.predict_joint(recognizer, paths, data_dir, boxes)
                 for detection in detections:
                     detection["predictions"] = []
@@ -372,7 +445,8 @@ class RecognitionRunner:
                     detection["predictions"] = []
                     continue
                 prediction = PredictionRunner.predict_crop(recognizer, data_dir / detection["crop_storage_key"], data_dir,
-                                                           PredictionRunner.ocr_box(detection, ocr_padding))
+                                                           PredictionRunner.ocr_regions([detection], data_dir, ocr_padding,
+                                                                                        ocr_deskew)[0])
                 detection["predictions"] = [prediction]
                 predictions.append(prediction["raw_text"])
             appearance.update(dict(machine_text=None, machine_status="not_run", agreement_count=0)
