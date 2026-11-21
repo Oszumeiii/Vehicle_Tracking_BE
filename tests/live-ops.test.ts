@@ -118,6 +118,17 @@ test('retention prunes keyframes, deletes old tracks, keeps reviewed or alerted 
     await db().query('SELECT evidence_bytes FROM recognition_jobs WHERE id=$1', [pruned])
   ).rows[0].evidence_bytes;
   assert.ok(Number(before) > 0);
+  const retention = new Retention(db(), workerOptions(), { intervalMs: 60_000, batch: 50 });
+  // Footage filmed long ago (a replayed upload with recorded_at) but recognized just now is
+  // within the camera's retention (24 h keyframes, 7 days tracks): nothing goes yet.
+  await api
+    .patch(`/api/v2/stream-sources/${source.id}`)
+    .set(as('owner'))
+    .send({ keyframe_retention_hours: 24, track_retention_days: 7 })
+    .expect(200);
+  const fresh = await retention.sweep();
+  assert.equal(fresh.pruned, 0);
+  assert.equal(fresh.deleted, 0);
   const result = (await db().query('SELECT id FROM plate_appearances WHERE job_id=$1', [reviewed]))
     .rows[0];
   await api
@@ -130,7 +141,6 @@ test('retention prunes keyframes, deletes old tracks, keeps reviewed or alerted 
     .set(as('owner'))
     .send({ keyframe_retention_hours: 0, track_retention_days: null })
     .expect(200);
-  const retention = new Retention(db(), workerOptions(), { intervalMs: 60_000, batch: 50 });
   assert.equal((await retention.sweep()).pruned, 1);
   const detections = (
     await db().query(
