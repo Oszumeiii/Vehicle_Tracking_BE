@@ -192,6 +192,14 @@ export class PipelineResponse {
   @ApiProperty({ type: [String], enum: ['image', 'video'], isArray: true }) media_types!: string[];
   @ApiProperty({ type: [String], enum: ['scene', 'plate_crop'], isArray: true })
   input_modes!: string[];
+  @ApiProperty({ description: 'Can run a live camera session (five-frame joint OCR).' })
+  live!: boolean;
+  @ApiProperty({
+    type: [String],
+    description:
+      "Former ids of a renamed profile; a camera's auto_settings.pipeline_id may still hold one.",
+  })
+  aliases!: string[];
   @ApiProperty({ description: 'Required server-side configuration and model files are present.' })
   ready!: boolean;
   @ApiProperty(nullableText) unavailable_reason!: string | null;

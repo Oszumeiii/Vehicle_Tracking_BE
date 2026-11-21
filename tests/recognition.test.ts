@@ -103,6 +103,7 @@ test('Registry pins local code/checkpoints, sanitizes public metadata and refuse
     const jointProfile = (await registry.list())[0];
     assert.deepEqual(jointProfile.media_types, ['video']);
     assert.deepEqual(jointProfile.input_modes, ['scene']);
+    assert.equal(jointProfile.live, true);
     const jointSnapshot = await registry.resolve('test');
     assert.deepEqual(jointSnapshot.fusion, {
       version: 'model-joint-five-frame-v1',
@@ -154,6 +155,7 @@ test('Registry pins local code/checkpoints, sanitizes public metadata and refuse
     const preparationProfile = (await registry.list())[0];
     assert.equal(preparationProfile.ready, true);
     assert.equal(preparationProfile.task, 'prepare');
+    assert.equal(preparationProfile.live, false);
     assert.equal(preparationProfile.models.recognizer, null);
     const preparationSnapshot = await registry.resolve('test');
     assert.equal(preparationSnapshot.task, 'prepare');

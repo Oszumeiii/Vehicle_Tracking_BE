@@ -40,7 +40,7 @@ Mặc định `http://127.0.0.1:3000`. Ngoại trừ login và health, gửi `Au
 
 ## Pipeline và job
 
-- `GET /api/v2/pipelines`: các profile server cho phép, `task=prepare|recognize`, `media_types`, phiên bản và `ready`; không nhận đường dẫn model từ client. Profile Kaggle joint-frame chỉ nhận video; prepare nhận ảnh/video không cần OCR.
+- `GET /api/v2/pipelines`: các profile server cho phép, `task=prepare|recognize`, `media_types`, phiên bản và `ready`; không nhận đường dẫn model từ client. `live=true` nếu profile chạy được cho camera live (OCR joint 5 frame); `aliases` là các id cũ của profile đã đổi tên, mà `auto_settings.pipeline_id` của camera có thể vẫn đang lưu. Model của một camera là `auto_settings.pipeline_id`: dùng khi tự bật lại (24/7) và khi giao diện bật phiên. Profile Kaggle joint-frame chỉ nhận video; prepare nhận ảnh/video không cần OCR.
 - `POST /api/v2/recognition-jobs`: `{media_id,pipeline_id,input_mode}` → `202 {job_id,status,status_url}`. `input_mode` mặc định `scene`; `plate_crop` chỉ áp dụng ảnh.
 - `GET /api/v2/recognition-jobs`: lọc `origin` (`upload` mặc định, `live`, `all`), `media_id`, `live_session_id`, `status`, `created_from`, `created_to`, phân trang.
 - `GET /api/v2/recognition-jobs/{id}`: trạng thái `queued|running|succeeded|failed`, stage, `pipeline_task`, thống kê, lỗi an toàn.
