@@ -423,6 +423,35 @@ def test_association_reach_follows_a_plate_that_moves_more_than_its_size_between
         assert found[0]["observations"] >= 7 and len(found[0]["rows"]) == 5
 
 
+@pytest.mark.parametrize("reach", [0, 1.5])
+def test_a_new_tracker_does_not_restart_the_track_ids_of_one_already_running(reach):
+    """Sessions in the shared live host each own a tracker; ultralytics keeps one global id
+    counter that every new tracker resets, which made a running session reuse its ids."""
+    from ultralytics.engine.results import Boxes
+    from app.recognition.video_tracking import plate_tracker
+    cfg = TrackingConfig.tracking_config(320, 180, 10., 0, {"device": "cpu", "sampling": SAMPLING, "tracking": TRACKING,
+                                                           "empty_scene_gate": GATE}, "ids")
+    args = SimpleNamespace(**cfg["botsort"])
+    image = np.zeros((180, 320, 3), np.uint8)
+
+    def ids(tracker, frames, x):
+        seen = set()
+        for _ in range(frames):  # a plate appears, is confirmed, then leaves for good
+            out = tracker.update(Boxes(np.asarray([[x, 80, x + 40, 92, .9, 0]], np.float32), image.shape[:2]), image)
+            seen |= {int(row[4]) for row in out}
+        for _ in range(cfg["botsort"]["track_buffer"] + 2):
+            tracker.update(Boxes(np.zeros((0, 6), np.float32), image.shape[:2]), image)
+        return seen
+
+    first = plate_tracker(args, reach)
+    a = ids(first, 4, 20)
+    plate_tracker(args, reach)  # another session starts in the same process
+    b = ids(first, 4, 200)
+    assert a and b and a.isdisjoint(b), (a, b)
+    first.reset()
+    assert ids(first, 4, 20) == a  # an explicit reset (new epoch) starts over
+
+
 def test_snapshots_without_association_reach_keep_plain_iou():
     cfg = TrackingConfig.tracking_config(320, 180, 10., 0, {"device": "cpu", "sampling": SAMPLING, "tracking": TRACKING,
                                                            "empty_scene_gate": GATE}, "old")

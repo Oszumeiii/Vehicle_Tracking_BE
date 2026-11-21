@@ -99,7 +99,7 @@ class ClipMaker:
         self.recorder, self.video, self.interval = recorder, video, interval
         self.pending, self.lock, self._stop = deque(), threading.Lock(), threading.Event()
         self._finishing = False
-        self._file_entry = None
+        self._first_ts = None
         self._thread = threading.Thread(target=self._run, name="clips", daemon=True)
         self._thread.start()
 
@@ -135,15 +135,16 @@ class ClipMaker:
         return covered is not None and covered >= item[2] + self.pad
 
     def _cut(self, key, first, last):
-        from app.live.clips import NotRecorded, cut, cut_demo, file_entry
+        from app.live.clips import NotRecorded, cut, cut_demo, file_first_ts
         target = self.out / "clips" / f"{key}.mp4"
         try:
             if self.video is not None:
                 path, duration = self.video
-                if self._file_entry is None:
-                    self._file_entry = file_entry(path, duration, self.ffmpeg)
+                if self._first_ts is None:
+                    self._first_ts = file_first_ts(path, self.ffmpeg)
+                # Only the keyframes around this clip: a long upload has too many to list each time.
                 info = cut_demo(path, first, last, target, pad=self.pad, duration=duration,
-                                entry=self._file_entry, ffmpeg=self.ffmpeg)
+                                ffmpeg=self.ffmpeg, first_ts=self._first_ts)
             else:
                 start = first - self.pad
                 info = cut(self.recorder.snapshot(), start, last + self.pad, target, clock="pts", ffmpeg=self.ffmpeg)

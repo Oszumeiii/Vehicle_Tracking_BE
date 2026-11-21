@@ -32,7 +32,9 @@ const LIVE_JOBS = `recognition_jobs j JOIN plate_appearances a ON a.job_id=j.id
 /**
  * Live evidence retention, run by the worker. Per camera, keyframes older than
  * keyframe_retention_hours are pruned to one per track (1080p JPEGs are ~80% of the
- * bytes; crops stay), and tracks older than track_retention_days are deleted.
+ * bytes; crops stay), and tracks older than track_retention_days are deleted. Age counts
+ * from when the track was recognized (created_at), not filmed: a camera replaying footage
+ * dated weeks back (recorded_at) would otherwise lose every track minutes after reading it.
  * Folders left without rows (a crash between moving a track and committing it, a
  * deleted session, the trash) are swept as well, and so are old sign-in sessions.
  */
@@ -89,8 +91,8 @@ export class Retention {
       await this.database.query(
         `SELECT j.id FROM ${LIVE_JOBS}
         WHERE j.evidence_pruned_at IS NULL AND c.keyframe_retention_hours IS NOT NULL
-          AND j.captured_to < now() - make_interval(hours => c.keyframe_retention_hours) AND ${UNPROTECTED}
-        ORDER BY j.captured_to LIMIT $1`,
+          AND j.created_at < now() - make_interval(hours => c.keyframe_retention_hours) AND ${UNPROTECTED}
+        ORDER BY j.created_at LIMIT $1`,
         [this.settings.batch],
       )
     ).rows;
@@ -147,8 +149,8 @@ export class Retention {
         `DELETE FROM recognition_jobs WHERE id IN (
           SELECT j.id FROM ${LIVE_JOBS}
           WHERE c.track_retention_days IS NOT NULL
-            AND j.captured_to < now() - make_interval(days => c.track_retention_days) AND ${UNPROTECTED}
-          ORDER BY j.captured_to LIMIT $1)
+            AND j.created_at < now() - make_interval(days => c.track_retention_days) AND ${UNPROTECTED}
+          ORDER BY j.created_at LIMIT $1)
         RETURNING id`,
         [this.settings.batch],
       )

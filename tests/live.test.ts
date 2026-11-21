@@ -665,12 +665,26 @@ test('a crashed live process fails its session; worker restart and shutdown inte
   const left = await session(orphan.id);
   await fixture.database.query("UPDATE live_sessions SET status='running' WHERE id=$1", [left.id]);
   await writeTrack(left.id, 'e001-t000004');
+  // A track cut short while being written (no track.json) is left alone.
+  await mkdir(join(dataDir, 'live', left.id, 'tracks', 'e001-t000005', 'keyframes'), {
+    recursive: true,
+  });
   await manager([]).recover();
   const recovered = await sessionRow(left.id);
   assert.equal(recovered.status, 'interrupted');
   assert.equal(recovered.error_code, 'WORKER_INTERRUPTED');
   assert.equal(recovered.tracks_count, 1);
   assert.ok(!(await exists(join(dataDir, 'live', left.id, 'tracks', 'e001-t000004'))));
+  // A folder whose key is already a job (an older run reused the key) is not retried at
+  // every restart: no new rejection is recorded.
+  await writeTrack(left.id, 'e001-t000004');
+  await manager([]).recover();
+  const rejections = await fixture.database.query(
+    "SELECT payload FROM live_session_events WHERE session_id=$1 AND event_type='track_rejected'",
+    [left.id],
+  );
+  assert.deepEqual(rejections.rows, []);
+  assert.equal((await sessionRow(left.id)).tracks_count, 1);
 
   // Worker shutdown stops the child gracefully; its final tracks still count.
   const running = await session(orphan.id);

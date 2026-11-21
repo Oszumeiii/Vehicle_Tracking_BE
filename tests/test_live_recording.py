@@ -143,6 +143,23 @@ def test_a_demo_video_is_cut_from_the_file_even_after_it_looped(tmp_path):
     assert file_entry(video, 20.0)["pts_end"] == 20.0
 
 
+def test_a_clip_of_a_long_upload_reads_only_the_keyframes_around_it(tmp_path):
+    """Listing every keyframe of a 45-minute upload took longer than the scan's timeout, so no
+    clip of a replayed upload was ever cut; a clip now reads only the stretch it needs."""
+    video = h264(tmp_path / "long.mp4", 60)
+    entry = file_entry(video, 60.0, around=(40.0, 44.0))
+    assert entry["keyframes"][0] >= 24 and 40 in entry["keyframes"], entry["keyframes"]
+    assert 0 not in entry["keyframes"]
+    events = []
+    maker = ClipMaker(tmp_path / "out", events.append, pad=2, video=(video, 60.0), interval=.05)
+    maker.request("e000-t000002", 43.0, 45.0)  # needs 41-47 s: starts on the keyframe at 40 s
+    maker.finish()
+    clip = next(e for e in events if e["type"] == "clip")
+    count, ok = frames_of(tmp_path / "out" / clip["path"])
+    assert ok and count == pytest.approx(70, abs=2), "40 s (keyframe) to 47 s"
+    assert clip["first_seen_offset"] == pytest.approx(3.0, abs=.05)
+
+
 def test_any_demo_track_can_be_cut_on_demand_from_the_command_line(tmp_path, capsys):
     from app.live.clips import main
     video = h264(tmp_path / "demo.mp4", 20)
