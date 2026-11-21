@@ -29,7 +29,14 @@ Bạn tự làm các bước này trên trang Cloudflare.
 3. Vào **Manage API tokens** (hoặc **Account API tokens**), chọn **Create API token**:
    - quyền **Object Read & Write**;
    - giới hạn **chỉ bucket vừa tạo**.
-4. Chép 3 giá trị vào `.env` của BE: **Account ID**, **Access Key ID** và **Secret Access Key**. Secret chỉ hiện đúng một lần, và không được commit file `.env`.
+4. Trong bucket, mở **Settings → CORS Policy → Add** và dán đoạn sau. Không có bước này, web vẫn gọi API được nhưng trình duyệt chặn ảnh khi API chuyển hướng sang link của bucket, nên ảnh đã chuyển lên bucket không hiện. Ảnh vẫn chỉ mở được bằng link có chữ ký, hạn 10 phút.
+
+   ```json
+   [{"AllowedOrigins":["*"],"AllowedMethods":["GET","HEAD"],"AllowedHeaders":["*"],"ExposeHeaders":["Content-Length","Content-Range","Content-Type"],"MaxAgeSeconds":3600}]
+   ```
+
+   `AllowedOrigins` phải là `*`: khi trình duyệt đi theo chuyển hướng sang tên miền khác, nó gửi `Origin: null`, nên liệt kê địa chỉ của web cũng không khớp. Token **Object Read & Write** không có quyền sửa CORS, vì vậy phải làm bước này trên trang Cloudflare.
+5. Chép 3 giá trị vào `.env` của BE: **Account ID** (chuỗi 32 ký tự trên thanh địa chỉ, ngay sau `dash.cloudflare.com/`), **Access Key ID** và **Secret Access Key**. Secret chỉ hiện đúng một lần, và không được commit file `.env`. Có thể dùng `scripts/set-r2-keys.ps1` để nhập key mà không phải mở file.
 
 ```dotenv
 PLATE_R2_ACCOUNT_ID=<account id>
