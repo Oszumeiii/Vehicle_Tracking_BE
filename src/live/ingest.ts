@@ -96,6 +96,23 @@ async function sightingOf(
   return match?.sighting_id ?? null;
 }
 
+/**
+ * rename() that waits out a brief lock: Windows refuses to move a folder while another process
+ * (an antivirus or the search indexer reading the evidence just written) has a file in it open,
+ * and the track was then lost. Other errors, or a lock that outlasts ~3 s, are thrown.
+ */
+export async function moveFolder(from: string, to: string, move = rename) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await move(from, to);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException)?.code ?? '';
+      if (attempt >= 5 || !['EPERM', 'EBUSY', 'EACCES'].includes(code)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 100 * 2 ** attempt));
+    }
+  }
+}
+
 function instant(value: any) {
   if (typeof value !== 'string' || Number.isNaN(Date.parse(value)) || !value.endsWith('Z'))
     throw new Error('Invalid capture time');
@@ -150,7 +167,7 @@ export async function ingestTrack(
     live_session_id: session.id,
   };
   await mkdir(path.dirname(target), { recursive: true });
-  await rename(source, target);
+  await moveFolder(source, target);
   try {
     await validateResult(job, { appearances: [appearance], statistics: {} }, target, options);
     const bytes = await folderBytes(target);
@@ -228,7 +245,7 @@ export async function ingestTrack(
         });
     });
   } catch (error) {
-    await rename(target, source).catch(() => {});
+    await moveFolder(target, source).catch(() => {});
     throw error;
   }
   return jobId;

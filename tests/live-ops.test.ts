@@ -6,7 +6,7 @@ import request from 'supertest';
 import type { INestApplication } from '@nestjs/common';
 import { createApp } from '../src/main';
 import { workerOptions } from '../src/recognition/engine';
-import { ingestTrack } from '../src/live/ingest';
+import { ingestTrack, moveFolder } from '../src/live/ingest';
 import { LiveManager } from '../src/live/manager';
 import { Retention } from '../src/live/retention';
 import { exportLiveSamples } from '../src/cli';
@@ -453,4 +453,23 @@ test('snapshot skips keyframes pruned by retention', async () => {
   );
   // The last selected keyframe is gone; the kept middle one is served instead.
   await snapshot().expect(200);
+});
+
+test('moving a track folder waits out a brief Windows lock, and gives up on other errors', async () => {
+  const locked = (code: string) => Object.assign(new Error(code), { code });
+  let calls = 0;
+  await moveFolder('a', 'b', async () => {
+    calls++;
+    if (calls < 3) throw locked('EPERM'); // an antivirus still reading the new evidence
+  });
+  assert.equal(calls, 3);
+  calls = 0;
+  await assert.rejects(
+    moveFolder('a', 'b', async () => {
+      calls++;
+      throw locked('ENOENT');
+    }),
+    /ENOENT/,
+  );
+  assert.equal(calls, 1);
 });
