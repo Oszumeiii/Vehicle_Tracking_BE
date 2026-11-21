@@ -245,6 +245,10 @@ export class PipelineRegistry {
           task: profile.task ?? 'recognize',
           media_types: joint ? ['video'] : ['image', 'video'],
           input_modes: joint ? ['scene'] : ['scene', 'plate_crop'],
+          // A live camera session needs five-frame joint OCR (isLivePipeline).
+          live: joint,
+          // Former ids of a renamed profile: a camera may still store one in auto_settings.
+          aliases: (profile.aliases ?? []) as string[],
           ready: false,
           unavailable_reason: null as string | null,
           models: {

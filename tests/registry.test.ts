@@ -35,8 +35,11 @@ test('a renamed pipeline still resolves by its former id and records the current
       assert.equal('aliases' in snapshot, false);
       assert.equal((await registry.resolve('joint')).id, 'joint');
       assert.deepEqual(
-        (await registry.list()).map((item) => item.id),
-        ['joint', 'single'],
+        (await registry.list()).map((item) => [item.id, item.aliases]),
+        [
+          ['joint', ['old-joint']],
+          ['single', []],
+        ],
       );
       await assert.rejects(registry.resolve('unknown'), /Unknown pipeline/);
     },
