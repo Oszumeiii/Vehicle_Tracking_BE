@@ -77,5 +77,28 @@ def test_a_four_crop_track_repeats_its_sharpest_crop_in_place(tmp_path):
         path = tmp_path / f"crop-{i}.png"
         cv2.imwrite(str(path), image)
         paths.append(path)
-    assert PredictionRunner.ocr_inputs(paths) == [paths[0], paths[1], paths[2], paths[2], paths[3]]
-    assert PredictionRunner.ocr_inputs(paths + [tmp_path / "fifth.png"]) == paths + [tmp_path / "fifth.png"], "five stay as they are"
+    assert PredictionRunner.ocr_inputs(paths) == ([paths[0], paths[1], paths[2], paths[2], paths[3]], [None] * 5)
+    five = paths + [tmp_path / "fifth.png"]
+    assert PredictionRunner.ocr_inputs(five) == (five, [None] * 5), "five stay as they are"
+    # Sharpness is measured on the region the OCR reads: crop 0 is sharp only there.
+    sharp = np.full((32, 96), 128, np.uint8)
+    sharp[8:24, 8:40:2] = 0
+    cv2.imwrite(str(paths[0]), sharp)
+    cv2.imwrite(str(paths[2]), np.full((32, 96), 128, np.uint8))  # no longer the sharpest
+    regions = [[8, 8, 40, 24]] + [[0, 0, 96, 32]] * 3
+    chosen, boxes = PredictionRunner.ocr_inputs(paths, regions)
+    assert chosen == [paths[0], paths[0], paths[1], paths[2], paths[3]] and boxes[:2] == [[8, 8, 40, 24]] * 2
+
+
+def test_ocr_reads_the_detector_box_plus_its_own_margin_from_the_stored_crop():
+    from app.recognition.runner import PredictionRunner
+
+    # Box 100 x 40 at (210, 120); the stored crop kept 15 % (crop_bbox from crop_bounds).
+    detection = dict(bbox=[210., 120., 310., 160.], crop_bbox=[195, 114, 325, 166], crop_width=130, crop_height=52)
+    assert PredictionRunner.ocr_box(detection, None) is None, "old snapshots read the whole crop"
+    assert PredictionRunner.ocr_box(detection, 0) == [15, 6, 115, 46]
+    assert PredictionRunner.ocr_box(detection, .05) == [10, 4, 120, 48]
+    assert PredictionRunner.ocr_box(detection, .15) == [0, 0, 130, 52], "the stored margin is the most there is"
+    # A crop clipped by the frame edge: the region stays inside the stored image.
+    edge = dict(bbox=[2., 0., 102., 40.], crop_bbox=[0, 0, 117, 46], crop_width=117, crop_height=46)
+    assert PredictionRunner.ocr_box(edge, .05) == [0, 0, 107, 42]

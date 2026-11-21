@@ -800,6 +800,8 @@ class TrackingConfig:
                     declared_frames=declared, max_seconds=0, batch=tracking["batch"], imgsz=tracking["imgsz"],
                     device="cpu" if snapshot["device"] == "cpu" else 0,
                     crop_confidence=tracking["crop_confidence"], crop_padding=tracking["crop_padding"],
+                    # Absent in snapshots made before the option existed: OCR reads the whole crop.
+                    ocr_padding=tracking.get("ocr_padding"),
                     min_frames=tracking.get("min_frames", 5),
                     # Absent in snapshots made before the option existed: they keep plain IoU.
                     association_reach=tracking.get("association_reach", 0),

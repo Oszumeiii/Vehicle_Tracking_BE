@@ -140,6 +140,10 @@ export class PipelineRegistry {
         batch: 16,
         track_buffer_seconds: 1.5,
         crop_padding: 0.15,
+        // Margin around the detector box the OCR reads, cut from the stored crop (which keeps
+        // crop_padding for reviewers). Both OCR checkpoints were trained on tight plates; see
+        // docs/EVALUATION.md "Phần đệm của ảnh đưa vào OCR".
+        ocr_padding: 0,
         crop_confidence: 0.25,
         min_frames: 5,
         // Plate widths a detection may be from its track between two sampled frames (0: plain IoU).
@@ -157,6 +161,8 @@ export class PipelineRegistry {
         tracking.track_buffer_seconds <= 0 ||
         tracking.crop_padding < 0 ||
         tracking.crop_padding > 1 ||
+        tracking.ocr_padding < 0 ||
+        tracking.ocr_padding > tracking.crop_padding ||
         tracking.crop_confidence < 0.1 ||
         tracking.crop_confidence > 1 ||
         ![4, 5].includes(tracking.min_frames) ||

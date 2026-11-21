@@ -439,3 +439,26 @@ Tổng cộng 20/280 mẫu có nhãn, đều thuộc nhóm crop lớn nhất và
   - Trên đoạn B (xe chậm) số track tăng 21 → 25 nhưng số track độ tin cậy cao không tăng: ở đó giới hạn là độ nét của nguồn, như phần ROI ở trên.
   - Chưa đo trên cảnh đông xe sát nhau, nơi box nới rộng có thể ghép nhầm hai biển gần nhau.
 
+
+## Phần đệm của ảnh đưa vào OCR (21/11/2026)
+
+- **Hiện tượng:** biển rõ, crop nét, 5 ảnh đúng cùng một xe, nhưng OCR đọc sai gần hết ký tự (ví dụ `RYN2F47` → `KYM7647`, `TDB4G68` → `AYN4542`).
+- **Nguyên nhân:** crop lưu làm bằng chứng có thêm 15% quanh box detector (`tracking.crop_padding`) để người duyệt thấy biển trong ngữ cảnh, và OCR đọc nguyên crop đó. Cả hai checkpoint (SVTRv2 và SE-ResNet34-C cũ) được train trên ảnh ICPR cắt sát biển; phần thân xe thừa làm model đọc lệch. Trên camera YouTube cũ biển chỉ rộng khoảng 40 px nên ảnh hưởng ít hơn; trên footage Balneário Camboriú hiện tại biển rộng 60–110 px.
+- **Cách đo:** 55 track của hai camera phát lại "BC – Pau da Viola 21/11 sáng" và "BC – San Telmo 21/11 sáng", lấy ngẫu nhiên trong các track còn crop. Nhãn do Claude đọc từ crop (không phải nhãn người): 29 biển "chắc chắn", 26 biển "khá chắc", bỏ các track không đọc được. Vì O/Q và I/J khó phân biệt ở độ phân giải này (cả hai model cũng đọc `QIR8J74` khi nhãn ghi `OIR8J74`), số dưới đây coi O=Q và I=J. OCR chạy lại trên chính các crop đã lưu, cắt còn box detector cộng phần đệm cho trong bảng.
+
+| OCR | Phần đệm | Đúng cả biển (55) | Tỷ lệ ký tự sai |
+|---|---|---|---|
+| SVTRv2 (đang dùng) | 0,15 (trước khi sửa) | 13 | 37,7% |
+| SVTRv2 | 0,10 | 14 | 31,7% |
+| SVTRv2 | 0,05 | 19 | 25,2% |
+| SVTRv2 | 0,03 | 19 | 23,4% |
+| **SVTRv2** | **0 (mặc định mới)** | **14** | **21,8%** |
+| SE-ResNet34-C (trước 06/11) | 0,15 | 15 | 33,2% |
+| SE-ResNet34-C | 0,05 | 27 | 17,4% |
+| SE-ResNet34-C | 0 | 27 | 14,3% |
+
+- **Cách sửa:** `tracking.ocr_padding` (mặc định 0): OCR đọc box detector cộng phần đệm này, cắt từ crop đã lưu; crop lưu vẫn giữ 15% cho người duyệt. Số track không đổi vì việc giữ hay loại track không phụ thuộc phần đệm. Snapshot tạo trước khi có tùy chọn vẫn đọc nguyên crop.
+- **Kiểm tra lại qua đúng đường code của runner** (`PredictionRunner.detection_inputs` + `predict_joint`, SVTRv2): 14 → 18 biển đúng, tỷ lệ ký tự sai 38,4% → 21,8%. Số "đúng cả biển" dao động 2–4 biển giữa hai cách cắt chỉ khác nhau cách làm tròn pixel, nên chọn mức đệm theo tỷ lệ ký tự sai, chỉ số ổn định hơn: mức 0 thấp nhất với cả hai model.
+- **Ghi nhận thêm:** trên footage này SE-ResNet34-C cũ đọc tốt hơn SVTRv2 ở mọi mức đệm (27 so với 14–19 biển đúng khi cắt sát), ngược với kết quả đo trên ICPR ngày 09/11. Đợt này chưa đổi model.
+- **Giới hạn:** 55 track của một khung cảnh, nhãn không phải của người. Sau khi sửa vẫn chỉ khoảng 1/3 biển đúng cả chuỗi: crop xa cuối track mờ, biển nghiêng, và độ tin cậy từ 0,85 vẫn gồm nhiều biển sai (SVTRv2 cắt sát: 13 đúng trong 29 track từ 0,85).
+- Dữ liệu và script: `data/evaluation/ocr_padding/` (không commit).

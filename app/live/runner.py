@@ -330,9 +330,8 @@ class LiveRunner:
                                       candidate["last_seconds"], "live_pts")
         detections = appearance["detections"]
         started = time.perf_counter()
-        prediction = PredictionRunner.predict_joint(self.recognizer,
-                                    PredictionRunner.ocr_inputs(self.data_dir / d["crop_storage_key"] for d in detections),
-                                    self.data_dir)
+        paths, boxes = PredictionRunner.detection_inputs(detections, self.data_dir, cfg.get("ocr_padding"))
+        prediction = PredictionRunner.predict_joint(self.recognizer, paths, self.data_dir, boxes)
         ocr_seconds = time.perf_counter() - started
         for detection in detections:
             detection["predictions"] = []
