@@ -214,6 +214,26 @@ def test_joint_predict_rejects_duplicated_input_and_invalid_fusion_weights(tmp_p
         PredictionRunner.predict_joint(lambda _: {"raw_text": "A", "frame_weights": [.5] * 5}, paths, tmp_path)
 
 
+def test_joint_predict_hands_the_recognizer_the_ocr_region_of_each_crop(tmp_path):
+    from PIL import Image
+    from app.recognition.runner import PredictionRunner
+    paths, seen = [], []
+    for index in range(5):
+        path = tmp_path / f"crop-{index}.png"
+        Image.new("RGB", (40, 20), (index, index, index)).save(path)
+        paths.append(path)
+
+    def recognizer(images):
+        seen.extend(image.size for image in images)
+        return {"raw_text": "ABC1234"}
+
+    result = PredictionRunner.predict_joint(recognizer, paths, tmp_path, [[4, 2, 36, 18]] * 4 + [None])
+    assert seen == [(32, 16)] * 4 + [(40, 20)]
+    assert result["input_storage_keys"] == [p.name for p in paths], "evidence keys stay the stored crops"
+    with pytest.raises(ValueError, match="one region"):
+        PredictionRunner.predict_joint(recognizer, paths, tmp_path, [None] * 4)
+
+
 def test_merge_tracks_joins_broken_ids_and_votes_per_character():
     from app.recognition.fusion import PlateFusion
     tracks = [dict(track_id="1", plate_text="ABC1234", confidence=.9, first_seen=0., last_seen=1.),

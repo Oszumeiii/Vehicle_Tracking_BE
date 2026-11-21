@@ -49,11 +49,39 @@ class PredictionRunner:
         return path.resolve().relative_to(data_dir.resolve()).as_posix()
 
     @staticmethod
-    def predict_crop(recognizer, path, data_dir):
+    def ocr_box(detection, padding):
+        """Region of a stored crop the OCR reads: the detector box plus `padding` of its size.
+
+        Stored crops keep the tracking crop_padding (0.15) so reviewers see the plate in
+        context, but both OCR checkpoints were trained on tightly cut plates: on live
+        footage the extra margin roughly doubled the character error rate (docs/EVALUATION.md).
+        None (snapshots made before ocr_padding existed) reads the whole stored crop.
+        """
+        if padding is None:
+            return None
+        box, origin = detection["bbox"], detection["crop_bbox"]
+        width, height = detection["crop_width"], detection["crop_height"]
+        dx, dy = (box[2] - box[0]) * padding, (box[3] - box[1]) * padding
+        left = max(0, math.floor(box[0] - dx - origin[0]))
+        top = max(0, math.floor(box[1] - dy - origin[1]))
+        right = min(width, math.ceil(box[2] + dx - origin[0]))
+        bottom = min(height, math.ceil(box[3] + dy - origin[1]))
+        if right <= left or bottom <= top:
+            raise ValueError("OCR region lies outside the stored crop")
+        return [left, top, right, bottom]
+
+    @staticmethod
+    def ocr_image(picture, box):
+        """The RGB image the recognizer receives: the stored crop, cut to box when given."""
+        image = picture.convert("RGB")
+        return image if box is None else image.crop(tuple(box))
+
+    @staticmethod
+    def predict_crop(recognizer, path, data_dir, box=None):
         from PIL import Image
         start = time.perf_counter()
         with Image.open(path) as picture:
-            value = recognizer(picture.convert("RGB"))
+            value = recognizer(PredictionRunner.ocr_image(picture, box))
         if not isinstance(value, dict) or not isinstance(value.get("raw_text"), str):
             raise ValueError("Recognizer must return a mapping with a raw_text string")
         score = value.get("ocr_score")
@@ -76,35 +104,54 @@ class PredictionRunner:
         return items
 
     @staticmethod
-    def ocr_inputs(paths):
-        """The joint model's five inputs: a four-crop track repeats its sharpest crop in place.
+    def ocr_inputs(paths, boxes=None):
+        """The joint model's five inputs as (paths, boxes): a four-crop track repeats its
+        sharpest crop in place, sharpness measured on the region the OCR reads.
 
         Same rule as scripts/calibrate_icpr.short_track, where it was measured.
         """
         paths = list(paths)
+        boxes = list(boxes) if boxes is not None else [None] * len(paths)
+        if len(boxes) != len(paths):
+            raise ValueError("Each OCR input needs one region (or None)")
         if len(paths) != 4:
-            return paths
+            return paths, boxes
         import cv2
         sharpness = []
-        for path in paths:
+        for path, box in zip(paths, boxes):
             gray = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
             if gray is None:
                 raise ValueError(f"Cannot read crop {path}")
+            if box is not None:
+                gray = gray[box[1]:box[3], box[0]:box[2]]
             sharpness.append(cv2.Laplacian(gray, cv2.CV_64F).var())
-        return PredictionRunner.repeat_sharpest(paths, sharpness)
+        order = PredictionRunner.repeat_sharpest(range(4), sharpness)
+        return [paths[i] for i in order], [boxes[i] for i in order]
 
     @staticmethod
-    def predict_joint(recognizer, paths, data_dir):
-        """Run the joint model once over five temporally ordered crops (four distinct for a short track)."""
+    def detection_inputs(detections, data_dir, padding):
+        """ocr_inputs() for a track's detections, reading `padding` around each detector box."""
+        return PredictionRunner.ocr_inputs((data_dir / d["crop_storage_key"] for d in detections),
+                                           [PredictionRunner.ocr_box(d, padding) for d in detections])
+
+    @staticmethod
+    def predict_joint(recognizer, paths, data_dir, boxes=None):
+        """Run the joint model once over five temporally ordered crops (four distinct for a short track).
+
+        boxes: per input, the region of the crop to read (PredictionRunner.ocr_box) or None.
+        """
         from PIL import Image
         if len(paths) != 5 or len(set(paths)) not in (4, 5):
             raise ValueError("Joint OCR requires five inputs from four or five distinct crop evidence files")
+        boxes = list(boxes) if boxes is not None else [None] * 5
+        if len(boxes) != 5:
+            raise ValueError("Joint OCR needs one region (or None) per input")
         start = time.perf_counter()
         images = []
         try:
-            for path in paths:
+            for path, box in zip(paths, boxes):
                 with Image.open(path) as picture:
-                    images.append(picture.convert("RGB"))
+                    images.append(PredictionRunner.ocr_image(picture, box))
             value = recognizer(images)
         finally:
             for image in images:
@@ -274,6 +321,8 @@ class RecognitionRunner:
         snapshot = payload["pipeline_snapshot"]
         PipelineRegistry.validate_snapshot(snapshot)
         joint = not prepare and snapshot["recognizer"].get("input_mode", "single_crop") == "five_frame_joint"
+        # Absent in snapshots made before the option existed: they read the whole stored crop.
+        ocr_padding = snapshot.get("tracking", {}).get("ocr_padding")
         if joint and (payload["media_type"] != "video" or payload["input_mode"] != "scene"):
             raise ValueError("Joint five-frame OCR supports scene video only")
         if not prepare and snapshot["recognizer"]["module_root"] not in sys.path:
@@ -309,8 +358,8 @@ class RecognitionRunner:
                 frames = [d["frame_index"] for d in detections]
                 if len(frames) not in (4, 5) or len(set(frames)) != len(frames) or frames != sorted(frames):
                     raise ValueError("Joint OCR requires four or five ordered, distinct video frames")
-                prediction = PredictionRunner.predict_joint(
-                    recognizer, PredictionRunner.ocr_inputs(data_dir / d["crop_storage_key"] for d in detections), data_dir)
+                paths, boxes = PredictionRunner.detection_inputs(detections, data_dir, ocr_padding)
+                prediction = PredictionRunner.predict_joint(recognizer, paths, data_dir, boxes)
                 for detection in detections:
                     detection["predictions"] = []
                 text = prediction["normalized_text"]
@@ -322,7 +371,8 @@ class RecognitionRunner:
                 if prepare:
                     detection["predictions"] = []
                     continue
-                prediction = PredictionRunner.predict_crop(recognizer, data_dir / detection["crop_storage_key"], data_dir)
+                prediction = PredictionRunner.predict_crop(recognizer, data_dir / detection["crop_storage_key"], data_dir,
+                                                           PredictionRunner.ocr_box(detection, ocr_padding))
                 detection["predictions"] = [prediction]
                 predictions.append(prediction["raw_text"])
             appearance.update(dict(machine_text=None, machine_status="not_run", agreement_count=0)
