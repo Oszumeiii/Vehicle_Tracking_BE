@@ -7,6 +7,7 @@ are omitted; crops, keyframes and logs are kept as review evidence.
 TrackSession is the incremental core: it accepts decoded frames in PTS order from
 any source, so an uploaded file and a live stream share the same tracking logic.
 """
+import itertools
 from collections import Counter, defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
@@ -181,8 +182,32 @@ def plate_tracker(args, reach=0.):
     different cars are further apart than that.
     """
     from ultralytics.trackers.bot_sort import BOTSORT
+
+    class OwnIdTracker(BOTSORT):
+        """Numbers its tracks itself. Ultralytics counts track ids in one class attribute
+        (BaseTrack._count) that every new tracker resets to 0, so in the shared live host a
+        session (or job) that starts restarts the ids of every session already running: their
+        new tracks reuse ids, and keys e000-t000226 of two different cars collide."""
+
+        def __init__(self, args, *rest):
+            super().__init__(args, *rest)
+            self._ids = itertools.count(1)
+
+        def init_track(self, *args, **kwargs):
+            tracks = super().init_track(*args, **kwargs)
+            for track in tracks:
+                track.next_id = self._next_id  # read by activate() and re_activate(new_id=True)
+            return tracks
+
+        def _next_id(self):
+            return next(self._ids)
+
+        def reset(self):
+            super().reset()
+            self._ids = itertools.count(1)
+
     if not reach:
-        return BOTSORT(args)
+        return OwnIdTracker(args)
 
     def grown(tracks):
         boxes = np.array([track.xyxy for track in tracks], dtype=np.float32).reshape(-1, 4)
@@ -193,7 +218,7 @@ def plate_tracker(args, reach=0.):
         boxes[:, 3] += margin
         return boxes
 
-    class ReachTracker(BOTSORT):
+    class ReachTracker(OwnIdTracker):
         def get_dists(self, tracks, detections):
             if not len(tracks) or not len(detections):
                 return np.zeros((len(tracks), len(detections)), dtype=np.float32)

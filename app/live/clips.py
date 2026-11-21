@@ -107,21 +107,57 @@ def cut(entries, start, end, out, clock="pts", ffmpeg=None, timeout=60):
     return dict(first_seen_offset=offset, seconds=round(to - ss, 3))
 
 
+def keyframe_times(file, ffmpeg=None, timeout=30, start=None, seconds=None):
+    """The file's own timestamps of its keyframes; decodes keyframes only. start/seconds limit the
+    scan to that stretch of the file (an input seek, so only that part is read)."""
+    window = ([] if start is None else ["-ss", f"{start:.3f}"]) + ([] if seconds is None else ["-t", f"{seconds:.3f}"])
+    result = subprocess.run([ffmpeg or ffmpeg_exe(), "-hide_banner", "-nostdin", "-skip_frame", "nokey",
+                             "-copyts", *window, "-i", str(file), "-an", "-vf", "showinfo=checksum=0",
+                             "-f", "null", "-"], capture_output=True, timeout=timeout)
+    return [float(t) for t in re.findall(rb"pts_time:\s*(-?[\d.]+)", result.stderr)]
+
+
 def keyframes(file, ffmpeg=None, timeout=30):
     """(timestamp of the first keyframe, keyframe times in seconds from it); decodes keyframes only."""
-    result = subprocess.run([ffmpeg or ffmpeg_exe(), "-hide_banner", "-nostdin", "-skip_frame", "nokey",
-                             "-copyts", "-i", str(file), "-an", "-vf", "showinfo=checksum=0", "-f", "null", "-"],
-                            capture_output=True, timeout=timeout)
-    times = [float(t) for t in re.findall(rb"pts_time:\s*(-?[\d.]+)", result.stderr)]
+    times = keyframe_times(file, ffmpeg, timeout)
     return (times[0], [round(t - times[0], 3) for t in times]) if times else (0., [0.])
 
 
-def file_entry(path, duration, ffmpeg=None):
-    """A demo video as a one-segment recording (pts from 0 to its duration)."""
+# How far before a clip's start to look for the keyframe it must begin on (growing until one is found).
+LOOKBACK_SECONDS = (15., 60., 240.)
+
+
+def file_entry(path, duration, ffmpeg=None, around=None, first_ts=None):
+    """A demo video as a one-segment recording (pts from 0 to its duration).
+
+    around=(start, end) lists only the keyframes from the last one before start to end: listing
+    every keyframe of a long upload (45 min of 1080p) reads the whole file and takes longer than
+    the scan's timeout, so no clip of a replayed upload was ever cut. first_ts, the timestamp of
+    the file's first frame, saves a scan when the caller already knows it.
+    """
     path = Path(path)
-    first, times = keyframes(path, ffmpeg)
+    if around is None:
+        first, times = keyframes(path, ffmpeg)
+    else:
+        if first_ts is None:
+            first_ts = file_first_ts(path, ffmpeg)
+        first, (start, end) = first_ts, around
+        times = []
+        for lookback in LOOKBACK_SECONDS:
+            begin = max(0., start - lookback)
+            found = keyframe_times(path, ffmpeg, start=begin, seconds=max(0., end - begin) + 1.)
+            times = sorted({round(t - first, 3) for t in found})
+            if begin == 0. or any(t <= start + 1e-6 for t in times):
+                break
+        times = times or [0.]
     return dict(file=path.name, dir=str(path.parent), pts_start=0., pts_end=float(duration),
                 first_ts=first, keyframes=times)
+
+
+def file_first_ts(path, ffmpeg=None):
+    """Timestamp of a video's first frame (a keyframe), read from its first second only."""
+    times = keyframe_times(path, ffmpeg, seconds=1.)
+    return times[0] if times else 0.
 
 
 def video_duration(path):
@@ -134,16 +170,19 @@ def video_duration(path):
         capture.release()
 
 
-def cut_demo(path, first, last, out, pad=3.0, duration=None, entry=None, ffmpeg=None):
+def cut_demo(path, first, last, out, pad=3.0, duration=None, entry=None, ffmpeg=None, first_ts=None):
     """Clip of a track seen from PTS first to last on a looped demo video (PTS p plays p mod duration).
 
-    Returns where the plate first shows up inside the clip, and the clip's length.
+    Returns where the plate first shows up inside the clip, and the clip's length. Without entry
+    only the keyframes around the clip are read (file_entry around=).
     """
     if duration is None:
         duration = video_duration(path)
     offset = (first // duration) * duration if duration > 0 else 0.
     start, end, seen = max(0., first - pad - offset), min(duration, last + pad - offset), first - offset
-    info = cut([entry or file_entry(path, duration, ffmpeg)], start, end, out, clock="pts", ffmpeg=ffmpeg)
+    if entry is None:
+        entry = file_entry(path, duration, ffmpeg, around=(start, end), first_ts=first_ts)
+    info = cut([entry], start, end, out, clock="pts", ffmpeg=ffmpeg)
     return dict(first_seen_offset=round(info["first_seen_offset"] + seen - start, 3), seconds=info["seconds"])
 
 

@@ -1,7 +1,7 @@
 import { spawn, ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
-import { mkdir, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, stat, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { createInterface } from 'node:readline';
 import { Database } from '../database/database';
@@ -268,10 +268,25 @@ export class LiveManager {
         await this.database.query('SELECT * FROM live_sessions WHERE id=$1', [sessionId])
       ).rows[0];
       if (!session) continue;
-      const tracks = await readdir(path.join(root, sessionId, 'tracks')).catch(
-        () => [] as string[],
+      const folder = path.join(root, sessionId, 'tracks');
+      const tracks = await readdir(folder).catch(() => [] as string[]);
+      if (!tracks.length) continue;
+      // Already a job of this session: such a folder holds a track whose key an earlier run
+      // reused (fixed); its ingest failed once and was recorded then, not at every restart.
+      const done = new Set(
+        (
+          await this.database.query(
+            'SELECT live_track_key FROM recognition_jobs WHERE live_session_id=$1',
+            [sessionId],
+          )
+        ).rows.map((row) => row.live_track_key as string),
       );
-      for (const key of tracks.sort()) await this.ingest(session, key);
+      for (const key of tracks.sort()) {
+        if (done.has(key)) continue;
+        // Without its record the track was cut short while being written: nothing to ingest.
+        if (!(await stat(path.join(folder, key, 'track.json')).catch(() => null))) continue;
+        await this.ingest(session, key);
+      }
     }
   }
 
