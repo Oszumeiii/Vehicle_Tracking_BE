@@ -21,6 +21,7 @@ import type { Response } from 'express';
 import { settings } from '../common/config';
 import { newId } from '../common/http';
 import { cloudStore } from './cloud';
+import { moveFolder } from '../live/files';
 import { z } from 'zod';
 const run = promisify(execFile);
 /** Long enough to start a video; the page asks again for every view. */
@@ -187,9 +188,11 @@ export class Storage {
       trash = this.path(`trash/${newId()}`);
     await mkdir(resolve(this.root(), 'trash'), { recursive: true });
     try {
-      await rename(source, trash);
+      // Waits out a brief Windows lock (the cloud sync reading an image of this job), which
+      // otherwise failed the deletion with a 500.
+      await moveFolder(source, trash);
       return {
-        restore: () => rename(trash, source),
+        restore: () => moveFolder(trash, source),
         purge: () => rm(trash, { recursive: true, force: true }),
       };
     } catch (error) {

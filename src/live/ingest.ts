@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import type { QueryResult } from 'pg';
 import { Database } from '../database/database';
@@ -10,7 +10,9 @@ import {
   WorkerOptions,
 } from '../recognition/engine';
 import { levenshtein } from '../recognition/fusion';
-import { folderBytes } from './files';
+import { folderBytes, moveFolder } from './files';
+
+export { moveFolder };
 import { recordEvent } from './sessions';
 
 interface Queryable {
@@ -94,23 +96,6 @@ async function sightingOf(
     );
   });
   return match?.sighting_id ?? null;
-}
-
-/**
- * rename() that waits out a brief lock: Windows refuses to move a folder while another process
- * (an antivirus or the search indexer reading the evidence just written) has a file in it open,
- * and the track was then lost. Other errors, or a lock that outlasts ~3 s, are thrown.
- */
-export async function moveFolder(from: string, to: string, move = rename) {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await move(from, to);
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException)?.code ?? '';
-      if (attempt >= 5 || !['EPERM', 'EBUSY', 'EACCES'].includes(code)) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 100 * 2 ** attempt));
-    }
-  }
 }
 
 function instant(value: any) {
