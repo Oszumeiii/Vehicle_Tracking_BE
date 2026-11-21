@@ -14,6 +14,7 @@ import {
 } from '../src/media/cloud';
 import { cloudPush, type PushOptions } from '../src/media/cloud-push';
 import { Storage } from '../src/media/storage';
+import { CloudSync, cloudSyncSettings } from '../src/media/cloud-sync';
 
 // AWS's published Signature Version 4 examples (S3 "Authenticating Requests" docs).
 const AWS = {
@@ -252,4 +253,58 @@ test('a freed file is served by redirect to the bucket; local and invalid keys a
     if (previous === undefined) delete process.env.PLATE_DATA_DIR;
     else process.env.PLATE_DATA_DIR = previous;
   }
+});
+
+test('the worker moves old evidence images to the bucket by itself, only when configured', async () => {
+  const saved = { ...process.env };
+  try {
+    delete process.env.PLATE_CLOUD_EVIDENCE_AFTER_HOURS;
+    assert.equal(cloudSyncSettings().afterHours, null, 'off unless asked for');
+    process.env.PLATE_CLOUD_EVIDENCE_AFTER_HOURS = '-1';
+    assert.throws(() => cloudSyncSettings(), /PLATE_CLOUD_EVIDENCE_AFTER_HOURS/);
+    process.env.PLATE_CLOUD_EVIDENCE_AFTER_HOURS = '24';
+    process.env.PLATE_CLOUD_MAX_GB = '';
+    assert.deepEqual(cloudSyncSettings(), { afterHours: 24, maxGb: 9.5, intervalMs: 3_600_000 });
+  } finally {
+    process.env = saved;
+  }
+
+  await put('recognition/j1/tracks/track_000002/02_frame_0000002.png', 50);
+  await put('recognition/j1/clip.mp4', 70);
+  const store = new MemoryStore();
+  const lines: string[] = [];
+  const settings = { afterHours: 24, maxGb: 9.5, intervalMs: 60_000 };
+  const queries: unknown[][] = [];
+  const jobs = {
+    async query(sql: string, values: unknown[] = []) {
+      queries.push(values);
+      return db.query(sql);
+    },
+  };
+  const off = new CloudSync(jobs, dataDir, { ...settings, afterHours: null }, () => store);
+  assert.equal(await off.sweep(), null);
+  assert.equal(new CloudSync(jobs, dataDir, settings, () => null).enabled, false);
+
+  const sync = new CloudSync(
+    jobs,
+    dataDir,
+    settings,
+    () => store,
+    (line) => lines.push(line),
+  );
+  assert.equal(sync.enabled, true);
+  const first = await sync.sweep();
+  assert.ok(first && first.uploaded >= 1 && first.failed === 0);
+  assert.ok(store.objects.has('recognition/j1/tracks/track_000002/02_frame_0000002.png'));
+  assert.ok(!(await exists('recognition/j1/tracks/track_000002/02_frame_0000002.png')), 'freed');
+  assert.ok(await exists('recognition/j1/clip.mp4'), 'clips and json stay on the disk');
+  assert.ok(![...store.objects.keys()].some((key) => key.startsWith('media/')), 'no videos');
+  // Results finished at least 24 h ago only.
+  const cutoff = queries[0][0] as Date;
+  assert.ok(Math.abs(Date.now() - 24 * 3600_000 - cutoff.getTime()) < 60_000);
+  assert.match(lines.join(' '), /Cloud sync \(memory\/test\): \d+ uploaded, \d+ freed/);
+  // Nothing new: a quiet pass.
+  const second = await sync.sweep();
+  assert.equal(second?.uploaded, 0);
+  assert.equal(lines.length, 1);
 });

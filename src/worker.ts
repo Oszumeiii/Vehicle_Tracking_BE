@@ -11,6 +11,7 @@ import {
 import { hostRunner } from './recognition/host-runner';
 import { GpuGate, LiveManager, liveSettings, spawnLiveProcess, SpawnLive } from './live/manager';
 import { Retention } from './live/retention';
+import { CloudSync } from './media/cloud-sync';
 import { SharedLiveHost } from './live/host';
 import { WORKER_LOCK } from './system/health.controller';
 
@@ -80,6 +81,7 @@ export async function runWorker(
     const live = new LiveManager(database, options, settings, spawn, gate);
     await live.recover();
     const retention = new Retention(database, options);
+    const cloudSync = new CloudSync(database, options.dataDir);
     const idle = () =>
       new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, interval);
@@ -134,7 +136,7 @@ export async function runWorker(
     // --once keeps its meaning: process at most one job, and no live sessions.
     const results = await Promise.allSettled([
       ...Array.from({ length: once ? 1 : concurrency }, () => slot()),
-      ...(once ? [] : [liveLoop(), retention.run(shutdown.signal)]),
+      ...(once ? [] : [liveLoop(), retention.run(shutdown.signal), cloudSync.run(shutdown.signal)]),
     ]);
     await host?.stopIdle(); // a warm host would outlive the worker otherwise
     if (lostLock) throw lostLock;
