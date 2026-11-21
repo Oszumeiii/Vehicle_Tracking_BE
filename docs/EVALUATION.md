@@ -462,3 +462,38 @@ Tổng cộng 20/280 mẫu có nhãn, đều thuộc nhóm crop lớn nhất và
 - **Ghi nhận thêm:** trên footage này SE-ResNet34-C cũ đọc tốt hơn SVTRv2 ở mọi mức đệm (27 so với 14–19 biển đúng khi cắt sát), ngược với kết quả đo trên ICPR ngày 09/11. Đợt này chưa đổi model.
 - **Giới hạn:** 55 track của một khung cảnh, nhãn không phải của người. Sau khi sửa vẫn chỉ khoảng 1/3 biển đúng cả chuỗi: crop xa cuối track mờ, biển nghiêng, và độ tin cậy từ 0,85 vẫn gồm nhiều biển sai (SVTRv2 cắt sát: 13 đúng trong 29 track từ 0,85).
 - Dữ liệu và script: `data/evaluation/ocr_padding/` (không commit).
+- **Theo cỡ biển** (cùng 55 track, cắt sát): biển rộng dưới 70 px đọc đúng SVTRv2 11/25, SE-ResNet34-C 15/25; biển từ 70 px chỉ 3/30 với SVTRv2 so với 12/30 với SE-ResNet34-C. Thu nhỏ ảnh còn 48 px trước khi đọc giúp SVTRv2 một chút (3 → 6/30 ở biển lớn) nhưng vẫn kém xa model cũ. Biển lớn và gần camera là nơi SVTRv2 thua rõ nhất.
+
+## Xe bị sót trên camera Balneário Camboriú (21/11/2026)
+
+- **Câu hỏi:** người dùng thấy nhiều xe đi qua mà không có kết quả. Xe bị mất ở bước nào, và phần nào do khâu theo dõi (không phải do OCR đọc sai rồi tìm không ra)?
+- **Cách đo:** phút 10–14 (240 giây) của hai video phát lại sáng 21/11, 1920×1080, 30 fps: "BC – Pau da Viola" và "BC – San Telmo". Cùng một lượt đọc video chạy hai thứ:
+  - pipeline thật: `TrackSession` với đúng snapshot của phiên live (lấy mẫu 8/12/15 fps, ảnh detector 1280 px, empty-scene gate, `association_reach` 1,5, `max_track_seconds` 30), ghi lại mọi box detector, box tracker và lý do loại track;
+  - tham chiếu: detector ở **mọi khung** với ảnh 1920 px, BoT-SORT riêng. Một "lượt xe" của tham chiếu là track có ít nhất 10 box; track đứng yên (xe đỗ) và track chạm mép đoạn được tách riêng.
+  - Một lượt xe được coi là "pipeline giữ được" khi có track được lưu chứa box trùng (IoU ≥ 0,3) với box tham chiếu cùng khung. Kết quả của phiên live thật (đọc từ database, cùng đoạn video) được đối chiếu theo cách giống hệt.
+
+| Camera | Lượt xe đang chạy | Pipeline giữ | Biển ≥ 50 px | Biển < 50 px | Phiên live thật giữ |
+|---|---|---|---|---|---|
+| Pau da Viola | 57 | 48 | 40/41 | 8/16 | 47 |
+| San Telmo | 62 | 50 | 30/30 | 20/32 | 50 |
+
+- **Biển rộng từ 50 px gần như không bị sót** (70/71; lượt duy nhất là một xe tải mà detector chỉ thấy ở 4 khung). Các lượt bị sót còn lại đều là biển 18–44 px hiện trong khung 0,3–2 giây: xe máy (biển vuông 2 dòng), ô tô ở xa, một xe van. Ở 8 khung/giây lấy mẫu, detector chỉ thấy các biển này ở 0–8 khung, và tracker nối được tối đa 3–4, chưa đủ 5 khung để thành track.
+- Phân loại 21 lượt bị sót: 11 bị loại vì "ít hơn 5 khung hợp lệ", 9 không bao giờ được tracker xác nhận (detector thấy 1–2 lần), 1 detector ở 1280 px không thấy.
+- **Bỏ khung khi GPU không kịp không làm mất xe:** phiên live thật bỏ 4.767/81.000 (Pau da Viola) và 2.928/81.000 (San Telmo) khung đọc, nhưng giữ 47 và 50 lượt, gần bằng chạy offline không bỏ khung (48 và 50).
+- Xe đỗ bên đường (5 và 3 lượt) không thành track; đây là chủ ý của empty-scene gate và không phải xe cần tìm.
+
+**Thử cấu hình khác trên đoạn Pau da Viola** (tham chiếu giữ nguyên):
+
+| Cấu hình | Lượt giữ (57) | Biển < 50 px (16) | Giây GPU detector / 240 giây video |
+|---|---|---|---|
+| Đang dùng | 48 | 8 | 86 |
+| Cho phép track 4 ảnh (`min_frames` 4) | 50 | 9 | 84 |
+| Lấy mẫu 15/20/25 fps | 53 | 12 | 171 |
+| Lấy mẫu 15/20/25 fps + track 4 ảnh | 53 | 12 | 155 |
+
+- Lấy mẫu dày hơn cứu thêm 5 lượt (đều là biển nhỏ) nhưng gấp đôi thời gian GPU: khoảng 0,7 giây GPU mỗi giây video, nên hai camera trên một GPU không còn chạy kịp thời gian thực. Pipeline thử nghiệm `pbl6-svtrv2-regional-joint5-hfps-v1` đã có sẵn cấu hình này cho trường hợp chỉ chạy một camera.
+- Track 4 ảnh cứu thêm 2 lượt, không tốn GPU, nhưng đã được tắt ở giai đoạn 12 vì chất lượng OCR của track ngắn.
+- **Chưa đổi mặc định.** Các biển được cứu thêm đều dưới 50 px. Ở cỡ đó OCR chưa được đo đủ (bộ 55 nhãn ở trên chỉ có 1 biển dưới 50 px), nên chưa biết giữ thêm chúng có ra biển số dùng được hay không.
+- **Kết luận:** với hai camera này, phần lớn cảm giác "bị sót" không đến từ khâu theo dõi. Mọi biển đủ lớn đều thành track. Biển đọc sai thì tìm theo biển đúng không ra, và trước khi sửa phần đệm, OCR đọc sai khoảng 3/4 biển (mục trên).
+- **Giới hạn:** tham chiếu cũng dùng cùng detector, nên xe mà YOLO không thấy ở bất kỳ khung nào, kể cả với ảnh 1920 px, không có trong phép đo. Mỗi camera chỉ đo một đoạn 4 phút ban ngày.
+- Dữ liệu và script: `data/evaluation/missed_tracks/` (không commit).
