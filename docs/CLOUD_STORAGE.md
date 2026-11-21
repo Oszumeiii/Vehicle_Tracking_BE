@@ -71,7 +71,7 @@ npm run cloud:push -- --all --free-local --older-than-days 7 --max-gb 9.5
 
 ## Tự động chuyển crop và keyframe lên bucket
 
-Thay vì chạy `cloud:push` bằng tay, worker có thể tự làm việc này. Thêm vào `.env`:
+Thay vì chạy `cloud:push` bằng tay, worker có thể tự làm việc này. Cách nhanh nhất là chạy `powershell -ExecutionPolicy Bypass -File scriptsset-r2-keys.ps1`: script hỏi Account ID, tên bucket và key (Secret không hiện khi gõ), ghi tất cả vào `.env`, bật tự đồng bộ rồi chạy `cloud:check`. Muốn tự sửa `.env` thì thêm:
 
 ```
 PLATE_CLOUD_EVIDENCE_AFTER_HOURS=1   # kết quả cũ hơn 1 giờ thì ảnh chuyển lên bucket
