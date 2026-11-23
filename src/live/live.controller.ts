@@ -504,6 +504,17 @@ export class LiveController {
     return (await this.withActive([await this.owner.streamSource(req.user, id)]))[0];
   }
 
+  /** A camera setting naming a pipeline that does not exist is invalid input, not a missing resource. */
+  private async settingPipeline(id: string) {
+    try {
+      return await this.registry.resolve(id);
+    } catch (error) {
+      if (error instanceof NotFoundException)
+        throw new UnprocessableEntityException(`Unknown pipeline: ${id}.`);
+      throw error;
+    }
+  }
+
   @Patch('stream-sources/:id')
   @ApiResponse({ status: 200, type: StreamSourceResponse })
   @ApiFailures(404)
@@ -558,7 +569,7 @@ export class LiveController {
     await this.owner.streamSource(req.user, id);
     if (
       body.auto_settings &&
-      !isLivePipeline(await this.registry.resolve(body.auto_settings.pipeline_id))
+      !isLivePipeline(await this.settingPipeline(body.auto_settings.pipeline_id))
     )
       throw new UnprocessableEntityException(
         'Live recognition needs a five-frame joint OCR pipeline.',

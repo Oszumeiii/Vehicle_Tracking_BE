@@ -75,7 +75,16 @@ const CROP_WIDTH = `(SELECT avg(d.crop_width) FROM plate_detections d WHERE d.ap
 const review = z
   .object({
     action: z.enum(['confirm', 'correct', 'unreadable', 'reject']),
-    corrected_text: z.string().min(1).max(64).optional(),
+    // Spaces, dots and hyphens are dropped (normalizePlate); anything else is not a plate.
+    corrected_text: z
+      .string()
+      .min(1)
+      .max(64)
+      .refine((text) => /^[A-Z0-9]+$/.test(normalizePlate(text)), {
+        message:
+          'corrected_text may contain only letters and digits (spaces, dots and hyphens are dropped).',
+      })
+      .optional(),
     note: z.string().max(2000).optional(),
     expected_revision: z.number().int().nonnegative(),
   })
@@ -353,7 +362,9 @@ export class ResultsController {
           type: 'string',
           minLength: 1,
           maxLength: 64,
-          description: 'Required only for action=correct; omit for every other action.',
+          pattern: '^[A-Za-z0-9\\s.-]+$',
+          description:
+            'Required only for action=correct; omit for every other action. Letters and digits; spaces, dots and hyphens are dropped.',
         },
         note: { type: 'string', maxLength: 2000 },
         expected_revision: { type: 'integer', minimum: 0 },

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { after, before, test } from 'node:test';
@@ -47,6 +48,14 @@ before(async () => {
     process.env.PLATE_PIPELINE_PYTHON ??
       (process.platform === 'win32' ? '.venv/Scripts/python.exe' : '.venv/bin/python'),
   );
+  // Uploads are inspected with this Python; without it those tests fail with 503.
+  if (!existsSync(process.env.PLATE_PIPELINE_PYTHON))
+    console.warn(
+      `\nNo Python at ${process.env.PLATE_PIPELINE_PYTHON}: upload tests will fail with 503 ` +
+        '"Media inspection is unavailable". Create .venv (README, "Chuẩn bị inference"), or set ' +
+        'PLATE_PIPELINE_PYTHON to a Python with requirements-inference.txt, such as the .venv ' +
+        'of the main checkout when testing in a git worktree.\n',
+    );
   process.env.PLATE_MAX_UPLOAD_MIB = '1';
   process.env.NODE_ENV = 'test';
   process.env.CORS_ORIGINS = 'http://localhost:5173';
@@ -946,6 +955,9 @@ test('reviews validate actions and revisions, reject ambiguous confirmation, and
     { action: 'correct', expected_revision: 0 },
     { action: 'confirm', corrected_text: 'ABC1234', expected_revision: 0 },
     { action: 'correct', corrected_text: ' - ', expected_revision: 0 },
+    // Not a plate: only letters and digits are kept (R09 of the November review).
+    { action: 'correct', corrected_text: '=HYPERLINK("x")', expected_revision: 0 },
+    { action: 'correct', corrected_text: 'ab c-1.2/3', expected_revision: 0 },
     { action: 'reject', expected_revision: -1 },
     { action: 'reject', expected_revision: 0.5 },
   ])

@@ -218,6 +218,6 @@ npm test
 npm run format:check
 ```
 
-Test Node dùng PostgreSQL thật trong cluster/database tạm, không sửa database đang sử dụng. Nếu máy không có binaries PostgreSQL, đặt `PG_BIN` hoặc `TEST_DATABASE_URL` trỏ server cho phép tạo database test. Python tests kiểm tra model OCR/decoder, tracking 5 frame và evaluator; không thay cho kiểm thử API NestJS.
+Test Node dùng PostgreSQL thật trong cluster/database tạm, không sửa database đang sử dụng. Nếu máy không có binaries PostgreSQL, đặt `PG_BIN` hoặc `TEST_DATABASE_URL` trỏ server cho phép tạo database test. Test upload cần Python của `.venv` (kiểm tra media); trong một git worktree không có `.venv`, đặt `PLATE_PIPELINE_PYTHON` trỏ tới `.venv` của thư mục chính. Python tests kiểm tra model OCR/decoder, tracking 5 frame và evaluator; không thay cho kiểm thử API NestJS.
 
 Đánh giá accuracy/CER: [EVALUATION.md](docs/EVALUATION.md). Chạy inference thành công chưa chứng minh độ chính xác trên dữ liệu ứng dụng; cần nhãn chuẩn độc lập. Test với runner fixture chỉ chứng minh luồng nghiệp vụ/transaction.
