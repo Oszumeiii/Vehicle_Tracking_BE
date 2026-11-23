@@ -238,6 +238,12 @@ test('always-on cameras restart with backoff, and a user stop turns always-on of
     .set(as('owner'))
     .send({ always_on: true, auto_settings: { pipeline_id: 'single' } })
     .expect(422);
+  // An unknown pipeline is invalid input too, not a missing resource.
+  await api
+    .patch(`/api/v2/stream-sources/${source.id}`)
+    .set(as('owner'))
+    .send({ auto_settings: { pipeline_id: 'no-such-pipeline' } })
+    .expect(422);
   const patched = await api
     .patch(`/api/v2/stream-sources/${source.id}`)
     .set(as('owner'))
@@ -295,6 +301,18 @@ test('always-on cameras restart with backoff, and a user stop turns always-on of
   assert.equal(stopped.body.always_on, false);
   await live.autoRestart();
   assert.equal((await sessions()).length, 3);
+
+  // Turning 24/7 back on right after that short, user-stopped session starts at once:
+  // a stop on purpose is not a failure of the source.
+  await api
+    .patch(`/api/v2/stream-sources/${source.id}`)
+    .set(as('owner'))
+    .send({ always_on: true })
+    .expect(200);
+  await live.autoRestart();
+  const [fourth] = await sessions();
+  assert.equal((await sessions()).length, 4);
+  assert.equal(fourth.status, 'queued');
 });
 
 test('tracks of the same plate on a camera within the sighting window form one sighting', async () => {

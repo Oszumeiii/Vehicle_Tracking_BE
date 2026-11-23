@@ -171,7 +171,8 @@ export class LiveManager {
   /**
    * Queue a new session for each always-on camera that has none. Consecutive short
    * sessions (under two minutes, e.g. a broadcast that is down) back off 1, 2, 4...
-   * up to 30 minutes; a session that ran longer resets the backoff.
+   * up to 30 minutes; a session that ran longer resets the backoff. A session stopped on
+   * purpose (by a user, or by the disk guard) says nothing about the source and is not counted.
    */
   async autoRestart() {
     const cameras = (
@@ -183,16 +184,19 @@ export class LiveManager {
     for (const camera of cameras) {
       const recent = (
         await this.database.query(
-          `SELECT id, finished_at, extract(epoch FROM finished_at - coalesce(started_at, created_at)) AS ran
+          `SELECT id, status, finished_at, extract(epoch FROM finished_at - coalesce(started_at, created_at)) AS ran
           FROM live_sessions WHERE stream_source_id=$1 ORDER BY created_at DESC LIMIT 12`,
           [camera.id],
         )
       ).rows;
-      const failures = recent.findIndex((row) => Number(row.ran) >= 120);
-      const short = failures < 0 ? recent.length : failures;
+      const counted = recent.filter((row) => row.status !== 'stopped');
+      const failures = counted.findIndex((row) => Number(row.ran) >= 120);
+      const short = failures < 0 ? counted.length : failures;
       const delay = short ? Math.min(30, 2 ** (short - 1)) * 60_000 : 0;
+      const failed = counted[0];
+      if (failed?.finished_at && Date.now() - new Date(failed.finished_at).getTime() < delay)
+        continue;
       const last = recent[0];
-      if (last?.finished_at && Date.now() - new Date(last.finished_at).getTime() < delay) continue;
       const blocked = this.restartBlocked.get(camera.id);
       if (blocked && Date.now() < blocked.until) continue;
       const auto = camera.auto_settings;

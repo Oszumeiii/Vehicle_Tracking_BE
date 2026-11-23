@@ -79,7 +79,7 @@ Job Kaggle joint-frame lưu `recognition_method=joint_multiframe`, `agreement_co
 {"action":"correct","corrected_text":"ABC-1234","note":"Đối chiếu keyframe nguồn","expected_revision":0}
 ```
 
-Action `confirm` chấp nhận text máy; `correct` bắt buộc text mới; `unreadable`/`reject` xóa text hiệu lực khỏi tra cứu theo biển số. Review không sửa machine_text hoặc OCR prediction. `expected_revision` cũ trả `409`, client tải lại trước khi sửa tiếp. Kết quả mới có `review_status=pending`; không tự duyệt theo confidence.
+Action `confirm` chấp nhận text máy; `correct` bắt buộc text mới, chỉ gồm chữ và số (khoảng trắng, dấu chấm, gạch nối bị bỏ; ký tự khác trả `422`); `unreadable`/`reject` xóa text hiệu lực khỏi tra cứu theo biển số. Review không sửa machine_text hoặc OCR prediction. `expected_revision` cũ trả `409`, client tải lại trước khi sửa tiếp. Kết quả mới có `review_status=pending`; không tự duyệt theo confidence.
 
 - `GET /api/v2/recognition-jobs/{id}/export?format=csv`: CSV UTF-8 BOM, có text máy, text hiệu lực, trạng thái và frame/timestamp. Cell có tiền tố công thức được escape để mở an toàn trong spreadsheet.
 
@@ -106,7 +106,7 @@ Action `confirm` chấp nhận text máy; `correct` bắt buộc text mới; `un
 - **Bản ghi camera:**
   - `GET /api/v2/stream-sources/{id}/recording/coverage` → `{items:[{from,to}]}`, các khoảng còn bản ghi.
   - `GET /api/v2/stream-sources/{id}/recording?from=ISO&to=ISO` (tối đa 600 s) → `video/mp4`. Sai khoảng thời gian trả `400`, không còn bản ghi trả `404`.
-- `PATCH /api/v2/stream-sources/{id}`: `url` (chỉ camera RTSP, để đổi mật khẩu; loại khác trả `422`), `name`, `exclude_zones`, `always_on`, `auto_settings` (`{pipeline_id, min_confidence?, max_track_seconds?, max_height?}`; `always_on` cần `pipeline_id` của profile joint), `keyframe_retention_hours`, `track_retention_days` (`null` là giữ mãi), `location` (`null` để xóa vị trí), `detect_roi` (`null` để bỏ vùng nhận diện). Áp dụng từ phiên kế tiếp.
+- `PATCH /api/v2/stream-sources/{id}`: `url` (chỉ camera RTSP, để đổi mật khẩu; loại khác trả `422`), `name`, `exclude_zones`, `always_on`, `auto_settings` (`{pipeline_id, min_confidence?, max_track_seconds?, max_height?}`; `always_on` cần `pipeline_id` của profile joint; `pipeline_id` không tồn tại trả `422`), `keyframe_retention_hours`, `track_retention_days` (`null` là giữ mãi), `location` (`null` để xóa vị trí), `detect_roi` (`null` để bỏ vùng nhận diện). Áp dụng từ phiên kế tiếp.
   - Camera phát lại video upload còn đổi được `loop` (`true`/`false`); loại camera khác gửi `loop` trả `422`.
 - `DELETE /api/v2/stream-sources/{id}`: `204`; camera đã có phiên trả `409`.
 - `POST /api/v2/stream-sources/{id}/sessions`: `{pipeline_id,min_confidence?,max_track_seconds?,max_height?}` → `202`, phiên `queued`. `min_confidence` mặc định 0.85 (precision khoảng 87% trên ICPR; 0.96 cho 96% nhưng camera live gần như không có track `readable`, xem [EVALUATION.md](EVALUATION.md#kết-quả-hiệu-chỉnh-offline-trên-icpr-26102026)). `max_height` là 480, 720 hoặc 1080 (mặc định).
