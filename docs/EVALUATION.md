@@ -443,7 +443,7 @@ Tổng cộng 20/280 mẫu có nhãn, đều thuộc nhóm crop lớn nhất và
 ## Phần đệm của ảnh đưa vào OCR (21/11/2026)
 
 - **Hiện tượng:** biển rõ, crop nét, 5 ảnh đúng cùng một xe, nhưng OCR đọc sai gần hết ký tự (ví dụ `RYN2F47` → `KYM7647`, `TDB4G68` → `AYN4542`).
-- **Nguyên nhân:** crop lưu làm bằng chứng có thêm 15% quanh box detector (`tracking.crop_padding`) để người duyệt thấy biển trong ngữ cảnh, và OCR đọc nguyên crop đó. Cả hai checkpoint (SVTRv2 và SE-ResNet34-C cũ) được train trên ảnh ICPR cắt sát biển; phần thân xe thừa làm model đọc lệch. Trên camera YouTube cũ biển chỉ rộng khoảng 40 px nên ảnh hưởng ít hơn; trên footage Balneário Camboriú hiện tại biển rộng 60–110 px.
+- **Nguyên nhân:** crop lưu làm bằng chứng có thêm 15% quanh box detector (`tracking.crop_padding`) để người duyệt thấy biển trong ngữ cảnh, và OCR đọc nguyên crop đó. Cả hai checkpoint (SVTRv2 và SE-ResNet34-C cũ) được train trên ảnh ICPR cắt sát biển; phần thân xe thừa làm model đọc lệch. Trên camera YouTube cũ biển chỉ rộng khoảng 40 px nên ảnh hưởng ít hơn; trên footage Balneário Camboriú hiện tại biển rộng 40–75 px (trung vị 56 px), ảnh crop lưu kèm viền rộng 54–98 px.
 - **Cách đo:** 55 track của hai camera phát lại "BC – Pau da Viola 21/11 sáng" và "BC – San Telmo 21/11 sáng", lấy ngẫu nhiên trong các track còn crop. Nhãn do Claude đọc từ crop (không phải nhãn người): 29 biển "chắc chắn", 26 biển "khá chắc", bỏ các track không đọc được. Vì O/Q và I/J khó phân biệt ở độ phân giải này (cả hai model cũng đọc `QIR8J74` khi nhãn ghi `OIR8J74`), số dưới đây coi O=Q và I=J. OCR chạy lại trên chính các crop đã lưu, cắt còn box detector cộng phần đệm cho trong bảng.
 
 | OCR | Phần đệm | Đúng cả biển (55) | Tỷ lệ ký tự sai |
@@ -462,7 +462,7 @@ Tổng cộng 20/280 mẫu có nhãn, đều thuộc nhóm crop lớn nhất và
 - **Ghi nhận thêm:** trên footage này SE-ResNet34-C cũ đọc tốt hơn SVTRv2 ở mọi mức đệm (27 so với 14–19 biển đúng khi cắt sát), ngược với kết quả đo trên ICPR ngày 09/11. Đợt này chưa đổi model.
 - **Giới hạn:** 55 track của một khung cảnh, nhãn không phải của người. Sau khi sửa vẫn chỉ khoảng 1/3 biển đúng cả chuỗi: crop xa cuối track mờ, biển nghiêng, và độ tin cậy từ 0,85 vẫn gồm nhiều biển sai (SVTRv2 cắt sát: 13 đúng trong 29 track từ 0,85).
 - Dữ liệu và script: `data/evaluation/ocr_padding/` (không commit).
-- **Theo cỡ biển** (cùng 55 track, cắt sát): biển rộng dưới 70 px đọc đúng SVTRv2 11/25, SE-ResNet34-C 15/25; biển từ 70 px chỉ 3/30 với SVTRv2 so với 12/30 với SE-ResNet34-C. Thu nhỏ ảnh còn 48 px trước khi đọc giúp SVTRv2 một chút (3 → 6/30 ở biển lớn) nhưng vẫn kém xa model cũ. Biển lớn và gần camera là nơi SVTRv2 thua rõ nhất.
+- **Theo bề rộng ảnh crop lưu** (đã cộng viền 15% mỗi bên; cùng 55 track, cắt sát). Bản trước ghi nhầm đây là bề rộng biển; sửa ngày 23/11/2026. Crop dưới 70 px: SVTRv2 đọc đúng 11/25, SE-ResNet34-C 15/25. Crop từ 70 px: SVTRv2 chỉ 3/30, SE-ResNet34-C 12/30. Thu nhỏ ảnh còn 48 px trước khi đọc giúp SVTRv2 một chút (3 → 6/30 ở nhóm crop lớn) nhưng vẫn kém xa model cũ. Tính theo bề rộng biển thật thì SVTRv2 kém ở mọi cỡ, xem mục "Vì sao SVTRv2 đọc kém hơn trên camera thật".
 
 ## Biển nghiêng (21/11/2026)
 
@@ -511,7 +511,52 @@ Tổng cộng 20/280 mẫu có nhãn, đều thuộc nhóm crop lớn nhất và
 
 - Lấy mẫu dày hơn cứu thêm 5 lượt (đều là biển nhỏ) nhưng gấp đôi thời gian GPU: khoảng 0,7 giây GPU mỗi giây video, nên hai camera trên một GPU không còn chạy kịp thời gian thực. Pipeline thử nghiệm `pbl6-svtrv2-regional-joint5-hfps-v1` đã có sẵn cấu hình này cho trường hợp chỉ chạy một camera.
 - Track 4 ảnh cứu thêm 2 lượt, không tốn GPU, nhưng đã được tắt ở giai đoạn 12 vì chất lượng OCR của track ngắn.
-- **Chưa đổi mặc định.** Các biển được cứu thêm đều dưới 50 px. Ở cỡ đó OCR chưa được đo đủ (bộ 55 nhãn ở trên chỉ có 1 biển dưới 50 px), nên chưa biết giữ thêm chúng có ra biển số dùng được hay không.
+- **Chưa đổi mặc định.** Các biển được cứu thêm đều dưới 50 px. Ở cỡ đó OCR chưa được đo đủ (bộ 55 nhãn ở trên không có biển nào dưới 40 px, chỉ 14 biển rộng 40–49 px), nên chưa biết giữ thêm chúng có ra biển số dùng được hay không.
 - **Kết luận:** với hai camera này, phần lớn cảm giác "bị sót" không đến từ khâu theo dõi. Mọi biển đủ lớn đều thành track. Biển đọc sai thì tìm theo biển đúng không ra, và trước khi sửa phần đệm, OCR đọc sai khoảng 3/4 biển (mục trên).
 - **Giới hạn:** tham chiếu cũng dùng cùng detector, nên xe mà YOLO không thấy ở bất kỳ khung nào, kể cả với ảnh 1920 px, không có trong phép đo. Mỗi camera chỉ đo một đoạn 4 phút ban ngày.
 - Dữ liệu và script: `data/evaluation/missed_tracks/` (không commit).
+
+## Vì sao SVTRv2 đọc kém hơn trên camera thật (23/11/2026)
+
+- **Câu hỏi:** trên ICPR, SVTRv2 đọc đúng nhiều hơn SE-ResNet34-C (79,6% so với 77,1%), nhưng trên camera Balneário Camboriú lại kém hơn hẳn. Vì sao?
+- **Cách đo:** cùng 55 track có nhãn của hai mục trên (O=Q, I=J), cắt sát và xoay thẳng, chạy qua đúng code của runner. Ngoài cách đọc bình thường (ghép 5 khung), đo thêm:
+  - đọc từng khung riêng (một crop lặp lại 5 lần);
+  - thu nhỏ mỗi crop còn rộng 48 px (cỡ ICPR) trước khi đọc.
+
+| Model | ICPR test (cùng nguồn với dữ liệu train) | Camera Camboriú (55 track) |
+|---|---|---|
+| SVTRv2 | 79,6% | 29 (53%) |
+| SE-ResNet34-C | 77,1% | 44 (80%) |
+
+**Đã loại trừ:**
+- **Cỡ biển:** biển (box detector) rộng 40–75 px, 80% trong khoảng 45–69 px, trung vị 56 px, gần cỡ crop ICPR (39–56 px). SE-ResNet34-C hơn ở mọi nhóm cỡ:
+
+  | Bề rộng biển | Số track | SVTRv2 đúng | SE-ResNet34-C đúng |
+  |---|---|---|---|
+  | dưới 50 px | 14 | 5 | 8 |
+  | 50–59 px | 22 | 14 | 20 |
+  | từ 60 px | 19 | 10 | 16 |
+
+  Thu nhỏ về 48 px: SVTRv2 tăng từ 29 lên 32, SE-ResNet34-C giảm từ 44 xuống 43.
+- **Ghép 5 khung:** đọc từng khung riêng, SVTRv2 chỉ đúng 53/275 khung (19%), SE-ResNet34-C đúng 141/275 (51%). Ghép 5 khung còn nâng SVTRv2 lên 53%. Không có track nào đọc đúng riêng từ 3 khung trở lên mà ghép lại sai.
+- **Biển nghiêng:** cả hai model đều nhận ảnh đã xoay thẳng.
+- **Ngưỡng:** cả hai đều cho độ tin cậy cao cả khi sai. Trung vị độ tin cậy của các lần đọc sai: SVTRv2 0,93, SE-ResNet34-C 0,99.
+
+**Lỗi còn lại:**
+- **So từng track:**
+  - 15 track chỉ SVTRv2 sai;
+  - không có track nào chỉ SE-ResNet34-C sai;
+  - 8 track hai model đọc giống hệt nhau nhưng khác nhãn, nhiều khả năng nhãn sai;
+  - 3 track cả hai đọc sai, mỗi model một kiểu.
+- **Kiểu lỗi của SVTRv2:** dồn vào các chữ số chỉ khác nhau một nét nhỏ: 6 → 0 (8 lần), 9 → 7 (4 lần), 1 → 3 (2 lần). 13 trong 26 lần đọc sai chỉ lệch 1 ký tự.
+
+**Kết luận:**
+- **Vì sao con số ICPR không áp dụng được:** ICPR test là ảnh cùng nguồn với ảnh train, nên con số trên ICPR chỉ cho biết model học bộ dữ liệu đó tốt đến đâu.
+- **Lệch miền dữ liệu:** footage Camboriú khác ICPR ở camera, góc quay, ánh sáng và mức nén video. SVTRv2 chịu sự khác biệt này kém hơn nhiều, còn SE-ResNet34-C giữ được mức đúng. Phép đo chưa tách được yếu tố nào ảnh hưởng nhiều nhất.
+- **79,6% có thể lạc quan hơn thực tế:** nhóm không ghi lại SVTRv2 được train trên phần nào của ICPR.
+- **Bộ test độc lập cho cùng kết luận:** 88 track mới ở `docs/REVIEW_2026-11.md` (mục 5): SE-ResNet34-C đúng 77%, SVTRv2 66%.
+
+**Quyết định của nhóm (23/11/2026):** giữ SVTRv2 làm mặc định. Người dùng chọn model theo camera, hoặc ngay cạnh nút "Bật phiên" (FE #31).
+
+- **Giới hạn:** nhãn do Claude đọc từ crop, một khung cảnh ban ngày. Cần nhãn người trước khi đưa con số vào báo cáo chính thức.
+- **Dữ liệu và script:** `data/evaluation/ocr_padding/svtr_why.py` và `svtr_why.json` (không commit).
