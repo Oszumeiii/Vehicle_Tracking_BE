@@ -475,3 +475,54 @@ test('the review queue filters by crop width and orders by confidence', async ()
   await api.get('/api/v2/recognition-results?order=random').set(as('owner')).expect(422);
   await api.get('/api/v2/recognition-results?min_crop_width=0').set(as('owner')).expect(422);
 });
+
+test('of two copies of one file, the copy with a corrected read stands for both', async () => {
+  // Copy 1, uploaded first: its misread TQB9E23 was corrected to TOB9E23. Copy 2, uploaded
+  // and analysed later, still reads TQB9E23 (R08 of the November review).
+  const corrected = await upload('bc_1600.mp4', 'bc-1600', [['TQB9E23', 40, 44]]);
+  await db().query("UPDATE media_assets SET uploaded_at=now() - interval '1 day' WHERE id=$1", [
+    corrected,
+  ]);
+  const again = await upload('bc_1600 (2).mp4', 'bc-1600', [['TQB9E23', 40, 44]]);
+  for (const media of [corrected, again])
+    await api
+      .patch(`/api/v2/media/${media}`)
+      .set(as('owner'))
+      .send({ recorded_at: '2026-03-02T16:00:00Z' })
+      .expect(200);
+  const result = (
+    await db().query(
+      'SELECT a.id FROM plate_appearances a JOIN recognition_jobs j ON j.id=a.job_id WHERE j.media_id=$1',
+      [corrected],
+    )
+  ).rows[0].id;
+  await api
+    .post(`/api/v2/recognition-results/${result}/reviews`)
+    .set(as('owner'))
+    .send({ action: 'correct', corrected_text: 'TOB9E23', expected_revision: 0 })
+    .expect(201);
+
+  const journey = (
+    await api
+      .get('/api/v2/plates/TOB9E23/journey')
+      .query({ match: 'fuzzy' })
+      .set(as('owner'))
+      .expect(200)
+  ).body;
+  assert.deepEqual(
+    journey.points.map((p: any) => [p.camera.name, p.plate, p.review_status]),
+    [['bc_1600.mp4', 'TOB9E23', 'corrected']],
+  );
+  // Without any review the newest upload still stands for its copies.
+  const plain = (
+    await api
+      .get('/api/v2/plates/TQB9E23/journey')
+      .query({ match: 'exact' })
+      .set(as('owner'))
+      .expect(200)
+  ).body;
+  assert.deepEqual(
+    plain.points.map((p: any) => p.camera.name),
+    ['bc_1600 (2).mp4'],
+  );
+});
