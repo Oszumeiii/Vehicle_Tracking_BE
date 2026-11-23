@@ -9,6 +9,28 @@ interface Queryable {
 export const ACTIVE_STATUSES = ['queued', 'starting', 'running', 'reconnecting', 'stopping'];
 export const ACTIVE_SQL = `(${ACTIVE_STATUSES.map((s) => `'${s}'`).join(',')})`;
 
+/** A camera's recent sessions, newest first: what the 24/7 backoff reads. */
+export const RECENT_SESSIONS = 12;
+export const SESSION_RAN_SQL = 'extract(epoch FROM finished_at - coalesce(started_at, created_at))';
+
+/**
+ * When an always-on camera may start its next session, or null for at once. Consecutive
+ * short sessions (under two minutes, e.g. a broadcast that is down) back off 1, 2, 4...
+ * up to 30 minutes after the last one ended; a session that ran longer resets the
+ * backoff. A session stopped on purpose (by a user, or by the disk guard) says nothing
+ * about the source and is not counted. The worker and the camera API both use this.
+ * Rows: status, finished_at and ran (seconds, SESSION_RAN_SQL), newest first.
+ */
+export function restartAt(recent: Record<string, any>[]): Date | null {
+  const counted = recent.filter((row) => row.status !== 'stopped');
+  const failures = counted.findIndex((row) => Number(row.ran) >= 120);
+  const short = failures < 0 ? counted.length : failures;
+  const failed = counted[0];
+  if (!short || !failed?.finished_at) return null;
+  const delay = Math.min(30, 2 ** (short - 1)) * 60_000;
+  return new Date(new Date(failed.finished_at).getTime() + delay);
+}
+
 export function sessionView(row: Record<string, any>) {
   const { pipeline_snapshot, owner_id: _owner, ...value } = row;
   return {

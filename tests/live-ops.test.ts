@@ -278,9 +278,24 @@ test('always-on cameras restart with backoff, and a user stop turns always-on of
   );
   await live.autoRestart();
   assert.equal((await sessions()).length, 1, 'backing off');
+  // The camera says when it starts again: a minute after that session ended.
+  const waiting = (
+    await api.get(`/api/v2/stream-sources/${source.id}`).set(as('owner')).expect(200)
+  ).body;
+  assert.equal(waiting.active_session, null);
+  const wait = new Date(waiting.auto_restart_at).getTime() - Date.now();
+  assert.ok(wait > 50_000 && wait <= 60_000, `restarts in ${wait} ms`);
+  const listed = (await api.get('/api/v2/stream-sources').set(as('owner')).expect(200)).body.items;
+  assert.equal(
+    listed.find((c: any) => c.id === source.id).auto_restart_at,
+    waiting.auto_restart_at,
+  );
   await db().query("UPDATE live_sessions SET finished_at=now()-interval '2 minutes' WHERE id=$1", [
     first.id,
   ]);
+  const due = (await api.get(`/api/v2/stream-sources/${source.id}`).set(as('owner')).expect(200))
+    .body;
+  assert.equal(due.auto_restart_at, null, 'the backoff is over');
   await live.autoRestart();
   const [second] = await sessions();
   assert.notEqual(second.id, first.id);

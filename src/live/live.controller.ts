@@ -65,7 +65,15 @@ import {
   isRtspUrl,
   redactUrl,
 } from './payload';
-import { ACTIVE_SQL, ACTIVE_STATUSES, recordEvent, sessionView } from './sessions';
+import {
+  ACTIVE_SQL,
+  ACTIVE_STATUSES,
+  RECENT_SESSIONS,
+  recordEvent,
+  restartAt,
+  SESSION_RAN_SQL,
+  sessionView,
+} from './sessions';
 import { location, locationColumns, locationSchema, locationView } from './location';
 
 const name = z.string().trim().min(1).max(200);
@@ -246,9 +254,32 @@ export class LiveController {
           )
         ).rows
       : [];
+    // A 24/7 camera without a session may be backing off after short sessions: say until when.
+    const idle = rows
+      .filter((row) => row.always_on && !active.some((s) => s.stream_source_id === row.id))
+      .map((row) => row.id);
+    const recent = idle.length
+      ? (
+          await this.db.query(
+            `SELECT stream_source_id, status, finished_at, ran FROM (
+              SELECT stream_source_id, status, finished_at, ${SESSION_RAN_SQL} AS ran,
+                row_number() OVER (PARTITION BY stream_source_id ORDER BY created_at DESC) AS n
+              FROM live_sessions WHERE stream_source_id=ANY($1)) recent
+            WHERE n<=${RECENT_SESSIONS} ORDER BY stream_source_id, n`,
+            [idle],
+          )
+        ).rows
+      : [];
     return rows.map((row) => {
       const session = active.find((s) => s.stream_source_id === row.id);
-      return { ...sourceView(row), active_session: session ? sessionView(session) : null };
+      const next = idle.includes(row.id)
+        ? restartAt(recent.filter((r) => r.stream_source_id === row.id))
+        : null;
+      return {
+        ...sourceView(row),
+        active_session: session ? sessionView(session) : null,
+        auto_restart_at: next && next.getTime() > Date.now() ? next.toISOString() : null,
+      };
     });
   }
 
