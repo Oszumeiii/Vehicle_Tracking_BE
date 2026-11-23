@@ -5,11 +5,13 @@ Demo khoảng 10 phút, đi qua cả hai nguồn của hệ thống: video uploa
 
 ## Kịch bản demo giai đoạn 16–20 (khoảng 10 phút)
 
-1. **Camera live (Canada Orla, Av. Atlântica):** bật phiên; video phát mượt qua HLS (chậm hơn thực tế khoảng 15–25 s), biển số hiện real-time. Mở tab **Quá trình xử lý** để thấy 7 bước và nhật ký từng track. Trong **Cài đặt camera**, chỉ vùng nhận diện đã khoanh và giải thích số đo A/B (`docs/EVALUATION.md`).
+1. **Camera live (Canada Orla, Av. Atlântica):** chọn model OCR cạnh nút **Bật phiên** (SVTRv2 mặc định, hoặc SE-ResNet34-C đọc tốt hơn trên camera Camboriú) rồi bật phiên; video phát mượt qua HLS (chậm hơn thực tế khoảng 15–25 s), biển số hiện real-time. Mở tab **Quá trình xử lý** để thấy 7 bước và nhật ký từng track. Trong **Cài đặt camera**, chỉ vùng nhận diện đã khoanh và giải thích số đo A/B (`docs/EVALUATION.md`).
 2. **Phát video upload như livestream:** ở Tra cứu video, mở Thư viện, bấm **Phát như livestream** trên `04_5phut_00h30m-00h35m.mp4`. Video quay lúc 12:32:30 ngày 29/09/2026 (giờ Brasília) nên biển số mang đúng giờ quay.
 3. **Hành trình:** mở `TBT6D43` hoặc `QJK0C77`, bật **Gần đúng** (gộp cả biển cũ ↔ Mercosul). Trình bày dòng thời gian, bản đồ, cảnh báo chặng vô lý, và mục khai thời điểm quay cho video upload.
-4. **Kết quả → Duyệt nhanh:** xác nhận vài biển đọc đúng nhưng dưới ngưỡng 0,96; biển kế tiếp tự mở.
+4. **Kết quả → Duyệt nhanh:** xác nhận vài biển đọc đúng nhưng dưới ngưỡng tin cậy (mặc định 0,85); biển kế tiếp tự mở.
 5. **Quản lý:** **Nhật ký** (ai tra biển nào, xem hành trình nào) và **Video & tác vụ → Dung lượng máy chủ** (ổ trống, video trùng, hạn lưu từng camera; dưới 5 GB trống thì camera live tạm dừng).
+
+**Dữ liệu cũ:** các phiên live chạy trước 21/11/2026 10:28 (trước BE #74) chỉ lưu 24-68% số xe so với code hiện tại (`docs/REVIEW_2026-11.md`, R06). Khi demo tìm kiếm, Duyệt nhanh hay hành trình, dùng phiên chạy sau mốc này, hoặc chạy lại camera phát lại video để có dữ liệu đủ.
 
 ## Chuẩn bị (làm trước buổi demo)
 
@@ -57,7 +59,7 @@ Vì việc bật phiên mất gần một phút, nên bật camera demo ngay sau
 
 **Bộ nhớ (đo 30/10/2026):** 2 camera (YouTube 1080p + demo) chạy ổn định 10 phút: bỏ frame dưới 1%, lag p95 khoảng 1,1 s, host dùng khoảng 2,8 GB RAM và 4,9 GB VRAM. Trước buổi demo nên đóng bớt ứng dụng nặng; nếu phiên lỗi `Unable to allocate`, xem mục *Máy thiếu bộ nhớ* trong [OPERATIONS.md](OPERATIONS.md).
 
-**Chất lượng camera YouTube (đo 27/10/2026):** để `max_height` ở 1080 khi mạng cho phép. Ở 720p, confidence thấp hẳn: trong 30 phút chỉ 2/318 track đạt `readable` (ngưỡng 0.96), trong khi clip demo 1080p đạt 37/373. Có thể chạy tới 3 camera cùng lúc; job upload video vẫn chạy được trong lúc camera chạy (chậm bằng thời gian thực).
+**Chất lượng camera YouTube (đo 27/10/2026):** để `max_height` ở 1080 khi mạng cho phép. Ở 720p, confidence thấp hẳn: trong 30 phút chỉ 2/318 track đạt `readable` (ngưỡng lúc đó là 0.96, nay mặc định 0.85), trong khi clip demo 1080p đạt 37/373. Có thể chạy tới 3 camera cùng lúc; job upload video vẫn chạy được trong lúc camera chạy (chậm bằng thời gian thực).
 
 ## Khởi động
 
@@ -82,7 +84,7 @@ Có 3 cửa sổ: **API**, **WORKER**, **WEB**. Đợi dòng `Ready: web http://
 | 9 | Tab **Lịch sử** | Gộp theo lượt xuất hiện: cùng biển trong 5 phút là một dòng |
 | 10 | (Nếu mạng tốt) camera **YouTube** Camboriú → **Bật phiên** | Luồng thật, giờ chụp lấy theo đồng hồ của luồng HLS |
 | 11 | Công tắc **Chạy 24/7**; dừng phiên | Worker tự bật lại sau sự cố; dừng tay thì tắt 24/7. Khi dừng, đoạn ghi hình cuối vẫn được đóng, nên track cuối phiên vẫn có video |
-| 12 | (Tùy chọn) tab **Gán nhãn** → bộ mẫu → **Báo cáo ngưỡng** | Ngưỡng `readable` 0,96 được hiệu chỉnh trên tập ICPR có nhãn; nhãn người gán trên camera thật dùng để kiểm tra lại (`docs/EVALUATION.md`, `docs/LABELLING.md`) |
+| 12 | (Tùy chọn) tab **Gán nhãn** → bộ mẫu → **Báo cáo ngưỡng** | Ngưỡng `readable` mặc định 0,85: trên tập ICPR có nhãn cho precision khoảng 87% (0,96 cho 96% nhưng camera live gần như không còn track `readable`). Nhãn người gán trên camera thật dùng để kiểm tra lại (`docs/EVALUATION.md`, `docs/LABELLING.md`) |
 
 Với `PLATE_LIVE_MAX_SESSIONS` ≥ 2 (mặc định trong `.env` của máy demo), các camera chạy chung một tiến trình GPU, tối đa 3 camera. Job upload video vẫn chạy trong lúc camera chạy, nhưng chỉ nhanh bằng thời gian thực (clip 20 s mất khoảng 20 s thay vì nhanh hơn). Nếu `PLATE_LIVE_MAX_SESSIONS=1` thì job upload phải chờ phiên live dừng; khi đó hãy demo phần upload (bước 1–3) trước.
 

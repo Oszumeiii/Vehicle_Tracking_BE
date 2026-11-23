@@ -19,7 +19,7 @@ Phiên bản 1.9.1 · 30/10/2026
 - Tái sử dụng nguồn để chạy cấu hình khác, truy lại bằng chứng và phiên bản model.
 - Phân quyền dữ liệu theo tài khoản, hỗ trợ xuất kết quả và đánh giá có nhãn chuẩn.
 
-Pipeline và model OCR được tích hợp theo notebook Kaggle của nhóm `trnvnhun/pbl6-pipeline` (checkpoint SE-ResNet34-C `single_model_best.pt`, dataset `trnvnhun/icpr-2026-model`); miền huấn luyện là biển số Brazil/Mercosul. Chất lượng trên Việt Nam cần đánh giá riêng. Tài liệu này không đặt mục tiêu accuracy hoặc thời gian đáp ứng khi chưa có phép đo và điều kiện nghiệm thu thống nhất.
+Pipeline và model OCR được tích hợp theo notebook Kaggle của nhóm `trnvnhun/pbl6-pipeline`. Có hai model OCR: SVTRv2-Base regional (mặc định từ 06/11/2026) và SE-ResNet34-C (checkpoint `single_model_best.pt`, dataset `trnvnhun/icpr-2026-model`); người dùng chọn model cho từng camera hoặc ngay khi bật phiên. Miền huấn luyện là biển số Brazil/Mercosul. Chất lượng trên Việt Nam cần đánh giá riêng. Tài liệu này không đặt mục tiêu accuracy hoặc thời gian đáp ứng khi chưa có phép đo và điều kiện nghiệm thu thống nhất.
 
 ### 1.3. Thuật ngữ
 
@@ -87,7 +87,7 @@ Quyền kế thừa từ `media_assets.owner_id` sang job, appearance, detection
 | Vận hành lâu dài | Không có | Camera 24/7 tự bật lại, dọn bằng chứng theo thời hạn, xóa phiên, chia GPU giữa job upload và live. |
 | Nhiều camera cùng lúc | Ngoài phạm vi | Đã bổ sung: các phiên chạy chung một host Python với một bản model; hai camera trên GPU 8 GB. |
 | Demo không cần mạng | Không có | Camera demo phát lại video có sẵn theo vòng lặp (chỉ Admin). |
-| Hiệu chỉnh ngưỡng | Công cụ dòng lệnh | Trang gán nhãn mù trong ứng dụng, báo cáo precision/coverage theo ngưỡng; 9 endpoint `/evaluation-sets`. Ngưỡng mặc định 0,96 được hiệu chỉnh offline trên tập ICPR có nhãn người (`scripts/calibrate_icpr.py`). |
+| Hiệu chỉnh ngưỡng | Công cụ dòng lệnh | Trang gán nhãn mù trong ứng dụng, báo cáo precision/coverage theo ngưỡng; 9 endpoint `/evaluation-sets`. Ngưỡng mặc định 0,85 (từ 16/11/2026, BE #71). Trên tập ICPR có nhãn người (`scripts/calibrate_icpr.py`), 0,85 cho precision khoảng 87% và 0,96 cho khoảng 96%; trên camera thật, nhãn đạt 0,85 vẫn sai 21-28% (`docs/REVIEW_2026-11.md`, R05). |
 
 ### 3.2. Ngoài phạm vi
 
@@ -190,7 +190,7 @@ Giới hạn upload có thể cấu hình; giới hạn 25 MP hiện được ki
 | BR35 | Hành trình chỉ dùng kết quả có giờ thật: track camera live, và video upload đã khai thời điểm quay (`recorded_at`). Giờ của biển trong video = `recorded_at` + vị trí trong video. |
 | BR36 | Chặng có tốc độ trên `PLATE_JOURNEY_MAX_KMH` (mặc định 150 km/h), hoặc hai nguồn khác nhau thấy cùng biển cùng lúc, được đánh dấu vô lý. Video upload trùng file (cùng sha256 của cùng chủ) chỉ tính một lần. |
 | BR37 | Camera nguồn `media` dùng chung file của video upload; video đang được camera phát lại không xóa được. Khi ổ dữ liệu còn dưới `PLATE_MIN_FREE_GB` (mặc định 5 GB), camera live tạm dừng (`DISK_LOW`) và upload mới bị từ chối (507). |
-| BR38 | Vùng nhận diện là một hình chữ nhật chuẩn hóa, mỗi chiều ít nhất 10% khung; vùng loại trừ được áp sau khi đổi box về tọa độ toàn khung. Nhãn `readable` vẫn theo ngưỡng 0,96. |
+| BR38 | Vùng nhận diện là một hình chữ nhật chuẩn hóa, mỗi chiều ít nhất 10% khung; vùng loại trừ được áp sau khi đổi box về tọa độ toàn khung. Nhãn `readable` vẫn theo ngưỡng của phiên (mặc định 0,85). |
 
 ## 6. Use case
 
@@ -324,7 +324,7 @@ Nguồn chỉnh sửa: [01-use-case.puml](diagrams/01-use-case.puml). Admin kế
 
 - **Actor:** User, Admin; Worker (tự bật lại camera 24/7).
 - **Tiền điều kiện:** Camera thuộc quyền, profile joint sẵn sàng, camera chưa có phiên hoạt động.
-- **Luồng chính:** (1) Gửi yêu cầu bật phiên; hệ thống chụp snapshot pipeline và trả 202 `queued`. (2) Worker nhận phiên khi GPU rảnh, chạy tiến trình live. (3) Mỗi track đủ 5 frame được nhập thành job. (4) Người dùng gửi yêu cầu dừng; tiến trình chốt và OCR track đang mở rồi phiên chuyển `stopped`.
+- **Luồng chính:** (1) Chọn model OCR cạnh nút "Bật phiên" (mặc định là model đã lưu cho camera; chọn model khác thì model đó được lưu cho camera, kể cả khi chạy 24/7) rồi gửi yêu cầu bật phiên; hệ thống chụp snapshot pipeline và trả 202 `queued`. Model của phiên không đổi được khi phiên đang chạy, để mọi kết quả ghi đúng model đã đọc. (2) Worker nhận phiên khi GPU rảnh, chạy tiến trình live. (3) Mỗi track đủ 5 frame được nhập thành job. (4) Người dùng gửi yêu cầu dừng; tiến trình chốt và OCR track đang mở rồi phiên chuyển `stopped`.
 - **Thay thế/lỗi:** Hết live/video bị gỡ: `ended`. Mất luồng: tự kết nối lại; quá số lần: `failed`. Tiến trình im lặng quá giới hạn: `failed`/`LIVE_STALLED`. Worker dừng: `interrupted`; camera 24/7 được worker bật phiên mới.
 - **Hậu điều kiện:** Các track đã nhập là job succeeded; lịch sử phiên nằm trong `live_session_events`.
 - **Truy vết:** FR20-FR22; BR22, BR25, BR27; `/stream-sources/{id}/sessions`, `/live-sessions`.
@@ -446,7 +446,7 @@ Người dùng upload một video, chọn profile và tạo job. API kiểm tra 
 
 Worker kiểm tra nguồn và snapshot; adaptive sampling (8/12/15 fps theo mức chuyển động) chọn frame, empty-scene gate (MOG2) bỏ qua frame nghi trống khi không còn track, YOLO11l phát hiện biển số và BoT-SORT nối các quan sát. Mỗi track đủ điều kiện cung cấp đúng năm crop từ năm frame khác nhau: chọn trong nhóm crop nét/lớn/tin cậy nhất rồi trải đều theo thời gian. Track thiếu bằng chứng bị loại khỏi nhánh nhận diện và được thống kê; không lặp ảnh để đủ năm.
 
-Model SE-ResNet34-C nhận đồng thời năm crop RGB 192×48 để tạo một chuỗi cho track; decoder `beam_filter` ưu tiên chuỗi đúng định dạng biển Brazil/Mercosul. Chuỗi rỗng có trạng thái `unreadable`; chuỗi khác rỗng là `readable`, vẫn chưa được con người xác nhận. `agreement_count` để NULL vì không có năm phiếu OCR độc lập. Model không cung cấp confidence đã định nghĩa nên `ocr_score` là NULL. `frame_weights` chỉ mô tả trọng số tổng hợp đặc trưng. `decoding` lưu greedy text, `format_valid` và beam score heuristic; `statistics.vehicle_groups` gợi ý các track nhiều khả năng cùng một xe.
+Model OCR nhận đồng thời năm crop RGB của track để tạo một chuỗi: SVTRv2 ở khung 128×40, SE-ResNet34-C ở khung 192×48. Trước khi đọc, mỗi crop được cắt sát box của detector (`tracking.ocr_padding` 0) và xoay thẳng theo góc nghiêng trung vị của track (`tracking.ocr_deskew_degrees` 15); ảnh lưu làm bằng chứng vẫn giữ viền để người duyệt thấy ngữ cảnh. Với cả hai model, decoder `beam_filter` ưu tiên chuỗi đúng định dạng biển Brazil/Mercosul. Chuỗi rỗng có trạng thái `unreadable`; chuỗi khác rỗng là `readable`, vẫn chưa được con người xác nhận. `agreement_count` để NULL vì không có năm phiếu OCR độc lập. Model không cung cấp confidence đã định nghĩa nên `ocr_score` là NULL. `frame_weights` chỉ mô tả trọng số tổng hợp đặc trưng. `decoding` lưu greedy text, `format_valid` và beam score heuristic; `statistics.vehicle_groups` gợi ý các track nhiều khả năng cùng một xe.
 
 ![Hoạt động nhận diện video](diagrams/02-activity-video.png)
 
@@ -516,7 +516,7 @@ Báo cáo lấy nhãn đồng thuận của mỗi mẫu (mẫu bất đồng b�
 - **Kết quả:**
   - ở ngưỡng cũ 0,85, precision chỉ 87,0%;
   - ở 0,96, precision 96,9% (khoảng tin cậy 96,1-97,6%) với 68,5% track được gắn `readable`.
-- **Ngưỡng chọn:** 0,96 là ngưỡng nhỏ nhất mà cận dưới khoảng tin cậy trên hai tập gộp vẫn từ 95% trở lên. Đây là mặc định mới; migration 0009 đổi các camera đang lưu 0,85.
+- **Ngưỡng chọn:** 0,96 là ngưỡng nhỏ nhất mà cận dưới khoảng tin cậy trên hai tập gộp vẫn từ 95% trở lên. Đây là mặc định lúc đó; migration 0009 đổi các camera đang lưu 0,85. Ngày 16/11/2026 (BE #71), nhóm đổi mặc định về 0,85 vì ở 0,96 camera live gần như không còn track `readable`; migration 0019 đổi các camera đang lưu đúng 0,96.
 - **Giới hạn:** ICPR là cận trên cho camera thật, nên vẫn cần xác nhận bằng nhãn live.
 - **Phạm vi ảnh hưởng:** ngưỡng chỉ đổi nhãn `readable` và bộ lọc; cảnh báo watchlist và lượt xuất hiện vẫn xét mọi track đọc ra chữ.
 
@@ -530,7 +530,7 @@ Camera nguồn `media` trỏ thẳng tới file video đã upload, không chép 
 
 ![Hoạt động duyệt nhanh](../uml/png/Hinh_3.13_Activity_Duyet_nhanh_bien_tin_cay_thap.png)
 
-Trên luồng YouTube, phần lớn biển có độ tin cậy dưới ngưỡng 0,96, kể cả biển đọc đúng (ví dụ `SEC7J28` đạt 0,92). Hàng đợi duyệt ưu tiên những biển có ảnh đủ lớn và điểm cao nhất, nên người duyệt xác nhận được nhiều biển đúng trong ít thời gian. Mỗi lần lưu vẫn đi qua kiểm tra revision như UC07.
+Trên luồng YouTube, nhiều biển đọc đúng vẫn có độ tin cậy thấp (ví dụ `SEC7J28` chỉ đạt 0,92 khi ngưỡng còn là 0,96), và ngược lại nhãn đạt ngưỡng 0,85 vẫn sai 21-28% trên camera thật. Hàng đợi duyệt ưu tiên những biển có ảnh đủ lớn và điểm cao nhất, nên người duyệt xác nhận được nhiều biển đúng trong ít thời gian. Mỗi lần lưu vẫn đi qua kiểm tra revision như UC07.
 
 ## 8. Sơ đồ sequence và ranh giới transaction
 
@@ -1329,7 +1329,7 @@ Khi đóng gói hoặc chuyển host, phải đưa theo migration SQL, mã `app/
 | Nhiều phiên trong một host dùng chung model | Đo được VRAM mỗi tiến trình chủ yếu là CUDA context và bộ đệm allocator; dùng chung thì hai camera tốn như một. GPU chỉ bận 31-38% nên giữ nguyên tần suất lấy mẫu. Đánh đổi: phiên treo làm cả host bị kill; mọi phiên phải cùng pipeline. |
 | Một luồng GPU, batch 1/4/16 | Đo được mỗi cỡ batch mới tốn khoảng 1,8 s cho mỗi luồng; hai camera bật cùng lúc trước đây bỏ 17 và 73 frame, nay 0. Đánh đổi: frame đệm làm kết quả fp16 dao động rất nhỏ. |
 | Giữ lấy mẫu 8/12/15 fps | Thử 15/20/25 fps: số track gần gấp đôi nhưng không thêm biển đọc được, hai camera bỏ 12-17% frame; profile này chỉ để thử nghiệm. |
-| Ngưỡng 0,96 từ dữ liệu ICPR có nhãn | Precision mục tiêu 95% với cận dưới khoảng tin cậy; đánh đổi: ít track `readable` hơn (Camboriú 158 → 51 trong 45 phút). |
+| Ngưỡng 0,85 (trước 16/11/2026 là 0,96 từ dữ liệu ICPR có nhãn) | 0,96 cho precision 96% trên ICPR nhưng camera live gần như không còn track `readable` (Camboriú 158 → 51 trong 45 phút); 0,85 cho precision khoảng 87% trên ICPR và 72-79% trên camera thật. |
 | Docker Compose theo profile | Máy khác chạy được không cần cài Node/Python/CUDA; `start-all` không đổi. Đánh đổi: image worker khoảng 13 GB, job chậm hơn native. |
 | Nhãn đánh giá tách khỏi review | Review là kết luận vận hành, có thể bị ảnh hưởng bởi kết quả máy; nhãn mù mới đo được độ chính xác. |
 | Giờ chụp theo PROGRAM-DATE-TIME | PTS gốc của segment (`-copyts`) ứng với PDT theo độ lệch không đổi; giờ nhận frame chỉ là phương án dự phòng. |
@@ -1502,7 +1502,7 @@ Các sơ đồ PlantUML và SVG đi kèm là sản phẩm mô hình hóa mã ngu
 4. **Readiness có phạm vi.** Health kiểm DB/schema, pipelines.ready kiểm file/config/checksum; chỉ job thực mới kiểm được toàn runtime/model/thiết bị. Chưa có endpoint xác nhận heartbeat worker đang sống. Cập nhật 13/11/2026: `GET /api/v2/system/health` đã báo worker dừng, camera 24/7 không chạy, sao lưu quá hạn và pipeline không sẵn sàng; phần chưa kiểm được là bộ nhớ GPU và chất lượng luồng nguồn.
 5. **Đánh giá chất lượng còn tách riêng.** Test và smoke không thay ground truth độc lập; chưa xác nhận accuracy Việt Nam, SLA hoặc tải đồng thời production.
 6. **Live trên một GPU.** Host dùng chung chạy được ba camera trên GPU 8 GB (đo được); bốn camera bỏ 4-30% frame vì CPU/GIL. Job video joint chạy cùng camera nhưng bị giữ ở tốc độ thời gian thực; job khác phải chờ khi có camera chạy. Camera YouTube 720p cho confidence thấp hơn hẳn 1080p (2/318 track `readable` ở ngưỡng 0,96). Camera RTSP mới thử với camera giả lập (mediamtx), chưa thử camera thật. Chất lượng phụ thuộc băng thông (1080p cần khoảng 4 Mbit/s). Nhãn `readable` dựa trên ngưỡng 0,96, hiệu chỉnh offline trên ICPR: precision 96,9% trên test với SE-ResNet34-C, và 96,0% với SVTRv2 đang dùng (đo lại 09/11/2026: đọc đúng toàn biển 79,6%, tỷ lệ gắn `readable` 73,0%). Kết quả này là cận trên; trên camera thật chưa xác nhận bằng nhãn người gán độc lập. Lượt xuất hiện là gợi ý theo chuỗi đọc được.
-7. **Chất lượng đọc trên luồng YouTube Brazil.** Crop biển trung vị khoảng 46-51 px và bị nén, nên phần lớn biển rơi vào nhóm tin cậy thấp. Vùng nhận diện (ROI) giảm số track bị loại từ 16 xuống 6 trên cùng 5 phút footage, nhưng số biển đạt 0,96 gần như không đổi. Cần nhãn người trên camera Brazil để tinh chỉnh OCR và hiệu chỉnh ngưỡng riêng từng camera. Từ ngày 06/11/2026, nhóm dùng mô hình OCR SVTRv2-Base (pipeline `pbl6-svtrv2-regional-joint5-v1`).
+7. **Chất lượng đọc trên luồng YouTube Brazil.** Crop biển trung vị khoảng 46-51 px và bị nén, nên phần lớn biển rơi vào nhóm tin cậy thấp. Vùng nhận diện (ROI) giảm số track bị loại từ 16 xuống 6 trên cùng 5 phút footage, nhưng số biển đạt ngưỡng (lúc đó là 0,96) gần như không đổi. Cần nhãn người trên camera Brazil để tinh chỉnh OCR và hiệu chỉnh ngưỡng riêng từng camera. Từ ngày 06/11/2026, nhóm dùng mô hình OCR SVTRv2-Base (pipeline `pbl6-svtrv2-regional-joint5-v1`) làm mặc định. SE-ResNet34-C (pipeline `pbl6-resnet34c-joint5-v2`) vẫn chọn được cho từng camera hoặc khi bật phiên; trên camera Balneário Camboriú nó đọc đúng 77% so với 66% của SVTRv2, dù trên ICPR SVTRv2 cao hơn (`docs/EVALUATION.md`).
 8. **Phạm vi nghiệp vụ giới hạn.** Chưa có bãi xe, chủ phương tiện, xử phạt, hủy job, chia sẻ dữ liệu, public signup, email reset, giao diện đầy đủ hoặc SR. Đây không phải các API bị bỏ sót trong 52 endpoint hiện có.
 
 ### 14.3. Thứ tự mở rộng đề xuất
