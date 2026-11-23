@@ -96,7 +96,7 @@ Action `confirm` chấp nhận text máy; `correct` bắt buộc text mới, ch�
   - `exclude_zones` gồm tối đa 16 hình chữ nhật `[x1,y1,x2,y2]` chuẩn hóa 0..1; detection có tâm nằm trong vùng bị bỏ.
   - `detect_roi` (tùy chọn, mọi loại camera): **vùng nhận diện** `[x1,y1,x2,y2]` chuẩn hóa 0..1, mỗi chiều tối thiểu 0,1; `null` là cả khung. Detector chỉ chạy trên vùng này: ảnh vùng được đưa vào mô hình ở cùng kích thước đầu vào (`imgsz`), nên được phóng to và biển nhỏ ở các làn gần camera dễ phát hiện hơn. Box được đổi lại về tọa độ toàn khung; bám vết, chọn crop và OCR vẫn dùng khung gốc. `exclude_zones` vẫn lọc theo tọa độ toàn khung. Áp dụng từ phiên kế tiếp (sao vào `settings` của phiên, kể cả phiên tự bật lại). `stats.stages.detect.roi` cho biết phiên có dùng vùng nhận diện.
 - `GET /api/v2/demo-videos` (admin): `{items:[{path,size_bytes}]}`, các video dùng được cho camera demo.
-- `GET /api/v2/stream-sources`, `GET /api/v2/stream-sources/{id}`: camera của mình (admin thấy tất cả), kèm `active_session`.
+- `GET /api/v2/stream-sources`, `GET /api/v2/stream-sources/{id}`: camera của mình (admin thấy tất cả), kèm `active_session`. Camera 24/7 đang chờ vì các phiên gần đây kết thúc sớm (dưới 2 phút, lùi 1, 2, 4… tới 30 phút; phiên bị dừng có chủ ý không tính) có `auto_restart_at` là lúc worker sẽ bật phiên kế tiếp; các trường hợp khác là `null`.
 - **Video của kết quả:**
   - `GET /api/v2/recognition-results/{id}/video-info` → `{available, kind, url, first_seen_offset, captured_from, captured_to}`. `kind`:
     - `clip`: clip lưu cùng track;

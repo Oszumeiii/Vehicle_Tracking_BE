@@ -23,7 +23,7 @@ import {
   redactUrl,
 } from './payload';
 import { isReplay, replaySource } from './replay';
-import { ACTIVE_SQL, recordEvent } from './sessions';
+import { ACTIVE_SQL, RECENT_SESSIONS, recordEvent, restartAt, SESSION_RAN_SQL } from './sessions';
 import { diskLow } from '../common/disk';
 
 type Row = Record<string, any>;
@@ -169,10 +169,8 @@ export class LiveManager {
   ) {}
 
   /**
-   * Queue a new session for each always-on camera that has none. Consecutive short
-   * sessions (under two minutes, e.g. a broadcast that is down) back off 1, 2, 4...
-   * up to 30 minutes; a session that ran longer resets the backoff. A session stopped on
-   * purpose (by a user, or by the disk guard) says nothing about the source and is not counted.
+   * Queue a new session for each always-on camera that has none, unless it is backing off
+   * after short sessions (restartAt).
    */
   async autoRestart() {
     const cameras = (
@@ -184,18 +182,13 @@ export class LiveManager {
     for (const camera of cameras) {
       const recent = (
         await this.database.query(
-          `SELECT id, status, finished_at, extract(epoch FROM finished_at - coalesce(started_at, created_at)) AS ran
-          FROM live_sessions WHERE stream_source_id=$1 ORDER BY created_at DESC LIMIT 12`,
+          `SELECT id, status, finished_at, ${SESSION_RAN_SQL} AS ran
+          FROM live_sessions WHERE stream_source_id=$1 ORDER BY created_at DESC LIMIT ${RECENT_SESSIONS}`,
           [camera.id],
         )
       ).rows;
-      const counted = recent.filter((row) => row.status !== 'stopped');
-      const failures = counted.findIndex((row) => Number(row.ran) >= 120);
-      const short = failures < 0 ? counted.length : failures;
-      const delay = short ? Math.min(30, 2 ** (short - 1)) * 60_000 : 0;
-      const failed = counted[0];
-      if (failed?.finished_at && Date.now() - new Date(failed.finished_at).getTime() < delay)
-        continue;
+      const next = restartAt(recent);
+      if (next && next.getTime() > Date.now()) continue;
       const last = recent[0];
       const blocked = this.restartBlocked.get(camera.id);
       if (blocked && Date.now() < blocked.until) continue;

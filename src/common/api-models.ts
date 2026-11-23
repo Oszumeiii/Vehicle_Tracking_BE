@@ -393,6 +393,12 @@ export class StreamSourceResponse {
   @ApiProperty(dateTime) updated_at!: string;
   @ApiProperty({ type: LiveSessionResponse, nullable: true })
   active_session!: LiveSessionResponse | null;
+  @ApiProperty({
+    ...nullableDateTime,
+    description:
+      'A 24/7 camera backing off after short sessions: when the worker starts the next one. Null otherwise.',
+  })
+  auto_restart_at!: string | null;
 }
 
 export class LiveEventResponse {
