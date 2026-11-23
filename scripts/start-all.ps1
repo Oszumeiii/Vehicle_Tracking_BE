@@ -5,16 +5,27 @@
 .DESCRIPTION
   Each service opens in its own titled window so its output stays visible; close a
   window to stop that service. Services already running are left untouched, so the
-  script can be re-run safely without interrupting a job in progress.
+  script can be re-run safely without interrupting a job in progress. That also means
+  they keep running the code they started with: after pulling new code, use -Restart.
+
+  The FE is built and served with `vite preview` (what the public link shows), so
+  uncommitted work in the FE checkout is not published live. -DevFrontend runs the
+  Vite development server instead (hot reload, for working on the FE).
 
 .EXAMPLE
   .\scripts\start-all.ps1
   .\scripts\start-all.ps1 -SkipBuild -NoBrowser
+  .\scripts\start-all.ps1 -Restart -NoBrowser   # build, then restart API, worker and FE
 #>
 param(
   [string]$FrontendDir = (Join-Path $PSScriptRoot '..\..\Vehicle_Tracking_FE'),
   [switch]$SkipBuild,
-  [switch]$NoBrowser
+  [switch]$NoBrowser,
+  # Stop the API, worker and FE windows after building, then start them on the new code.
+  [switch]$Restart,
+  # With -Restart: restart even while upload jobs or live sessions are running.
+  [switch]$Force,
+  [switch]$DevFrontend
 )
 # Native tools write progress to stderr; check exit codes instead of stopping on it.
 $ErrorActionPreference = 'Continue'
@@ -45,6 +56,15 @@ function WorkerRunning {
 function Open-Window($title, $dir, $command) {
   $cmd = "`$Host.UI.RawUI.WindowTitle='$title'; Set-Location '$dir'; $command"
   Start-Process powershell -ArgumentList '-NoExit', '-NoProfile', '-Command', $cmd
+}
+# A service's window (by the title Open-Window gave it) and any node process running it.
+function Stop-StackWindow($title, $pattern) {
+  $targets = @(Get-CimInstance Win32_Process | Where-Object {
+      $_.CommandLine -and ($_.CommandLine.Contains("WindowTitle='$title'") -or
+        ($_.Name -eq 'node.exe' -and $_.CommandLine -match $pattern))
+    })
+  foreach ($process in $targets) { taskkill /PID $process.ProcessId /T /F *> $null }
+  if ($targets.Count) { Write-Host "Stopped $title" }
 }
 function Wait-Until($what, $seconds, [scriptblock]$ready) {
   $deadline = (Get-Date).AddSeconds($seconds)
@@ -100,6 +120,31 @@ try {
     Push-Location $Frontend
     try { Run @('npm.cmd', 'install') } finally { Pop-Location }
   }
+  # The public link shows a build, not the development server of the FE checkout.
+  $preview = -not $DevFrontend
+  if ($preview -and -not $SkipBuild) {
+    Step 'Build frontend'
+    Push-Location $Frontend
+    try { & npm.cmd run build } finally { Pop-Location }
+    if ($LASTEXITCODE -ne 0) {
+      Write-Warning 'Frontend build failed: serving the development server instead.'
+      $preview = $false
+    }
+  }
+  if ($preview -and -not (Test-Path (Join-Path $Frontend 'dist\index.html'))) { $preview = $false }
+
+  if ($Restart) {
+    Step 'Restart running services'
+    $busy = docker compose exec -T postgres psql -U plate -d plate -Atc `
+      "SELECT (SELECT count(*) FROM live_sessions WHERE status IN ('queued','starting','running','stopping')) + (SELECT count(*) FROM recognition_jobs WHERE status IN ('queued','running') AND live_session_id IS NULL)" 2> $null
+    if ($LASTEXITCODE -eq 0 -and [int]$busy -gt 0 -and -not $Force) {
+      throw "$busy upload job(s) or live session(s) are running; a restart would interrupt them. Re-run with -Restart -Force to restart anyway (24/7 cameras start again by themselves)."
+    }
+    Stop-StackWindow "API (BE :$apiPort)" 'dist[\\/]src[\\/]main\.js'
+    Stop-StackWindow 'WORKER' 'dist[\\/]src[\\/]worker\.js'
+    Stop-StackWindow "WEB (FE :$fePort)" "vite.*--port\s+$fePort"
+    Wait-Until 'Stopping the old services' 30 { -not (Listening $apiPort) -and -not (Listening $fePort) -and -not (WorkerRunning) }
+  }
 
   Step 'Start services'
   if (Listening $apiPort) { Write-Host "API already listening on :$apiPort" }
@@ -108,6 +153,7 @@ try {
   if (WorkerRunning) { Write-Host 'Worker already running' }
   else { Open-Window 'WORKER' $Backend 'npm run worker' }
   if (Listening $fePort) { Write-Host "FE already listening on :$fePort" }
+  elseif ($preview) { Open-Window "WEB (FE :$fePort)" $Frontend 'npm run preview' }
   else { Open-Window "WEB (FE :$fePort)" $Frontend 'npm run dev' }
 
   Step 'Wait for readiness'

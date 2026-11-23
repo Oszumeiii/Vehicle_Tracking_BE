@@ -14,6 +14,7 @@ import { Retention } from './live/retention';
 import { CloudSync } from './media/cloud-sync';
 import { SharedLiveHost } from './live/host';
 import { WORKER_LOCK } from './system/health.controller';
+import { recordWorkerRun } from './system/code-version';
 
 /** Jobs processed in parallel by this worker; each job runs its own ML subprocess. */
 export function workerConcurrency(value = process.env.PLATE_WORKER_CONCURRENCY ?? '1') {
@@ -60,6 +61,10 @@ export async function runWorker(
   try {
     await recover(database);
     const options = { ...workerOptions(), signal: shutdown.signal };
+    // Which code this worker runs, for the "restart needed" health check; never fatal.
+    await recordWorkerRun(options.dataDir).catch((error) =>
+      console.warn(`Could not record the worker's code version: ${error}`),
+    );
     const interval = Number(process.env.PLATE_POLL_SECONDS ?? 2) * 1000;
     if (!Number.isFinite(interval) || interval <= 0) throw new Error('Invalid polling interval');
     const settings = liveSettings();

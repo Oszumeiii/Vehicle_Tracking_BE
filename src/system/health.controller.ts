@@ -10,6 +10,7 @@ import { ApiFailures } from '../common/openapi';
 import { AuthGuard } from '../auth/auth.guard';
 import { ACTIVE_SQL } from '../live/sessions';
 import { PipelineRegistry } from '../recognition/registry';
+import { codeRoot, newest, readWorkerRun, runningCode } from './code-version';
 
 /** The worker's advisory lock (src/worker.ts): held for as long as a worker runs. */
 export const WORKER_LOCK = 762143901;
@@ -37,12 +38,17 @@ const CODES = [
   'PIPELINE_UNAVAILABLE',
   'JOBS_WAITING',
   'DISK_LOW',
+  'RESTART_NEEDED',
+  'BUILD_NEEDED',
 ] as const;
 
 class HealthIssue {
   @ApiProperty({ enum: CODES }) code!: (typeof CODES)[number];
   @ApiProperty({ enum: ['error', 'warning'] }) severity!: 'error' | 'warning';
-  @ApiProperty({ nullable: true, description: 'Camera or pipeline the issue is about.' })
+  @ApiProperty({
+    nullable: true,
+    description: 'Camera or pipeline the issue is about; api or worker for RESTART_NEEDED.',
+  })
   subject!: string | null;
   @ApiProperty({ nullable: true, description: 'Cause as the system reported it.' })
   detail!: string | null;
@@ -62,7 +68,8 @@ class SystemHealthResponse {
 /**
  * What an operator must know without reading logs: the worker is gone, an always-on
  * camera does not restart, backups stopped, a model is missing, jobs pile up, the disk
- * is full. Each of these used to fail silently.
+ * is full, or the API and worker still run older code than the checkout. Each of these
+ * used to fail silently.
  */
 @ApiTags('Accounts')
 @ApiFailures(401, 403)
@@ -72,6 +79,8 @@ class SystemHealthResponse {
 export class SystemHealthController {
   // Listing pipelines hashes every checkpoint; the banner polls once a minute.
   private pipelines?: { at: number; issues: HealthIssue[] };
+  // The code this API process started with; what is on disk is compared against it.
+  private started = runningCode();
 
   constructor(
     private db: Database,
@@ -107,6 +116,7 @@ export class SystemHealthController {
       });
     issues.push(...(await this.pipelineIssues()));
     issues.push(...(await this.waitingJobs()));
+    issues.push(...(await this.codeIssues(worker)));
     const disk = await diskLow(settings().dataDir);
     if (disk.low)
       issues.push({
@@ -123,6 +133,48 @@ export class SystemHealthController {
       last_backup_at: backup?.toISOString() ?? null,
       issues,
     };
+  }
+
+  /**
+   * The API or worker runs older code than the checkout (a restart was forgotten), or the
+   * backend source changed after the last build (a build was forgotten).
+   */
+  private async codeIssues(worker: boolean): Promise<HealthIssue[]> {
+    const root = codeRoot();
+    const [started, now] = await Promise.all([this.started, runningCode(root)]);
+    const differs = (was: string | null, is: string | null) => Boolean(was && is && was !== is);
+    const issues: HealthIssue[] = [];
+    if (differs(started.build, now.build))
+      issues.push({
+        code: 'RESTART_NEEDED',
+        severity: 'warning',
+        subject: 'api',
+        detail: 'The API runs an older build than the one on disk.',
+        since: null,
+      });
+    const run = worker ? await readWorkerRun(settings().dataDir) : null;
+    if (run && (differs(run.build, now.build) || differs(run.python, now.python)))
+      issues.push({
+        code: 'RESTART_NEEDED',
+        severity: 'warning',
+        subject: 'worker',
+        detail: `The worker runs older ${differs(run.build, now.build) ? 'compiled' : 'Python'} code than the one on disk.`,
+        since: run.started_at,
+      });
+    const [source, built] = await Promise.all([
+      newest(path.join(root, 'src'), '.ts'),
+      newest(path.join(root, 'dist', 'src'), '.js'),
+    ]);
+    // A second of slack: a build writes its output right after reading the sources.
+    if (source !== null && built !== null && source > built + 1000)
+      issues.push({
+        code: 'BUILD_NEEDED',
+        severity: 'warning',
+        subject: null,
+        detail: 'Backend source changed after the last build.',
+        since: new Date(source).toISOString(),
+      });
+    return issues;
   }
 
   private async workerRunning() {
