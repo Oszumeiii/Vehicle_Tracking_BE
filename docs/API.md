@@ -19,6 +19,8 @@ Mặc định `http://127.0.0.1:3000`. Ngoại trừ login và health, gửi `Au
   - `PIPELINE_UNAVAILABLE`: pipeline `ready=false` (thiếu checkpoint, sai checksum, thiếu Python). Kết quả được nhớ 5 phút vì phải băm checkpoint.
   - `JOBS_WAITING` (warning): có job upload nằm hàng đợi quá `PLATE_HEALTH_QUEUE_MINUTES` phút (mặc định 30).
   - `DISK_LOW`: ổ dữ liệu dưới `PLATE_MIN_FREE_GB`.
+  - `RESTART_NEEDED` (warning): `subject` là `api` hoặc `worker`. Tiến trình đó chạy code cũ hơn code trên máy: `dist/src` đã được build lại sau khi nó khởi động, hoặc (worker) Python trong `app/` đã đổi. So bằng dấu vân tay nội dung, nên build lại mà không đổi gì thì không báo. Chạy `start-all -Restart`.
+  - `BUILD_NEEDED` (warning): file trong `src/` mới hơn bản build `dist/src` (code đã pull hoặc sửa nhưng chưa build); `since` là lúc file mới nhất được sửa. Chạy `start-all -Restart`. Không báo khi không có `src/` (chạy bằng image Docker).
 - `GET /api/v2/system/storage`: chỉ Admin. Ổ đĩa (`free_bytes`, `total_bytes`), ngưỡng `min_free_bytes`, `low`, dung lượng video upload (`media_bytes`), bằng chứng live (`live_evidence_bytes`), bản ghi đệm (`recording_bytes`), các file upload trùng (`duplicates`) và hạn lưu cùng dung lượng bằng chứng của từng camera (`cameras`).
 - `GET /api/v2/audit-logs`: chỉ Admin (user thường nhận `403`). **Nhật ký truy cập**, mới nhất trước, query `user_id`, `action` (khớp đúng như `auth.login`, hoặc tiền tố kết thúc bằng dấu chấm như `camera.`), `from`, `to`, phân trang. Mỗi dòng gồm `id`, `user_id`, `user_email`, `action`, `target_type`, `target_id`, `details`, `ip`, `created_at`.
   - Hành động được ghi:

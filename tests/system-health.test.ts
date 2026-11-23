@@ -7,6 +7,7 @@ import type { INestApplication } from '@nestjs/common';
 import { createApp } from '../src/main';
 import { recordEvent } from '../src/live/sessions';
 import { WORKER_LOCK } from '../src/system/health.controller';
+import { recordWorkerRun } from '../src/system/code-version';
 import { newId, seedUser, startTestDatabase, TestDatabase } from './helpers';
 import { livePipelines } from './live-fixtures';
 
@@ -23,12 +24,24 @@ const ENV_KEYS = [
   'PLATE_PIPELINE_PYTHON',
   'PLATE_PIPELINES_CONFIG',
   'PLATE_BACKUP_HOURS',
+  'PLATE_CODE_ROOT',
   'NODE_ENV',
 ];
 
 before(async () => {
   fixture = await startTestDatabase();
   dataDir = join(fixture.root, 'artifacts');
+  // A small checkout of its own: the code this API "runs" and what is on disk.
+  const code = join(fixture.root, 'code');
+  await mkdir(join(code, 'src'), { recursive: true });
+  await mkdir(join(code, 'dist', 'src'), { recursive: true });
+  await mkdir(join(code, 'app'), { recursive: true });
+  await writeFile(join(code, 'src', 'main.ts'), 'export const version = 1;');
+  const built = new Date(Date.now() - 60_000);
+  await utimes(join(code, 'src', 'main.ts'), built, built);
+  await writeFile(join(code, 'dist', 'src', 'main.js'), 'exports.version = 1;');
+  await writeFile(join(code, 'app', 'runner.py'), 'VERSION = 1\n');
+  process.env.PLATE_CODE_ROOT = code;
   Object.assign(process.env, {
     DATABASE_URL: fixture.url,
     PLATE_DATA_DIR: dataDir,
@@ -219,4 +232,50 @@ test('system health reports pipelines whose model is missing', async () => {
   } finally {
     process.env.PLATE_PIPELINES_CONFIG = previous;
   }
+});
+
+test('system health tells when the API or worker runs older code than the checkout', async () => {
+  const code = process.env.PLATE_CODE_ROOT!;
+  const found = (body: any, name: string) =>
+    body.issues.filter((issue: any) => issue.code === name).map((issue: any) => issue.subject);
+  assert.deepEqual(found(await health(), 'RESTART_NEEDED'), []);
+  assert.deepEqual(found(await health(), 'BUILD_NEEDED'), []);
+
+  // Source pulled or edited after the last build.
+  await writeFile(join(code, 'src', 'main.ts'), 'export const version = 2;');
+  const pulledAt = new Date(Date.now() + 2_000);
+  await utimes(join(code, 'src', 'main.ts'), pulledAt, pulledAt);
+  const pulled = await health();
+  assert.deepEqual(found(pulled, 'BUILD_NEEDED'), [null]);
+  assert.equal(
+    pulled.issues.find((issue: any) => issue.code === 'BUILD_NEEDED').severity,
+    'warning',
+  );
+
+  // Built: the API, started on the previous build, must be restarted.
+  const later = new Date(Date.now() + 5_000);
+  await writeFile(join(code, 'dist', 'src', 'main.js'), 'exports.version = 2;');
+  await utimes(join(code, 'dist', 'src', 'main.js'), later, later);
+  const rebuilt = await health();
+  assert.deepEqual(found(rebuilt, 'BUILD_NEEDED'), []);
+  assert.deepEqual(found(rebuilt, 'RESTART_NEEDED'), ['api']);
+
+  // A worker records the code it starts with; changing its Python afterwards needs a restart.
+  const worker = await fixture.database.pool.connect();
+  try {
+    await worker.query('SELECT pg_advisory_lock($1)', [WORKER_LOCK]);
+    await recordWorkerRun(dataDir);
+    assert.deepEqual(found(await health(), 'RESTART_NEEDED'), ['api']);
+    await writeFile(join(code, 'app', 'runner.py'), 'VERSION = 2\n');
+    const changed = await health();
+    assert.deepEqual(found(changed, 'RESTART_NEEDED'), ['api', 'worker']);
+    const issue = changed.issues.find((item: any) => item.subject === 'worker');
+    assert.match(issue.detail, /Python/);
+    assert.ok(Date.now() - new Date(issue.since).getTime() < 60_000);
+  } finally {
+    await worker.query('SELECT pg_advisory_unlock($1)', [WORKER_LOCK]);
+    worker.release();
+  }
+  // Without a running worker its old record is ignored.
+  assert.deepEqual(found(await health(), 'RESTART_NEEDED'), ['api']);
 });
