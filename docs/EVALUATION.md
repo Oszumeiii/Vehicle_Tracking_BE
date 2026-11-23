@@ -560,3 +560,29 @@ Tổng cộng 20/280 mẫu có nhãn, đều thuộc nhóm crop lớn nhất và
 
 - **Giới hạn:** nhãn do Claude đọc từ crop, một khung cảnh ban ngày. Cần nhãn người trước khi đưa con số vào báo cáo chính thức.
 - **Dữ liệu và script:** `data/evaluation/ocr_padding/svtr_why.py` và `svtr_why.json` (không commit).
+
+## Bỏ khung khi chạy hai camera (24/11/2026)
+
+- **Câu hỏi:** bản rà soát R14 ghi camera YouTube bỏ 1,45% khung khi chạy cùng một camera khác, vượt mức 1% của AT48. Bước chỉnh nghiêng mới thêm (#81) có phải nguyên nhân không?
+- **Cách đo:** thống kê cuối của từng phiên live trong 6 ngày, lưu ở `live_sessions.stats`:
+  - `stages.ocr.ms_per_track`: thời gian trung bình để chuẩn bị ảnh, chỉnh nghiêng và đọc OCR một track;
+  - `stages.detect.ms_per_frame`;
+  - `frames_dropped / frames_read`.
+  
+  Phép tìm góc nghiêng đo riêng: 3,6 ms mỗi ảnh crop cỡ 73×24 px, tức khoảng 18 ms cho 5 ảnh của một track.
+
+| Phiên (giờ Việt Nam) | Camera chạy cùng lúc | Chỉnh nghiêng | Track | OCR mỗi track | Detector mỗi khung | Khung bị bỏ |
+|---|---|---|---|---|---|---|
+| 21/11 10:35, Pau da Viola 45 phút | 1 | không | 940 | 127 ms | 33 ms | 0,05% |
+| 21/11 13:50, Santelmo 52 phút | 1 | không | 284 | 47 ms | 33 ms | 0% |
+| 21/11 20:17, Pau da Viola + San Telmo | 2 | không | 685 + 652 | 250 + 253 ms | 53 + 52 ms | 5,89% và 3,61% |
+| 21/11 23:48, Demo 14 phút | 1 | có | 294 | 108 ms | 38 ms | 0,09% |
+| 22/11 00:23, Pau da Viola 6 phút (SE-ResNet34-C) | 1 | có | 118 | 108 ms | 36 ms | 0,30% |
+| 23/11 20:34, Dom Cordoni + Pizza Hot 30 phút (SE-ResNet34-C) | 2 | có | 604 + 587 | 203 + 267 ms | 43 + 44 ms | 1,44% và 2,22% |
+
+- **Không do chỉnh nghiêng:**
+  - phép tìm góc chỉ chiếm khoảng 18 ms trong 100–270 ms của một track;
+  - cặp hai camera chạy *không* chỉnh nghiêng (21/11) còn bỏ nhiều khung hơn (5,89% và 3,61%).
+- **Nguyên nhân:** việc xử lý mỗi track chạy ngay trong vòng lặp đọc khung (`LiveRunner._record`, `app/live/runner.py`): ghi ảnh bằng chứng, chuẩn bị ảnh, chỉnh nghiêng, OCR. Trong lúc đó luồng đọc vẫn nhận khung vào hàng đợi; hàng đợi đầy thì khung bị bỏ. Khi hai camera dùng chung GPU, mỗi track mất gấp đôi thời gian (khoảng 250 ms so với 50–130 ms), nên một loạt xe đi qua cùng lúc dễ làm đầy hàng đợi.
+- **Ảnh hưởng thực tế nhỏ:** mục "Xe bị sót trên camera Balneário Camboriú" cho thấy bỏ tới 5,9% khung vẫn giữ 47/48 và 50/50 lượt xe, vì xe nào cũng xuất hiện ở nhiều khung.
+- **Hướng sửa nếu cần đạt AT48:** đưa việc xử lý track ra một luồng nền, để vòng lặp đọc khung không phải chờ OCR. Đây là thay đổi về đồng bộ giữa các luồng (thứ tự sự kiện, bộ đếm, đóng phiên phải chờ các track còn dở), nên cần làm và đo riêng. Thu nhỏ phép tìm góc chỉ tiết kiệm khoảng 10 ms mỗi track, không đủ.
