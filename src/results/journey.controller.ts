@@ -258,7 +258,8 @@ export class JourneyController {
   /**
    * Results of uploaded footage that says when it was filmed (media.recorded_at): the
    * latest recognition of each video, at recorded_at + start_seconds. The same file
-   * uploaded twice (same sha256) counts once (its newest upload). Results of one video
+   * uploaded twice (same sha256) counts once (the copy with a reviewed read, else its newest
+   * upload). Results of one video
    * closer than PLATE_LIVE_SIGHTING_MINUTES form one point, like a live sighting.
    * `undated` counts matching results of videos without recorded_at.
    */
@@ -297,11 +298,22 @@ export class JourneyController {
       ORDER BY captured_from, a.id LIMIT $${values.length}`,
       values,
     );
-    // The newest upload of each file stands for its copies.
+    // One copy stands for each file: the one a reviewer confirmed or corrected a read in,
+    // else the newest upload. Otherwise a newer copy, analysed again, would bring back the
+    // misread that was corrected in the older one.
+    const reviewed = new Set(
+      rows.filter((row) => row.review_status !== 'pending').map((row) => row.media_id),
+    );
+    const rank = (row: Row) => Number(reviewed.has(row.media_id));
     const newest = new Map<string, Row>();
     for (const row of rows) {
       const kept = newest.get(row.sha256);
-      if (!kept || row.uploaded_at > kept.uploaded_at) newest.set(row.sha256, row);
+      if (
+        !kept ||
+        rank(row) > rank(kept) ||
+        (rank(row) === rank(kept) && row.uploaded_at > kept.uploaded_at)
+      )
+        newest.set(row.sha256, row);
     }
     const gap = sightingMinutes() * 60_000;
     const groups: Row[][] = [];
