@@ -228,3 +228,8 @@ npm run format:check
 Test Node dùng PostgreSQL thật trong cluster/database tạm, không sửa database đang sử dụng. Nếu máy không có binaries PostgreSQL, đặt `PG_BIN` hoặc `TEST_DATABASE_URL` trỏ server cho phép tạo database test. Test upload cần Python của `.venv` (kiểm tra media); trong một git worktree không có `.venv`, đặt `PLATE_PIPELINE_PYTHON` trỏ tới `.venv` của thư mục chính. Python tests kiểm tra model OCR/decoder, tracking 5 frame và evaluator; không thay cho kiểm thử API NestJS.
 
 Đánh giá accuracy/CER: [EVALUATION.md](docs/EVALUATION.md). Chạy inference thành công chưa chứng minh độ chính xác trên dữ liệu ứng dụng; cần nhãn chuẩn độc lập. Test với runner fixture chỉ chứng minh luồng nghiệp vụ/transaction.
+
+Thử tải với dữ liệu lớn (sau `npm run build`, cần `PG_BIN`): `node scripts/load-test.mjs --reads 2000000`.
+- Script tạo database tạm, sinh lượt đọc giả và đo các trang tra cứu qua API. Database đang sử dụng không bị đụng tới.
+- `--base <thư mục bản khác>` so sánh hai bản build trên cùng dữ liệu.
+- Với 2 triệu lượt, database tạm khoảng 7 GB và mất khoảng 25 phút để nạp. Kết quả: [EVALUATION.md](docs/EVALUATION.md#thử-tải-với-2-triệu-lượt-đọc-25112026).

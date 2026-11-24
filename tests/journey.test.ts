@@ -8,7 +8,7 @@ import { createApp } from '../src/main';
 import { workerOptions } from '../src/recognition/engine';
 import { ingestTrack } from '../src/live/ingest';
 import { haversineMeters, journeyLegs } from '../src/results/journey';
-import { fuzzyEdits, plateQuery } from '../src/results/plate-match';
+import { fuzzyEdits, oneEditAway, plateQuery, plateSkeleton } from '../src/results/plate-match';
 import { seedUser, startTestDatabase, TestDatabase } from './helpers';
 import { livePipelines, writeTrack } from './live-fixtures';
 
@@ -137,6 +137,30 @@ test('plate queries drop separators; fuzzy edits grow with the plate length', ()
   assert.equal(plateQuery('abc-1234'), 'ABC1234');
   assert.throws(() => plateQuery(' -. '), /cannot be empty/);
   assert.deepEqual(['ABCD', 'ABC12', 'ABC1D23', 'ABC1D234'].map(fuzzyEdits), [0, 1, 1, 2]);
+});
+
+test('fuzzy search looks up skeletons one edit away; the skeleton is the SQL function', async () => {
+  const near = oneEditAway('A8C1234');
+  assert.ok(near.includes('A8C1234') && near.includes('A8C124') && near.includes('A8C12345'));
+  assert.ok(near.includes('X8C1234') && near.includes('A8C1E34'));
+  assert.ok(!near.includes('A8C1255'), 'two edits away');
+  assert.equal(new Set(near).size, near.length);
+  assert.ok(near.length < 450, `${near.length} skeletons for a 7-character plate`);
+  // Same folding as plate_skeleton(): old Brazilian letter in fifth place, look-alikes.
+  const plates = [
+    'SXE6J35',
+    'sxe6935',
+    'ABC1D23',
+    'QOD1234',
+    'ILZ5SBG',
+    'ABCD',
+    'ABC1D234',
+    'ZZZ9J99',
+  ];
+  for (const plate of plates) {
+    const { rows } = await fixture.database.query('SELECT plate_skeleton($1) AS s', [plate]);
+    assert.equal(plateSkeleton(plate), rows[0].s, plate);
+  }
 });
 
 test('journey legs measure distance, time and speed and flag impossible ones', () => {
