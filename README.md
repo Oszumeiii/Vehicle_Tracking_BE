@@ -158,7 +158,12 @@ Lưu ý khi vận hành:
   - đặt `null` để giữ mãi;
   - thư mục mồ côi và thùng rác cũng được dọn;
   - phiên đăng nhập (`auth_sessions`) hết hạn hoặc đã đăng xuất quá 7 ngày bị xóa;
-  - nhật ký truy cập (`audit_log`) cũ hơn `PLATE_AUDIT_RETENTION_DAYS` (mặc định 365 ngày) bị xóa.
+  - nhật ký truy cập (`audit_log`) cũ hơn `PLATE_AUDIT_RETENTION_DAYS` (mặc định 365 ngày) bị xóa;
+  - tin cảnh báo đã gửi hoặc đã bỏ quá 90 ngày bị xóa.
+- **Danh sách theo dõi và cảnh báo:** mỗi mục có lý do, mức ưu tiên và hạn theo dõi; admin đặt được mục dùng chung (báo cho mọi người xem được camera). Ngoài trang Camera live, cảnh báo được gửi tới **Telegram** và **webhook** (Quản lý → Cài đặt → "Nhận cảnh báo ngoài trang web"), có gửi lại khi lỗi; tin không gửi được hiện trong cảnh báo hệ thống (`ALERTS_FAILING`). Chi tiết: [API.md](docs/API.md#kênh-thông-báo-gửi-cảnh-báo-ra-ngoài).
+  - **Bật Telegram** (một lần, người quản trị tự làm): trong Telegram, nhắn `/newbot` cho @BotFather, đặt tên, chép token. Thêm vào `.env`: `PLATE_TELEGRAM_BOT_TOKEN=<token>` và `PLATE_PUBLIC_URL=https://<địa chỉ trang web>` (để tin có đường dẫn mở kết quả), rồi chạy `start-all -Restart`. Mỗi người tự bấm "Kết nối Telegram" để nhận tin. Dùng bot riêng cho hệ thống này: worker đọc tin nhắn của bot bằng `getUpdates`, nên bot không được gắn webhook hay dùng cho dịch vụ khác.
+  - Tuỳ chọn: `PLATE_ALERT_TIMEZONE` (múi giờ trong tin, mặc định `Asia/Ho_Chi_Minh`), `PLATE_TELEGRAM_BOT_USERNAME` (bỏ qua bước hỏi tên bot), `PLATE_WEBHOOK_ALLOW_PRIVATE=true` (chỉ khi thử webhook trong mạng nội bộ).
+  - Tin gửi ra ngoài chứa biển số, camera, thời gian và ảnh: chỉ kết nối kênh mà đơn vị được phép gửi các dữ liệu này tới.
 - **Chống đầy ổ:** khi ổ chứa `PLATE_DATA_DIR` còn dưới `PLATE_MIN_FREE_GB` (mặc định 5 GB), worker dừng các phiên live (sự kiện `DISK_LOW`), không bật phiên mới, API từ chối upload (`507`). Bật 24/7 cho camera chưa có hạn lưu thì tự đặt keyframe 24 giờ, track 7 ngày (`PLATE_ALWAYS_ON_KEYFRAME_HOURS`, `PLATE_ALWAYS_ON_TRACK_DAYS`; track đã duyệt hoặc có cảnh báo vẫn được giữ). Admin xem dung lượng, video trùng và hạn lưu từng camera ở `GET /api/v2/system/storage` (mục Quản lý → Video & tác vụ).
 - **Xóa phiên:** `DELETE /api/v2/live-sessions/{id}` cho phiên đã kết thúc (xóa track, bằng chứng và lịch sử). Xóa hết phiên thì xóa được camera. `GET /live-sessions/{id}` có `evidence_bytes`.
 - **Lượt xuất hiện:** các track cùng biển (hoặc lệch 1 ký tự) trên một camera trong vòng `PLATE_LIVE_SIGHTING_MINUTES` (mặc định 5) có chung `sighting_id`. `GET /recognition-results?group_by=sighting` trả mỗi lượt một dòng, kèm `sighting_count`, `first_seen`, `last_seen`; `GET /api/v2/sightings/{id}/results` liệt kê các track của lượt đó.

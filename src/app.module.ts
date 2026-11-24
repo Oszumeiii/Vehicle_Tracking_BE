@@ -15,6 +15,7 @@ import { LiveController } from './live/live.controller';
 import { LiveViewController } from './live/live-view.controller';
 import { VideoController } from './live/video.controller';
 import { WatchlistController } from './live/watchlist.controller';
+import { NotificationsController } from './notify/notifications.controller';
 import { EvaluationController } from './evaluation/evaluation.controller';
 import { AuditController } from './audit/audit.controller';
 import { StorageController } from './system/storage.controller';
@@ -93,6 +94,7 @@ class HealthController {
     VideoController,
     LiveViewController,
     WatchlistController,
+    NotificationsController,
     EvaluationController,
     AuditController,
     StorageController,

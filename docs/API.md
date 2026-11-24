@@ -21,13 +21,15 @@ Mặc định `http://127.0.0.1:3000`. Ngoại trừ login và health, gửi `Au
   - `DISK_LOW`: ổ dữ liệu dưới `PLATE_MIN_FREE_GB`.
   - `RESTART_NEEDED` (warning): `subject` là `api` hoặc `worker`. Tiến trình đó chạy code cũ hơn code trên máy: `dist/src` đã được build lại sau khi nó khởi động, hoặc (worker) Python trong `app/` đã đổi. So bằng dấu vân tay nội dung, nên build lại mà không đổi gì thì không báo. Chạy `start-all -Restart`.
   - `BUILD_NEEDED` (warning): file trong `src/` mới hơn bản build `dist/src` (code đã pull hoặc sửa nhưng chưa build); `since` là lúc file mới nhất được sửa. Chạy `start-all -Restart`. Không báo khi không có `src/` (chạy bằng image Docker).
+  - `ALERTS_FAILING` (warning): cảnh báo watchlist không gửi ra ngoài được: bị bỏ trong 24 giờ qua, hoặc sau 10 phút vẫn chưa gửi được. Mỗi kênh một mục; `subject` là `telegram: <tên>` hoặc `webhook: <tên>`, `detail` là `N alert message(s) not delivered: <lỗi gần nhất>`.
 - `GET /api/v2/system/storage`: chỉ Admin. Ổ đĩa (`free_bytes`, `total_bytes`), ngưỡng `min_free_bytes`, `low`, dung lượng video upload (`media_bytes`), bằng chứng live (`live_evidence_bytes`), bản ghi đệm (`recording_bytes`), các file upload trùng (`duplicates`) và hạn lưu cùng dung lượng bằng chứng của từng camera (`cameras`).
 - `GET /api/v2/audit-logs`: chỉ Admin (user thường nhận `403`). **Nhật ký truy cập**, mới nhất trước, query `user_id`, `action` (khớp đúng như `auth.login`, hoặc tiền tố kết thúc bằng dấu chấm như `camera.`), `from`, `to`, phân trang. Mỗi dòng gồm `id`, `user_id`, `user_email`, `action`, `target_type`, `target_id`, `details`, `ip`, `created_at`.
   - Hành động được ghi:
     - `auth.login`, `auth.login_failed` (`details.email`, `reason`: `invalid` | `inactive` | `throttled`), `auth.logout`;
     - `user.create`, `user.update` (chỉ ghi tên các trường đã đổi);
     - `results.search` (chỉ khi có `plate`), `result.review`, `journey.view`, `job.export`. Không ghi mỗi lần tải chi tiết một kết quả (`GET /recognition-results/{id}`): các trang tự tải chi tiết của mọi dòng đang hiển thị, nên ghi lại sẽ làm nhật ký đầy những lượt xem không có chủ đích;
-    - `camera.create|update|delete`, `session.start|stop|delete`, `watchlist.add|delete`, `media.update|delete`, `job.delete`.
+    - `camera.create|update|delete`, `session.start|stop|delete`, `watchlist.add|update|delete`, `media.update|delete`, `job.delete`;
+    - `notification.link_requested`, `notification.link` (worker ghi khi chat Telegram gửi đúng mã), `notification.create|update|delete|test`.
   - Không ghi mật khẩu, token hay các request tải ảnh/video. Lỗi khi ghi log không làm hỏng request. Worker xóa dòng cũ hơn `PLATE_AUDIT_RETENTION_DAYS` (mặc định 365).
 - Biển số do người dùng gõ (watchlist, sửa khi review, tìm kiếm) được chuẩn hóa: chữ hoa, bỏ khoảng trắng, `-` và `.`.
 
@@ -147,7 +149,7 @@ Không có con trỏ thì stream bắt đầu từ thời điểm kết nối.
 Các loại sự kiện:
 - **Sự kiện bền vững** (có `id:`): `status`, `error`, `track_rejected`, `track`, `alert`. `data` có dạng `{live_session_id, stream_source_id, created_at, payload}`.
   - `track`: payload gồm `job_id`, `result_id`, `track`, `text`, `confidence_status`, `confidence`, `captured_from/to`, `duplicate_of_job_id` và `detection_ids` (5 id; crop tải ở `/detections/{id}/artifacts/crop`).
-  - `alert`: biển đọc được khớp watchlist (giống hệt, hoặc lệch 1 ký tự khi biển dài ít nhất 5 ký tự). Payload gồm `watch_plate`, `plate`, `distance`, `job_id`, `result_id`, `stream_source_id`, `confidence_status`, `captured_from`. Chỉ người đặt watchlist nhận được, kể cả khi người đó là admin.
+  - `alert`: biển đọc được khớp watchlist (giống hệt, hoặc lệch 1 ký tự khi biển dài ít nhất 5 ký tự). Payload gồm `watch_plate`, `plate`, `distance`, `priority`, `reason`, `note`, `shared`, `job_id`, `result_id`, `stream_source_id`, `confidence_status`, `captured_from`, `owner_id` (người nhận) và `watchlist_owner_id` (người đặt mục). Mỗi người nhận một sự kiện riêng và chỉ người đó thấy, kể cả khi người đó là admin.
 - **`session`** (không có id): dạng `GET /live-sessions/{id}`, gửi khi kết nối (các phiên đang hoạt động, hoặc phiên được lọc) và mỗi khi phiên đổi trạng thái hoặc stats.
 - **`end`**: stream lọc theo `live_session_id` gửi `end` rồi đóng sau trạng thái kết thúc của phiên.
 - **`trace`** (không có id, không lưu, không phát lại): từng track đi qua pipeline thế nào, để giao diện hiển thị quá trình xử lý. `data` cùng dạng `{live_session_id, stream_source_id, created_at, payload}`, với `payload.stage`:
@@ -193,11 +195,36 @@ for (;;) {
 
 ### Watchlist
 
-- `GET /api/v2/watchlist`: biển đang theo dõi của mình, phân trang.
-- `POST /api/v2/watchlist`: `{plate, note?}` trả `201`; biển được chuẩn hóa (chữ hoa, bỏ khoảng trắng và gạch); trùng trả `409`.
-- `DELETE /api/v2/watchlist/{id}`: `204`; mục của người khác trả `404`.
+- `GET /api/v2/watchlist`: mục của mình và các mục dùng chung, mới nhất trước, phân trang. Query `scope`: `all` (mặc định), `mine`, `shared`. Mỗi mục gồm `plate`, `note`, `reason`, `priority`, `expires_at`, `expired`, `shared`, `owner_id`, `owner_name`, `can_edit`, `created_at`, `updated_at`.
+- `POST /api/v2/watchlist`: `{plate, note?, reason?, priority?, expires_at?, shared?}` trả `201`; biển được chuẩn hóa (chữ hoa, bỏ khoảng trắng và gạch); trùng trả `409`.
+  - `reason`: `stolen` (xe mất cắp), `wanted` (truy tìm), `suspect` (nghi vấn), `vip` (xe ưu tiên), `other` (mặc định).
+  - `priority`: `low`, `normal` (mặc định), `high`.
+  - `expires_at`: phải ở tương lai (`422` nếu không); qua thời điểm này mục không còn báo, nhưng vẫn nằm trong danh sách với `expired=true` cho tới khi xóa.
+  - `shared=true`: chỉ admin (`403` với user). Mục dùng chung báo cho **mọi người xem được camera** (chủ camera và các admin), và mọi người đều thấy nó trong danh sách.
+- `PATCH /api/v2/watchlist/{id}`: đổi `note`, `reason`, `priority`, `expires_at` (`null` là không hết hạn), `shared` (chỉ admin). Không đổi được biển số. Người sửa được: chủ mục, và mọi admin với mục dùng chung; người khác nhận `404`.
+- `DELETE /api/v2/watchlist/{id}`: `204`; cùng quyền như `PATCH`, mục người khác trả `404`.
 
-Mỗi track live vừa nhập được đối chiếu với watchlist của chủ camera và của admin. Mỗi mục khớp tạo một sự kiện `alert`. Không quét lại lịch sử khi thêm mục mới; muốn tìm lịch sử thì dùng `GET /recognition-results?plate=`.
+Mỗi track live vừa nhập được đối chiếu với các mục còn hạn: mục riêng của chủ camera, mục riêng của admin (admin xem mọi camera) và mục dùng chung. Mỗi mục khớp tạo một sự kiện `alert` cho từng người nhận. Không quét lại lịch sử khi thêm mục mới; muốn tìm lịch sử thì dùng `GET /recognition-results?plate=`.
+
+### Kênh thông báo (gửi cảnh báo ra ngoài)
+
+Cảnh báo còn được gửi tới các kênh của người nhận, kể cả khi không ai mở trang Camera live. Mỗi người nhận một tin cho mỗi lượt xe, nói về mục khớp gần nhất (rồi mức ưu tiên cao nhất). Track sau của cùng lượt (cùng `sighting_id`, ví dụ xe đứng đợi trước camera bị bám lại sau mỗi `max_track_seconds`) chỉ hiện trong ứng dụng, không gửi tin nữa. Tin gồm biển số, camera, thời gian, ảnh khung hình và đường dẫn tới trang kết quả, nên chỉ thêm kênh mà đơn vị được phép gửi các dữ liệu này tới.
+
+- `GET /api/v2/notification-channels`: kênh của mình (`id`, `kind`, `target`, `label`, `min_priority`, `enabled`, `last_sent_at`, `last_error`, `last_error_at`), kèm `telegram.configured` (đã có bot) và `webhook.allowed` (người gọi là admin). Không bao giờ trả khóa ký.
+- `POST /api/v2/notification-channels/telegram/link`: `201` `{url, bot_username, expires_at}`. Mở `url` (`https://t.me/<bot>?start=<mã>`) và bấm Start: worker nhận lệnh `/start <mã>` qua `getUpdates` (không cần địa chỉ công khai) và tạo kênh Telegram cho chat đó. Mã dùng một lần, hết hạn sau 10 phút. Nhận trong nhóm: thêm bot vào nhóm rồi gửi `/start <mã>`. Gửi `/stop` cho bot thì mọi kênh của chat đó bị tắt. `422` khi chưa cấu hình bot, `502` khi không gọi được Telegram.
+- `POST /api/v2/notification-channels`: chỉ admin. `{kind:"webhook", target, label?, min_priority?}` trả `201` kèm `secret`, **chỉ hiện một lần**. `target` phải là `https`, không chứa tên đăng nhập hay mật khẩu, không trỏ vào địa chỉ nội bộ (loopback, mạng riêng, `100.64.0.0/10`, link-local); tên miền được kiểm tra lại mỗi lần gửi, sau khi phân giải. `PLATE_WEBHOOK_ALLOW_PRIVATE=true` bỏ các giới hạn này để thử trong mạng nội bộ.
+- `PATCH /api/v2/notification-channels/{id}`: `{label?, min_priority?, enabled?}`. `min_priority`: chỉ gửi cảnh báo của mục có mức từ đây trở lên (`low` = mọi mức).
+- `DELETE /api/v2/notification-channels/{id}`: `204`, xóa cả lịch sử gửi của kênh.
+- `POST /api/v2/notification-channels/{id}/test`: gửi ngay một tin thử, trả `{ok, error, delivery_id}`.
+- `GET /api/v2/notification-channels/deliveries`: các tin đã và đang gửi tới kênh của mình, mới nhất trước, phân trang (`kind` `alert`/`test`, `plate`, `priority`, `status` `pending`/`sent`/`failed`, `attempts`, `last_error`, `created_at`, `sent_at`).
+
+Cách gửi:
+
+- **Outbox:** tin được ghi vào `alert_deliveries` trong cùng transaction với track và sự kiện `alert`. Worker gửi trong khoảng 2 giây (`PLATE_ALERT_POLL_SECONDS`). Worker chết giữa chừng thì tin vẫn còn và được gửi khi worker chạy lại.
+- **Gửi lại:** lỗi tạm thời (mạng, HTTP 5xx/408/429, Telegram quá tải) thử lại sau 30 giây, gấp đôi mỗi lần tới tối đa 30 phút, tối đa 8 lần (khoảng 1,5 giờ). Lỗi không thể tự hết (bot bị chặn, chat không tồn tại, webhook trả 4xx, chuyển hướng) thì dừng ngay. Kết quả lưu ở tin và ở kênh (`last_error`), và hiện trong `GET /system/health` (`ALERTS_FAILING`).
+- **Webhook:** `POST` JSON `{event:"watchlist.alert"|"test", delivery_id, sent_at, alert:{plate, watch_plate, distance, priority, reason, note, shared, captured_from, confidence_status, confidence, camera:{id,name,latitude,longitude}, result_id, job_id, url}}`. Header `X-Plate-Event`, `X-Plate-Delivery` (giống nhau giữa các lần gửi lại, để bên nhận bỏ trùng) và `X-Plate-Signature: sha256=<HMAC-SHA256 hex của body bằng secret>`. Thành công là mã 2xx trong 10 giây.
+- **Telegram:** `sendPhoto` với khung hình của track (không còn thì ảnh crop, không còn nữa thì chỉ gửi chữ), chú thích tiếng Việt gồm biển, mức ưu tiên, lý do, camera, giờ theo `PLATE_ALERT_TIMEZONE` (mặc định `Asia/Ho_Chi_Minh`), độ tin cậy, ghi chú, bản đồ khi camera có tọa độ, và đường dẫn `PLATE_PUBLIC_URL/results?plate=...` khi có `PLATE_PUBLIC_URL`.
+- Worker xóa tin đã gửi hoặc đã bỏ sau 90 ngày, và mã liên kết Telegram một ngày sau khi hết hạn.
 
 Mỗi track đã chốt là một job `succeeded` có `live_session_id`, `live_track_key`, `captured_from/to` (giờ nhận frame, xấp xỉ), `confidence_status` và `duplicate_of_job_id`. Hai trường cuối chỉ để tham khảo. Review, bằng chứng, CSV và xóa job dùng API chung ở trên.
 
