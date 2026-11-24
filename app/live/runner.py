@@ -3,11 +3,15 @@
 Each finished track gets its own folder OUT/tracks/e{epoch}-t{track}/ holding its
 keyframes, crops and track.json (one appearance in the shape the Node validator
 expects, timestamp_source "live_pts"). Confidence status and duplicate links are
-advisory: every track is still recorded.
+advisory: every track is still recorded. Finished tracks are written and read on a
+second thread (TrackWorker), so the frame loop never waits for OCR.
 """
 from datetime import datetime, timedelta, timezone
 import math
+import queue
+import threading
 import time
+import traceback
 
 from PIL import Image
 
@@ -101,11 +105,60 @@ class DuplicateLinker:
         return match
 
 
+class TrackWorker:
+    """Finishes tracks on its own thread, one at a time and in the order they were handed over.
+
+    Writing a track's evidence and reading it took 100-270 ms with two cameras on one GPU;
+    done inside the frame loop, frames piled up meanwhile and 1.4-5.9% were dropped
+    (docs/EVALUATION.md, R14). The queue is bounded: if OCR falls that far behind, the frame
+    loop waits as it used to instead of holding the frames of ever more tracks.
+    handle(item, waited_seconds) must report its own errors; anything it raises is printed
+    and the thread goes on with the next track.
+    """
+
+    def __init__(self, handle, capacity=32, name="live-tracks"):
+        self.handle, self.queue = handle, queue.Queue(maxsize=capacity)
+        self.thread = threading.Thread(target=self._run, name=name, daemon=True)
+        self.thread.start()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()
+
+    @property
+    def pending(self):
+        """Tracks handed over and not finished yet (waiting or being read)."""
+        return self.queue.unfinished_tasks
+
+    def submit(self, item):
+        self.queue.put((item, time.perf_counter()))
+
+    def close(self):
+        """Finish every track handed over, then stop the thread."""
+        self.queue.put(None)
+        self.thread.join()
+
+    def _run(self):
+        while True:
+            entry = self.queue.get()
+            try:
+                if entry is None:
+                    return
+                item, submitted = entry
+                self.handle(item, time.perf_counter() - submitted)
+            except Exception:  # noqa: BLE001 - one track never stops the others
+                traceback.print_exc()
+            finally:
+                self.queue.task_done()
+
+
 class LiveRunner:
     def __init__(self, snapshot, out, open_source, emit, model, recognizer, *, data_dir=None,
                  min_confidence=DEFAULT_MIN_CONFIDENCE, max_track_seconds=30., max_reconnects=10, read_timeout=15.,
                  stats_interval=1., buffer_seconds=1.5, reader_capacity=None, backoff_max=30., exclude_zones=(), detect_roi=None,
-                 sampling_scale=1., recording=None):
+                 sampling_scale=1., recording=None, track_capacity=32):
         if snapshot.get("recognizer", {}).get("input_mode") != "five_frame_joint":
             raise ValueError("Live recognition supports five_frame_joint pipelines only")
         self.exclude_zones = [list(map(float, zone)) for zone in exclude_zones]
@@ -137,8 +190,11 @@ class LiveRunner:
         # rolling segments (OUT/record/eNNN) and cuts clips of tracks (OUT/clips); None: off.
         self.recording = recording
         self.clips, self.spans = None, {}
-        # OCR work of the whole session, for the pipeline view (stats.stages.ocr).
+        # OCR work of the whole session, for the pipeline view (stats.stages.ocr). The track
+        # thread adds to it while the frame loop reports it, hence the lock.
         self.ocr = dict(tracks=0, seconds=0., readable=0, low_confidence=0, unreadable=0, duplicates=0)
+        self.ocr_lock = threading.Lock()
+        self.track_capacity, self.peak_pending = track_capacity, 0
 
     def _warm_up(self, cfg):
         """First CUDA calls take seconds; make them before frames start to arrive.
@@ -200,7 +256,13 @@ class LiveRunner:
         last_frame = last_stats = time.monotonic()
         processed_since = 0
         position = None  # PTS of the newest processed frame (where a viewer of the source should be)
-        with TrackSession(self.model, cfg, retain_images=True) as session:
+        # Named after the session thread: never "job-*", so its OCR keeps the camera priority
+        # on the shared GPU thread (app/live/host.py).
+        worker = TrackWorker(lambda candidate, waited: self._record(epoch, candidate, cfg, clock, waited),
+                             self.track_capacity, name=f"{threading.current_thread().name}-tracks")
+        # Leaving the block records every track handed over, so their events always come
+        # before the next status (reconnecting, ended, stopped, failed).
+        with worker, TrackSession(self.model, cfg, retain_images=True) as session:
             try:
                 while True:
                     # After stop, frames already received are still processed, then the epoch ends.
@@ -227,7 +289,7 @@ class LiveRunner:
                         position = pts
                         last_frame = now
                         for candidate in session.push(index, pts, image, gray):
-                            self._record(epoch, candidate, cfg, clock)
+                            self._hand_over(worker, candidate)
                         self._report_rejections(epoch, session)
                     if now - last_stats >= self.stats_interval:
                         lag = (datetime.now(timezone.utc) - item[4]).total_seconds() if isinstance(item, tuple) else None
@@ -246,7 +308,7 @@ class LiveRunner:
                                        position_seconds=None if position is None else round(position, 3),
                                        source_duration=info.get("duration"),
                                        fps=round(processed_since / (now - last_stats), 2),
-                                       stages=self._stages(reader, session, frames)))
+                                       stages=self._stages(reader, session, frames, worker)))
                         last_stats, processed_since = now, 0
                 if stop.is_set():
                     outcome, reason = "stopped", None
@@ -256,7 +318,7 @@ class LiveRunner:
                 reader.stop()
             # Tracks seen before a failure or stop are still finished and recognized.
             for candidate in session.close():
-                self._record(epoch, candidate, cfg, clock)
+                self._hand_over(worker, candidate)
             self._report_rejections(epoch, session)
         if recorder:
             recorder.stop()
@@ -265,15 +327,22 @@ class LiveRunner:
             self.clips = None
         return outcome, reason, frames
 
+    def _hand_over(self, worker, candidate):
+        worker.submit(candidate)
+        self.peak_pending = max(self.peak_pending, worker.pending)
+
     def _report_rejections(self, epoch, session):
         """A trace event per track that crop selection dropped (too few usable frames)."""
         while session.rejections:
             item = session.rejections.popleft()
             self.emit(dict(type="trace", stage="track_rejected", epoch=epoch, **item))
 
-    def _stages(self, reader, session, frames):
-        """Counters of each pipeline step for this epoch (OCR: the whole session)."""
-        gate, detect, ocr = session.gate.counts, session.detect, self.ocr
+    def _stages(self, reader, session, frames, worker=None):
+        """Counters of each pipeline step for this epoch (OCR: the whole session; pending: tracks
+        handed to the track thread and not recorded yet, peak_pending: the most at once)."""
+        with self.ocr_lock:
+            ocr = dict(self.ocr)
+        gate, detect = session.gate.counts, session.detect
         return dict(
             decode=dict(read=reader.read, dropped=reader.dropped, processed=frames),
             sampling=dict(candidates=gate["adaptive_candidates"], kept=gate["kept"], skipped=gate["skipped"],
@@ -287,7 +356,8 @@ class LiveRunner:
                           rejected=dict(session.rejected)),
             ocr=dict(tracks=ocr["tracks"], readable=ocr["readable"], low_confidence=ocr["low_confidence"],
                      unreadable=ocr["unreadable"], duplicates=ocr["duplicates"], threshold=self.min_confidence,
-                     ms_per_track=round(1000 * ocr["seconds"] / ocr["tracks"], 1) if ocr["tracks"] else None))
+                     ms_per_track=round(1000 * ocr["seconds"] / ocr["tracks"], 1) if ocr["tracks"] else None,
+                     pending=worker.pending if worker else 0, peak_pending=self.peak_pending))
 
     def _start_recording(self, info, connection, clock):
         """Recorder and clip maker of an epoch: a network stream records itself; a demo video is its own recording."""
@@ -313,15 +383,16 @@ class LiveRunner:
         if clips is not None and span is not None:
             clips.request(key, *span)
 
-    def _record(self, epoch, candidate, cfg, clock):
-        """One failed track (evidence or OCR) is reported without stopping the stream."""
+    def _record(self, epoch, candidate, cfg, clock, waited=0.):
+        """One failed track (evidence or OCR) is reported without stopping the stream. Runs on
+        the track thread; waited is how long the track queued there."""
         try:
-            self._track(epoch, candidate, cfg, clock)
+            self._track(epoch, candidate, cfg, clock, waited)
         except Exception as exc:  # noqa: BLE001
             self.emit(dict(type="error", code="TRACK_FAILED", epoch=epoch, track_id=candidate["track_id"],
                            message=str(exc) or repr(exc)))
 
-    def _track(self, epoch, candidate, cfg, clock):
+    def _track(self, epoch, candidate, cfg, clock, waited=0.):
         key = f"e{epoch:03d}-t{int(candidate['track_id']):06d}"
         folder = self.out / "tracks" / key
         folder.mkdir(parents=True, exist_ok=False)
@@ -360,14 +431,15 @@ class LiveRunner:
             policy = self.recording.get("clip_policy", "readable")
             if self.clips is not None and (policy == "all" or (policy == "readable" and status == "readable")):
                 self.clips.request(key, candidate["first_seconds"], candidate["last_seconds"])
-        self.ocr["tracks"] += 1
-        self.ocr["seconds"] += ocr_seconds
-        self.ocr[status] = self.ocr.get(status, 0) + 1
-        self.ocr["duplicates"] += duplicate_of is not None
+        with self.ocr_lock:
+            self.ocr["tracks"] += 1
+            self.ocr["seconds"] += ocr_seconds
+            self.ocr[status] = self.ocr.get(status, 0) + 1
+            self.ocr["duplicates"] += duplicate_of is not None
         self.emit(dict(type="trace", stage="track_ocr", epoch=epoch, track=key, observations=candidate["observations"],
                        seconds=round(candidate["last_seconds"] - candidate["first_seconds"], 2), frames=len(detections),
                        text=text, confidence=confidence, status=status, threshold=round(threshold, 6),
-                       duplicate_of=duplicate_of, ocr_ms=round(1000 * ocr_seconds, 1)))
+                       duplicate_of=duplicate_of, ocr_ms=round(1000 * ocr_seconds, 1), queued_ms=round(1000 * waited, 1)))
         self.emit(dict(type="track", track=key, epoch=epoch, text=text, status=status, confidence=confidence,
                        frames=len(detections), duplicate_of=duplicate_of, captured_from=record["captured_from"],
                        captured_to=record["captured_to"],

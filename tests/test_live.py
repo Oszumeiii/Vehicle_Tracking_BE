@@ -2,12 +2,13 @@
 import itertools
 import json
 import threading
+import time
 
 import cv2
 import numpy as np
 import pytest
 
-from app.live.runner import DuplicateLinker, LiveRunner, classify
+from app.live.runner import DuplicateLinker, LiveRunner, TrackWorker, classify
 from app.live import DEFAULT_MIN_CONFIDENCE
 from app.live.source import FfmpegFrames, FileFrames, LiveReader, SourceError, StreamEnded, resolve_youtube
 from test_ml_adapter import GATE, SAMPLING, TRACKING, BoxFixture, _plate_video
@@ -54,8 +55,8 @@ def video_frames(path):
     return frames
 
 
-def run(tmp_path, sources, stop=None, **options):
-    events, calls = [], iter(sources)
+def run(tmp_path, sources, stop=None, ocr=recognizer, events=None, model=None, **options):
+    events, calls = ([] if events is None else events), iter(sources)
 
     def open_source():
         source = next(calls)
@@ -63,10 +64,15 @@ def run(tmp_path, sources, stop=None, **options):
             raise source
         return INFO, source
 
-    runner = LiveRunner(SNAPSHOT, tmp_path / "live", open_source, events.append, BoxFixture(), recognizer,
+    runner = LiveRunner(SNAPSHOT, tmp_path / "live", open_source, events.append, model or BoxFixture(), ocr,
                         backoff_max=.01, **options)
     status = runner.run(stop or threading.Event())
     return status, events
+
+
+def started(events):
+    """The frame loop has begun (OCR calls before this are the warm-up)."""
+    return any(e.get("status") == "running" for e in events)
 
 
 def test_live_reader_keeps_newest_frames_and_counts_drops():
@@ -295,6 +301,108 @@ def test_stop_processes_received_frames_then_finishes_the_open_track(tmp_path):
     assert status == "stopped" and connection.closed
     assert [e["type"] for e in events].count("track") == 1
     assert events[-1] == {**events[-1], "type": "status", "status": "stopped", "tracks": 1}
+
+
+class CountingBoxes(BoxFixture):
+    """Counts detector batches: each one is made by the frame loop."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def predict(self, images, **kwargs):
+        self.calls += 1
+        return super().predict(images, **kwargs)
+
+
+def test_frame_loop_keeps_detecting_while_a_track_is_read(tmp_path):
+    """R14: OCR runs on the track thread, so a slow read no longer holds up later frames."""
+    video = tmp_path / "input.avi"
+    _plate_video(video, 60)
+    model, events, progressed = CountingBoxes(), [], []
+
+    def slow_ocr(images):
+        if started(events):
+            calls, deadline = model.calls, time.monotonic() + 5
+            while model.calls == calls and time.monotonic() < deadline:
+                time.sleep(.01)
+            progressed.append(model.calls > calls)
+        return recognizer(images)
+
+    # The plate becomes a track after 1 s in view, with 5 s of frames still to come.
+    status, _ = run(tmp_path, [FileFrames(video)], ocr=slow_ocr, events=events, model=model,
+                    max_track_seconds=1., stats_interval=.001)
+    assert status == "ended" and progressed == [True], "the detector ran while the track was being read"
+    trace = next(e for e in events if e["type"] == "trace" and e["stage"] == "track_ocr")
+    assert trace["queued_ms"] >= 0 and trace["ocr_ms"] >= 0
+    ocr = [e for e in events if e["type"] == "stats"][-1]["stages"]["ocr"]
+    assert ocr["peak_pending"] == 1 and 0 <= ocr["pending"] <= 1
+    assert events[-1] == {**events[-1], "type": "status", "status": "ended", "tracks": 1}
+
+
+def test_slow_ocr_still_records_each_epochs_tracks_before_its_next_status(tmp_path):
+    video = tmp_path / "input.avi"
+    _plate_video(video, 30)
+    frames = video_frames(video)
+
+    def slow_ocr(images):
+        time.sleep(.3)
+        return recognizer(images)
+
+    status, events = run(tmp_path, [Frames(frames[:20], error=SourceError("network")), FileFrames(video)],
+                         ocr=slow_ocr)
+    assert status == "ended"
+    kinds = [(e["type"], e["status"] if e["type"] == "status" else None)
+             for e in events if e["type"] in ("status", "track")]
+    assert kinds == [("status", "starting"), ("status", "connecting"), ("status", "running"), ("track", None),
+                     ("status", "reconnecting"), ("status", "connecting"), ("status", "running"), ("track", None),
+                     ("status", "ended")]
+    assert events[-1]["tracks"] == 2
+
+
+def test_a_failed_track_is_reported_and_the_next_one_still_recorded(tmp_path):
+    video = tmp_path / "input.avi"
+    _plate_video(video, 30)
+    frames = video_frames(video)
+    events, failed = [], []
+
+    def flaky_ocr(images):
+        if started(events) and not failed:
+            failed.append(True)
+            raise RuntimeError("CUDA hiccup")
+        return recognizer(images)
+
+    status, _ = run(tmp_path, [Frames(frames[:20], error=SourceError("network")), FileFrames(video)],
+                    ocr=flaky_ocr, events=events)
+    assert status == "ended"
+    assert [(e["code"], e["epoch"]) for e in events if e["type"] == "error"] == [("TRACK_FAILED", 0)]
+    assert [e["track"] for e in events if e["type"] == "track"] == ["e001-t000001"]
+    assert events[-1]["tracks"] == 1
+
+
+def test_track_worker_keeps_order_waits_when_full_and_survives_errors():
+    release, done = threading.Event(), []
+
+    def handle(item, waited):
+        assert waited >= 0
+        if item == "boom":
+            raise RuntimeError("unexpected")
+        release.wait(5)
+        done.append(item)
+
+    with TrackWorker(handle, capacity=1) as worker:
+        worker.submit("a")
+        deadline = time.monotonic() + 5
+        while worker.queue.qsize() and time.monotonic() < deadline:
+            time.sleep(.01)  # until the thread has taken "a"
+        worker.submit("boom")
+        third = threading.Thread(target=worker.submit, args=("c",))
+        third.start()
+        third.join(.2)
+        assert third.is_alive(), "a full queue makes the frame loop wait; no track is dropped"
+        assert worker.pending == 2
+        release.set()
+        third.join(5)
+    assert done == ["a", "c"] and worker.pending == 0 and not worker.thread.is_alive()
 
 
 def test_stream_end_during_resolve_ends_the_run(tmp_path):

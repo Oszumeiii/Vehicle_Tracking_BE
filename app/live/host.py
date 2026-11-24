@@ -2,8 +2,9 @@
 
 Runs several live sessions in one process so they share a single copy of the
 detector and OCR model (two processes each loading them overcommit an 8 GB GPU).
-Each session is a LiveRunner on its own thread; model calls take turns on one GPU
-thread, while decoding, tracking and evidence writing overlap.
+Each session is a LiveRunner on its own thread (plus one that records its finished
+tracks); model calls take turns on one GPU thread, while decoding, tracking and
+evidence writing overlap.
 
 Commands are JSON lines on stdin:
   {"cmd": "start", "session": ID, "payload": PATH, "out": DIR,
