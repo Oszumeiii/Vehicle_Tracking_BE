@@ -454,9 +454,91 @@ export class AlertEventPayload {
 export class WatchlistResponse {
   @ApiProperty() id!: string;
   @ApiProperty() owner_id!: string;
+  @ApiProperty({ description: 'Display name of the owner.' }) owner_name!: string;
   @ApiProperty({ description: 'Normalized plate (uppercase, no spaces/hyphens).' }) plate!: string;
   @ApiProperty(nullableText) note!: string | null;
+  @ApiProperty({ enum: ['stolen', 'wanted', 'suspect', 'vip', 'other'] }) reason!: string;
+  @ApiProperty({ enum: ['low', 'normal', 'high'] }) priority!: string;
+  @ApiProperty({ ...nullableDateTime, description: 'No alerts after this time; null: never.' })
+  expires_at!: string | null;
+  @ApiProperty({ description: 'expires_at has passed: the entry no longer alerts.' })
+  expired!: boolean;
+  @ApiProperty({ description: 'Alerts everyone who sees the camera (set by administrators).' })
+  shared!: boolean;
+  @ApiProperty({ description: 'The caller may change or remove it.' }) can_edit!: boolean;
   @ApiProperty(dateTime) created_at!: string;
+  @ApiProperty(nullableDateTime) updated_at!: string | null;
+}
+
+export class NotificationChannelResponse {
+  @ApiProperty() id!: string;
+  @ApiProperty({ enum: ['telegram', 'webhook'] }) kind!: string;
+  @ApiProperty({ description: 'Telegram chat id, or the webhook URL.' }) target!: string;
+  @ApiProperty(nullableText) label!: string | null;
+  @ApiProperty({
+    enum: ['low', 'normal', 'high'],
+    description: 'Only alerts of entries at least this urgent are sent here.',
+  })
+  min_priority!: string;
+  @ApiProperty() enabled!: boolean;
+  @ApiProperty(dateTime) created_at!: string;
+  @ApiProperty(nullableDateTime) last_sent_at!: string | null;
+  @ApiProperty({ ...nullableText, description: 'Why the last send failed (cleared by a success).' })
+  last_error!: string | null;
+  @ApiProperty(nullableDateTime) last_error_at!: string | null;
+}
+
+export class CreatedWebhookResponse extends NotificationChannelResponse {
+  @ApiProperty({
+    description:
+      'Shown only now: each request carries X-Plate-Signature = sha256=HMAC-SHA256(secret, body) in hex.',
+  })
+  secret!: string;
+}
+
+class TelegramAvailability {
+  @ApiProperty({ description: 'A bot is configured (PLATE_TELEGRAM_BOT_TOKEN).' })
+  configured!: boolean;
+}
+
+class WebhookAvailability {
+  @ApiProperty({ description: 'The caller may add webhooks (administrators).' }) allowed!: boolean;
+}
+
+export class NotificationChannelListResponse {
+  @ApiProperty({ type: [NotificationChannelResponse] }) items!: NotificationChannelResponse[];
+  @ApiProperty({ type: TelegramAvailability }) telegram!: TelegramAvailability;
+  @ApiProperty({ type: WebhookAvailability }) webhook!: WebhookAvailability;
+}
+
+export class TelegramLinkResponse {
+  @ApiProperty({
+    description: 'Open it and press Start in Telegram: that chat then gets the alerts.',
+  })
+  url!: string;
+  @ApiProperty() bot_username!: string;
+  @ApiProperty(dateTime) expires_at!: string;
+}
+
+export class ChannelTestResponse {
+  @ApiProperty() ok!: boolean;
+  @ApiProperty(nullableText) error!: string | null;
+  @ApiProperty() delivery_id!: string;
+}
+
+export class AlertDeliveryResponse {
+  @ApiProperty() id!: string;
+  @ApiProperty() channel_id!: string;
+  @ApiProperty({ enum: ['telegram', 'webhook'] }) channel_kind!: string;
+  @ApiProperty(nullableText) channel_label!: string | null;
+  @ApiProperty({ enum: ['alert', 'test'] }) kind!: string;
+  @ApiProperty(nullableText) plate!: string | null;
+  @ApiProperty({ enum: ['low', 'normal', 'high'], nullable: true }) priority!: string | null;
+  @ApiProperty({ enum: ['pending', 'sent', 'failed'] }) status!: string;
+  @ApiProperty(integer) attempts!: number;
+  @ApiProperty(nullableText) last_error!: string | null;
+  @ApiProperty(dateTime) created_at!: string;
+  @ApiProperty(nullableDateTime) sent_at!: string | null;
 }
 
 export const streamZones = zones;

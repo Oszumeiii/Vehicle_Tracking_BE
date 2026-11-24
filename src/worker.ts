@@ -13,6 +13,8 @@ import { GpuGate, LiveManager, liveSettings, spawnLiveProcess, SpawnLive } from 
 import { Retention } from './live/retention';
 import { CloudSync } from './media/cloud-sync';
 import { SharedLiveHost } from './live/host';
+import { AlertNotifier } from './notify/notifier';
+import { TelegramLinker } from './notify/telegram';
 import { WORKER_LOCK } from './system/health.controller';
 import { recordWorkerRun } from './system/code-version';
 
@@ -87,6 +89,9 @@ export async function runWorker(
     await live.recover();
     const retention = new Retention(database, options);
     const cloudSync = new CloudSync(database, options.dataDir);
+    // Watchlist alerts leave the app (Telegram, webhooks) from here, with retries.
+    const notifier = new AlertNotifier(database, options.dataDir);
+    const telegram = new TelegramLinker(database);
     const idle = () =>
       new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, interval);
@@ -141,7 +146,15 @@ export async function runWorker(
     // --once keeps its meaning: process at most one job, and no live sessions.
     const results = await Promise.allSettled([
       ...Array.from({ length: once ? 1 : concurrency }, () => slot()),
-      ...(once ? [] : [liveLoop(), retention.run(shutdown.signal), cloudSync.run(shutdown.signal)]),
+      ...(once
+        ? []
+        : [
+            liveLoop(),
+            retention.run(shutdown.signal),
+            cloudSync.run(shutdown.signal),
+            notifier.run(shutdown.signal),
+            telegram.run(shutdown.signal),
+          ]),
     ]);
     await host?.stopIdle(); // a warm host would outlive the worker otherwise
     if (lostLock) throw lostLock;

@@ -65,7 +65,22 @@ export class Retention {
       recordings: await this.sweepRecordings(),
       sessions: await this.deleteSignIns(),
       audit: await this.deleteAuditLog(),
+      deliveries: await this.deleteDeliveries(),
     };
+  }
+
+  /**
+   * Alert messages sent or given up more than 90 days ago, and Telegram link codes a day
+   * after they expired. The alerted tracks themselves are kept (see UNPROTECTED).
+   */
+  private async deleteDeliveries() {
+    const { rowCount } = await this.database.query(
+      `DELETE FROM alert_deliveries WHERE status <> 'pending' AND created_at < now() - interval '90 days'`,
+    );
+    await this.database.query(
+      `DELETE FROM telegram_link_codes WHERE expires_at < now() - interval '1 day'`,
+    );
+    return rowCount ?? 0;
   }
 
   /** Audit rows older than PLATE_AUDIT_RETENTION_DAYS (default 365). */

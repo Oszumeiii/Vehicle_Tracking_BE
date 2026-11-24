@@ -40,6 +40,7 @@ const CODES = [
   'DISK_LOW',
   'RESTART_NEEDED',
   'BUILD_NEEDED',
+  'ALERTS_FAILING',
 ] as const;
 
 class HealthIssue {
@@ -47,7 +48,8 @@ class HealthIssue {
   @ApiProperty({ enum: ['error', 'warning'] }) severity!: 'error' | 'warning';
   @ApiProperty({
     nullable: true,
-    description: 'Camera or pipeline the issue is about; api or worker for RESTART_NEEDED.',
+    description:
+      'Camera or pipeline the issue is about; api or worker for RESTART_NEEDED; the channel for ALERTS_FAILING.',
   })
   subject!: string | null;
   @ApiProperty({ nullable: true, description: 'Cause as the system reported it.' })
@@ -117,6 +119,7 @@ export class SystemHealthController {
     issues.push(...(await this.pipelineIssues()));
     issues.push(...(await this.waitingJobs()));
     issues.push(...(await this.codeIssues(worker)));
+    issues.push(...(await this.alertIssues()));
     const disk = await diskLow(settings().dataDir);
     if (disk.low)
       issues.push({
@@ -279,5 +282,27 @@ export class SystemHealthController {
         since: new Date(rows[0].oldest).toISOString(),
       },
     ];
+  }
+
+  /**
+   * Watchlist alerts that did not leave the app: given up in the last day, or still
+   * unsent after ten minutes (a bot or webhook that keeps failing). One issue per channel.
+   */
+  private async alertIssues(): Promise<HealthIssue[]> {
+    const { rows } = await this.db.query(
+      `SELECT c.kind, c.label, count(*)::int AS failing, min(d.created_at) AS oldest,
+        (array_agg(d.last_error ORDER BY d.created_at DESC) FILTER (WHERE d.last_error IS NOT NULL))[1] AS error
+      FROM alert_deliveries d JOIN notification_channels c ON c.id=d.channel_id
+      WHERE (d.status='failed' AND d.created_at > now() - interval '1 day')
+        OR (d.status='pending' AND d.created_at < now() - interval '10 minutes')
+      GROUP BY c.id, c.kind, c.label ORDER BY oldest`,
+    );
+    return rows.map((row) => ({
+      code: 'ALERTS_FAILING' as const,
+      severity: 'warning' as const,
+      subject: row.label ? `${row.kind}: ${row.label}` : row.kind,
+      detail: `${row.failing} alert message(s) not delivered${row.error ? `: ${row.error}` : '.'}`,
+      since: new Date(row.oldest).toISOString(),
+    }));
   }
 }

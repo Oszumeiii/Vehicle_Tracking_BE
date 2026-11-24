@@ -10,6 +10,9 @@ import {
   WorkerOptions,
 } from '../recognition/engine';
 import { levenshtein } from '../recognition/fusion';
+import type { AlertPayload } from '../notify/message';
+import { enqueueDeliveries, wakeAlertNotifier } from '../notify/notifier';
+import { priorityRank } from '../notify/settings';
 import { folderBytes, moveFolder } from './files';
 
 export { moveFolder };
@@ -33,24 +36,55 @@ function rekey(value: any, from: string, to: string): any {
 }
 
 /**
- * Watchlist entries matching a plate read on a camera: those of the camera owner and
- * of admins (who see every camera), exact or one character off for plates of 5+.
+ * Watchlist entries matching a plate read on a camera, exact or one character off for
+ * plates of 5+, each with the users its alert goes to. Personal entries: those of the
+ * camera owner and of admins (who see every camera), alerting their owner. Shared
+ * entries (made by admins): everyone who sees the camera, i.e. its owner and the admins.
+ * Expired entries and inactive users never alert.
  */
 async function watchlistMatches(c: Queryable, sourceId: string, plate: string) {
+  const owner = (await c.query('SELECT owner_id FROM stream_sources WHERE id=$1', [sourceId]))
+    .rows[0]?.owner_id;
   const entries = (
     await c.query(
       `SELECT w.* FROM plate_watchlist w JOIN users u ON u.id=w.owner_id
-      WHERE u.is_active AND (u.role='admin' OR w.owner_id=(SELECT owner_id FROM stream_sources WHERE id=$1))`,
-      [sourceId],
+      WHERE u.is_active AND (w.expires_at IS NULL OR w.expires_at > now())
+        AND (w.shared OR u.role='admin' OR w.owner_id=$1)
+      ORDER BY w.created_at, w.id`,
+      [owner],
     )
   ).rows;
-  return entries
+  const matches = entries
     .map((entry) => ({ ...entry, distance: levenshtein(entry.plate, plate) }))
     .filter(
       (entry) =>
         entry.distance === 0 ||
         (entry.distance === 1 && Math.min(entry.plate.length, plate.length) >= 5),
     );
+  const viewers = matches.some((entry) => entry.shared)
+    ? (
+        await c.query(
+          "SELECT id FROM users WHERE is_active AND (role='admin' OR id=$1) ORDER BY id",
+          [owner],
+        )
+      ).rows.map((row) => row.id as string)
+    : [];
+  return matches.map((entry) => ({
+    ...entry,
+    recipients: entry.shared ? viewers : [entry.owner_id as string],
+  }));
+}
+
+type Match = Awaited<ReturnType<typeof watchlistMatches>>[number];
+
+/** The match a recipient is told about: the closest plate, then the most urgent entry. */
+function better(candidate: Match, current: Match | undefined) {
+  return (
+    !current ||
+    candidate.distance < current.distance ||
+    (candidate.distance === current.distance &&
+      priorityRank(candidate.priority) > priorityRank(current.priority))
+  );
 }
 
 function sightingMinutes() {
@@ -153,6 +187,7 @@ export async function ingestTrack(
   };
   await mkdir(path.dirname(target), { recursive: true });
   await moveFolder(source, target);
+  let queued = 0;
   try {
     await validateResult(job, { appearances: [appearance], statistics: {} }, target, options);
     const bytes = await folderBytes(target);
@@ -215,23 +250,116 @@ export async function ingestTrack(
         capture_clock: record.capture_clock ?? 'received',
         detection_ids: detectionIds,
       });
+      // An alert event per entry and recipient (owner_id: who may see it on the event stream).
+      const told = new Map<string, Match>();
       for (const match of matches)
-        await recordEvent(c, session.id, 'alert', {
-          watchlist_id: match.id,
-          watch_plate: match.plate,
-          owner_id: match.owner_id,
-          plate: text!,
-          distance: match.distance,
-          job_id: jobId,
-          result_id: appearanceId,
-          stream_source_id: session.stream_source_id,
-          confidence_status: record.status,
-          captured_from: capturedFrom,
-        });
+        for (const recipient of match.recipients) {
+          await recordEvent(c, session.id, 'alert', {
+            watchlist_id: match.id,
+            watch_plate: match.plate,
+            owner_id: recipient,
+            watchlist_owner_id: match.owner_id,
+            shared: match.shared,
+            priority: match.priority,
+            reason: match.reason,
+            note: match.note,
+            plate: text!,
+            distance: match.distance,
+            job_id: jobId,
+            result_id: appearanceId,
+            stream_source_id: session.stream_source_id,
+            confidence_status: record.status,
+            captured_from: capturedFrom,
+          });
+          if (better(match, told.get(recipient))) told.set(recipient, match);
+        }
+      // One message per passage: a later track of a sighting that already alerted (a car
+      // queued or parked in view is tracked again every max_track_seconds) only shows in the app.
+      const repeat =
+        sighting !== jobId &&
+        (
+          await c.query(
+            'SELECT 1 FROM recognition_jobs WHERE sighting_id=$1 AND alerted AND id<>$2 LIMIT 1',
+            [sighting, jobId],
+          )
+        ).rows.length > 0;
+      if (told.size && !repeat)
+        queued = await enqueueDeliveries(
+          c,
+          await alertPayloads(c, told, {
+            plate: text!,
+            camera: session.stream_source_id,
+            capturedFrom,
+            status: record.status,
+            confidence: record.confidence,
+            jobId,
+            appearanceId,
+            sessionId: session.id,
+          }),
+          jobId,
+        );
     });
   } catch (error) {
     await moveFolder(target, source).catch(() => {});
     throw error;
   }
+  if (queued) wakeAlertNotifier();
   return jobId;
+}
+
+/** What each recipient's messages say (one per recipient: its best match). */
+async function alertPayloads(
+  c: Queryable,
+  told: Map<string, Match>,
+  read: {
+    plate: string;
+    camera: string;
+    capturedFrom: string;
+    status: string;
+    confidence: number | null;
+    jobId: string;
+    appearanceId: string;
+    sessionId: string;
+  },
+) {
+  const camera = (
+    await c.query('SELECT id, name, latitude, longitude FROM stream_sources WHERE id=$1', [
+      read.camera,
+    ])
+  ).rows[0];
+  // The middle crop's frame is the one retention keeps.
+  const picture = (
+    await c.query(
+      `SELECT frame_storage_key, crop_storage_key FROM plate_detections WHERE appearance_id=$1
+      ORDER BY (selected_order=3) DESC, selected_order LIMIT 1`,
+      [read.appearanceId],
+    )
+  ).rows[0];
+  const payloads = new Map<string, AlertPayload>();
+  for (const [recipient, match] of told)
+    payloads.set(recipient, {
+      kind: 'alert',
+      plate: read.plate,
+      watch_plate: match.plate,
+      distance: match.distance,
+      priority: match.priority,
+      reason: match.reason,
+      note: match.note,
+      shared: match.shared,
+      camera: camera && {
+        id: camera.id,
+        name: camera.name,
+        latitude: camera.latitude,
+        longitude: camera.longitude,
+      },
+      captured_from: read.capturedFrom,
+      confidence_status: read.status,
+      confidence: read.confidence,
+      job_id: read.jobId,
+      result_id: read.appearanceId,
+      session_id: read.sessionId,
+      image: picture?.frame_storage_key ?? null,
+      crop: picture?.crop_storage_key ?? null,
+    });
+  return payloads;
 }
