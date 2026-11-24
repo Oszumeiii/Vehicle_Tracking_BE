@@ -616,3 +616,55 @@ GPU dùng trung bình 38% (cũ) và 37% (mới); VRAM cao nhất 5,2 và 5,5 GB.
   - Nhiều khả năng do CPU: hai luồng 1080p giải mã cùng lúc, thêm các lần ffmpeg cắt clip. Camera phát lại cắt clip từ file video gốc (khoảng 1 GB); camera YouTube cắt từ các đoạn ghi đệm nên nhẹ hơn.
 - **Số track và số biển đọc rõ gần như không đổi:** 1 193 → 1 198 track, đọc rõ 820 → 810. Chênh lệch là do khung được lấy mẫu khác nhau giữa hai lần chạy.
 - **Lưu ý:** trong phút cuối của lần đo code cũ có một lần build giao diện khoảng 10 giây, làm Pizza Hot bỏ thêm nhiều nhất khoảng 100 khung. Bỏ phần đó đi thì kết luận vẫn như trên.
+
+## Thử tải với 2 triệu lượt đọc (25/11/2026)
+
+- **Câu hỏi:** database thật mới có khoảng 4,7 nghìn lượt đọc (103 MB), nên trang nào cũng nhanh. Với hạn lưu mặc định 7 ngày, 20 camera mà mỗi camera 10 nghìn xe một ngày đã giữ khoảng 1,4 triệu lượt. Các trang tra cứu khi đó còn dùng được không?
+- **Cách đo:** `scripts/load-test.mjs`, chạy sau `npm run build`, cần `PG_BIN` như bộ test.
+  - Script dựng một cụm PostgreSQL tạm dưới `data/` và áp đủ migration; database thật không bị đụng tới.
+  - Dữ liệu giả:
+    - 20 camera trong 180 ngày, 2 triệu lượt đọc, mỗi lượt 5 crop (10 triệu dòng `plate_detections`);
+    - 300 nghìn biển lặp lại như xe đi làm (biển gặp nhiều nhất có 3 590 lượt), 10 000 biển theo dõi;
+    - database 7,2 GB.
+  - Đo qua API thật: đăng nhập admin, gọi HTTP ngay trên máy. Mỗi kịch bản chạy khởi động 1 lần rồi 7 lần, lấy trung vị và lần lâu nhất; câu SQL chạy quá 120 giây bị hủy.
+  - "Trước" là main `017d912`. "Sau" là bản sửa, đo trên cùng dữ liệu sau khi áp migration 0021 (dựng index cho 2 triệu dòng mất 8 giây).
+  - Máy: laptop RTX 4060, 15 GB RAM; hệ thống thật vẫn chạy song song.
+
+| Kịch bản | Trước | Sau |
+|---|---|---|
+| Trang Kết quả, không lọc | 5,5 s (lâu nhất 7,3 s) | 5,5 s (lâu nhất 6,3 s) |
+| Kết quả gộp theo lượt xe | quá 120 s (bị hủy) | quá 120 s (bị hủy) |
+| Một camera, một ngày | 165 ms | 172 ms |
+| Tìm biển chính xác, biển gặp nhiều (3 590 lượt) | 80 ms | 88 ms |
+| Tìm biển chính xác, biển hiếm | 16 ms | 16 ms |
+| Tìm "có chứa" 3 ký tự (mặc định của trang Kết quả) | 357 ms | **108 ms** |
+| Tìm gần đúng, đọc sai 1 ký tự | 6,5 s | **165 ms** |
+| Hành trình, chính xác | 350 ms | 299 ms |
+| Hành trình, gần đúng | 4,6 s | **286 ms** |
+| Dung lượng lưu trữ (admin) | 21,5 s | **367 ms** |
+| Sức khỏe hệ thống (admin) | 56 ms | 62 ms |
+| Nhập một track mới (watchlist 10 000 biển) | 163 ms | 157 ms |
+
+- **Đã sửa:**
+  - **Tìm "có chứa":** thêm index trigram `pg_trgm` (migration 0021), dùng được cho đoạn từ 3 ký tự.
+  - **Tìm gần đúng** (trang Kết quả và Hành trình, biển 5–7 ký tự):
+    - trước đây máy tính `levenshtein()` trên từng lượt đọc;
+    - giờ tra khoảng 400 "khung biển" cách đúng 1 ký tự trong index `plate_skeleton` có sẵn;
+    - kết quả giống hệt (test cũ không đổi, hàm `plateSkeleton()` được kiểm tra khớp với hàm SQL);
+    - biển từ 8 ký tự (cho lệch tới 2 ký tự) vẫn duyệt toàn bộ.
+  - **Trang Dung lượng lưu trữ:** trước đây mỗi camera chạy một truy vấn con riêng, tức là đọc toàn bộ track một lần cho mỗi camera. Giờ chỉ còn một phép cộng gộp cho mọi camera.
+- **Còn chậm, chưa sửa** (cần đổi cách phân trang, nên để quyết riêng):
+  - **Trang Kết quả không lọc, 5,5 giây.** Mỗi lần mở, API đếm tổng (`count(*)`) và sắp xếp cả 2 triệu lượt theo `coalesce(captured_from, uploaded_at)`. Biểu thức này nằm trên hai bảng nên không index nào dùng được.
+    - Hướng sửa: lưu thời điểm sắp xếp ngay trong `recognition_jobs` kèm index; đếm có giới hạn (hiện "10 000+") hoặc mặc định chỉ lấy 7 ngày gần nhất.
+  - **Gộp theo lượt xe, quá 120 giây.** Phép gộp (`DISTINCT ON` kèm hàm cửa sổ) chạy trên mọi lượt đọc rồi mới phân trang. Khi lọc theo camera hoặc thời gian thì vẫn nhanh, ví dụ tab lịch sử của trang Live.
+    - Hướng sửa: bắt buộc chọn khoảng thời gian, hoặc lưu sẵn lượt xe thành một bảng riêng.
+- **Không thành vấn đề:**
+  - tìm biển chính xác 16–88 ms;
+  - lọc theo camera và ngày khoảng 170 ms;
+  - hành trình chính xác khoảng 300 ms;
+  - nhập một track mới khi watchlist có 10 000 biển khoảng 160 ms, đủ nhanh cho nhịp vài track mỗi giây.
+- **Phát hiện khác:** mỗi track live lưu lại nguyên snapshot pipeline, trung bình 2,7 KB trong database thật. Với 2 triệu track, riêng phần lặp này đã khoảng 5,4 GB; nên chỉ lưu một lần theo phiên. Bài thử dùng snapshot ngắn, nên database thật cùng quy mô sẽ lớn hơn 7,2 GB.
+- **Ghi chú khi chạy:**
+  - Lần đầu nạp cả 10 triệu dòng trong một câu lệnh làm máy hết RAM: mỗi dòng giữ một sự kiện kiểm tra khóa ngoại trong bộ nhớ tới cuối câu.
+  - Script giờ nạp theo lô 250 nghìn dòng, tắt kiểm tra khóa ngoại khi nạp dữ liệu giả (dữ liệu tự nhất quán) và dựng index sau khi nạp. Tổng thời gian nạp khoảng 24 phút.
+  - `--attach` đo tiếp trên một database đã nạp mà không phải nạp lại.

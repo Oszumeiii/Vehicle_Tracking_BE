@@ -70,9 +70,6 @@ export class StorageController {
     const floor = minFreeBytes();
     const q = async (sql: string) => (await this.db.query(sql)).rows;
     const [media] = await q('SELECT coalesce(sum(size_bytes),0)::bigint AS b FROM media_assets');
-    const [evidence] = await q(
-      'SELECT coalesce(sum(evidence_bytes),0)::bigint AS b FROM recognition_jobs WHERE live_session_id IS NOT NULL',
-    );
     // Recordings only (live/<session>/record): walking every evidence file would take minutes.
     let recording = 0;
     for (const entry of await readdir(path.join(dataDir, 'live'), { withFileTypes: true }).catch(
@@ -86,12 +83,20 @@ export class StorageController {
         array_agg(id ORDER BY uploaded_at) AS media_ids
       FROM media_assets GROUP BY sha256 HAVING count(*) > 1 ORDER BY 3 DESC`,
     );
+    // One pass over the live tracks for every camera: a subquery per camera read all of
+    // them once per camera (21 s for 20 cameras at 2 million tracks, docs/EVALUATION.md).
     const cameras = await q(
       `SELECT c.id, c.name, c.always_on, c.keyframe_retention_hours, c.track_retention_days,
-        (SELECT coalesce(sum(j.evidence_bytes),0)::bigint FROM recognition_jobs j
-          JOIN live_sessions s ON s.id=j.live_session_id WHERE s.stream_source_id=c.id) AS evidence_bytes
-      FROM stream_sources c ORDER BY evidence_bytes DESC`,
+        coalesce(e.bytes,0)::bigint AS evidence_bytes
+      FROM stream_sources c LEFT JOIN (
+        SELECT s.stream_source_id, sum(j.evidence_bytes) AS bytes FROM recognition_jobs j
+        JOIN live_sessions s ON s.id=j.live_session_id GROUP BY s.stream_source_id
+      ) e ON e.stream_source_id=c.id
+      ORDER BY evidence_bytes DESC`,
     );
+    const evidence = {
+      b: cameras.reduce((total, camera) => total + BigInt(camera.evidence_bytes), 0n).toString(),
+    };
     return {
       free_bytes: space?.free ?? null,
       total_bytes: space?.total ?? null,
