@@ -26,27 +26,29 @@ STARTUP_CODES = {"ENVIRONMENT_ERROR", "CUDA_UNAVAILABLE", "CUDA_ERROR", "CHECKPO
 
 
 class Emitter:
-    """JSON lines on stdout.
+    """JSON lines on stdout, whole lines even when several threads emit (the frame loop,
+    the track thread, the clip maker).
 
     If the parent died (closed pipe), later events are dropped and the run is asked
     to stop: open tracks are still finished on disk, where a restarted worker finds them.
     """
 
     def __init__(self, stop):
-        self.stop, self.closed = stop, False
+        self.stop, self.closed, self.lock = stop, False, threading.Lock()
 
     def __call__(self, event):
-        if self.closed:
-            return
-        event = {"time": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
-                 **event}
-        try:
-            sys.stdout.write(json.dumps(event, ensure_ascii=False, allow_nan=False) + "\n")
-            sys.stdout.flush()
-        except OSError:
-            self.closed = True
-            sys.stdout = open(os.devnull, "w")  # no flush error at interpreter exit
-            self.stop.set()
+        line = json.dumps({"time": datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+                           **event}, ensure_ascii=False, allow_nan=False)
+        with self.lock:
+            if self.closed:
+                return
+            try:
+                sys.stdout.write(line + "\n")
+                sys.stdout.flush()
+            except OSError:
+                self.closed = True
+                sys.stdout = open(os.devnull, "w")  # no flush error at interpreter exit
+                self.stop.set()
 
 
 def watch_stdin(stop, on_clip=None):

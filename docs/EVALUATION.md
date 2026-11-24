@@ -586,3 +586,33 @@ Tổng cộng 20/280 mẫu có nhãn, đều thuộc nhóm crop lớn nhất và
 - **Nguyên nhân:** việc xử lý mỗi track chạy ngay trong vòng lặp đọc khung (`LiveRunner._record`, `app/live/runner.py`): ghi ảnh bằng chứng, chuẩn bị ảnh, chỉnh nghiêng, OCR. Trong lúc đó luồng đọc vẫn nhận khung vào hàng đợi; hàng đợi đầy thì khung bị bỏ. Khi hai camera dùng chung GPU, mỗi track mất gấp đôi thời gian (khoảng 250 ms so với 50–130 ms), nên một loạt xe đi qua cùng lúc dễ làm đầy hàng đợi.
 - **Ảnh hưởng thực tế nhỏ:** mục "Xe bị sót trên camera Balneário Camboriú" cho thấy bỏ tới 5,9% khung vẫn giữ 47/48 và 50/50 lượt xe, vì xe nào cũng xuất hiện ở nhiều khung.
 - **Hướng sửa nếu cần đạt AT48:** đưa việc xử lý track ra một luồng nền, để vòng lặp đọc khung không phải chờ OCR. Đây là thay đổi về đồng bộ giữa các luồng (thứ tự sự kiện, bộ đếm, đóng phiên phải chờ các track còn dở), nên cần làm và đo riêng. Thu nhỏ phép tìm góc chỉ tiết kiệm khoảng 10 ms mỗi track, không đủ.
+
+### Sau khi đưa OCR ra luồng nền (24/11/2026)
+
+- **Thay đổi:** mỗi epoch có một `TrackWorker` (`app/live/runner.py`). Vòng lặp đọc khung chỉ giao track đã xong cho nó; luồng này ghi bằng chứng và đọc OCR lần lượt, đúng thứ tự.
+  - Hàng đợi tối đa 32 track. Đầy thì vòng lặp chờ như trước, không giữ khung của vô số track trong RAM.
+  - Hết epoch (mất kết nối, dừng, hết video) thì mọi track đã giao được ghi xong trước trạng thái kế tiếp, nên thứ tự sự kiện và số track cuối phiên không đổi.
+  - `stats.stages.ocr` có thêm `pending` (track đang chờ đọc) và `peak_pending` (nhiều nhất cùng lúc); trace `track_ocr` có thêm `queued_ms`.
+- **Cách đo (A/B):**
+  - hai video 30 phút của phiên 23/11 (Dom Cordoni và Pizza Hot, 1080p 30 khung/giây) phát cùng lúc theo tốc độ thật;
+  - chạy trong một tiến trình live độc lập (`python -m app.live --host`, như worker), cùng pipeline SE-ResNet34-C có chỉnh nghiêng, cùng máy và GPU (RTX 4060 Laptop);
+  - chạy code cũ (main `7317261`) rồi code mới, liền nhau.
+
+| Camera | Code | Khung bị bỏ | Track | Đọc rõ | OCR mỗi track (trung vị / p95) | Chờ trong hàng đợi (trung vị / p95 / lâu nhất) | Track chờ nhiều nhất |
+|---|---|---|---|---|---|---|---|
+| Dom Cordoni | cũ | 668 / 53 980 (1,24%) | 601 | 365 | 136 / 501 ms | — | — |
+| Dom Cordoni | mới | **0 / 54 000 (0%)** | 602 | 360 | 123 / 532 ms | 0,6 / 685 / 2 229 ms | 5 |
+| Pizza Hot | cũ | 1 479 / 54 000 (2,74%) | 592 | 455 | 128 / 574 ms | — | — |
+| Pizza Hot | mới | **401 / 54 000 (0,74%)** | 596 | 450 | 132 / 595 ms | 0,7 / 784 / 1 513 ms | 4 |
+
+GPU dùng trung bình 38% (cũ) và 37% (mới); VRAM cao nhất 5,2 và 5,5 GB.
+
+- **Kết quả:** cả hai camera xuống dưới mức 1% của AT48. Trước khi sửa là 1,24% và 2,74%; phiên thật 23/11 trên cùng hai video là 1,44% và 2,22%.
+- **OCR không nhanh hơn** (trung vị vẫn khoảng 120–130 ms); khác biệt là vòng lặp đọc khung không còn phải chờ.
+  - Trung vị thời gian một track chờ trong hàng đợi dưới 1 ms.
+  - Một đoàn xe làm hàng đợi lên tối đa 5 track (sức chứa 32), chờ lâu nhất 2,2 giây. Kết quả của các xe đó vì thế hiện chậm hơn tối đa chừng ấy.
+- **401 khung còn bị bỏ ở Pizza Hot** dồn vào 12 đợt ngắn (dài nhất khoảng 10 giây).
+  - Lúc đó hàng đợi OCR trống và không có xe nào đang được bám, nên không do OCR.
+  - Nhiều khả năng do CPU: hai luồng 1080p giải mã cùng lúc, thêm các lần ffmpeg cắt clip. Camera phát lại cắt clip từ file video gốc (khoảng 1 GB); camera YouTube cắt từ các đoạn ghi đệm nên nhẹ hơn.
+- **Số track và số biển đọc rõ gần như không đổi:** 1 193 → 1 198 track, đọc rõ 820 → 810. Chênh lệch là do khung được lấy mẫu khác nhau giữa hai lần chạy.
+- **Lưu ý:** trong phút cuối của lần đo code cũ có một lần build giao diện khoảng 10 giây, làm Pizza Hot bỏ thêm nhiều nhất khoảng 100 khung. Bỏ phần đó đi thì kết luận vẫn như trên.

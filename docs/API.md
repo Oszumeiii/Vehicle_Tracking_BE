@@ -152,7 +152,7 @@ Các loại sự kiện:
 - **`end`**: stream lọc theo `live_session_id` gửi `end` rồi đóng sau trạng thái kết thúc của phiên.
 - **`trace`** (không có id, không lưu, không phát lại): từng track đi qua pipeline thế nào, để giao diện hiển thị quá trình xử lý. `data` cùng dạng `{live_session_id, stream_source_id, created_at, payload}`, với `payload.stage`:
   - `track_rejected`: bước chọn crop bỏ track: `track_id`, `reason` (`fewer_than_five_valid_frames`…), `observations` (số lần detector thấy biển), `seconds`;
-  - `track_ocr`: track đã chốt và OCR: `track`, `observations`, `seconds`, `frames` (số crop), `text`, `confidence`, `status`, `threshold`, `duplicate_of`, `ocr_ms`.
+  - `track_ocr`: track đã chốt và OCR: `track`, `observations`, `seconds`, `frames` (số crop), `text`, `confidence`, `status`, `threshold`, `duplicate_of`, `ocr_ms`, `queued_ms` (thời gian track chờ luồng OCR).
   
   Mỗi phiên gửi tối đa 20 trace/giây; phần vượt bị bỏ và đếm trong `stats.traces_dropped`.
 
@@ -161,7 +161,7 @@ Các loại sự kiện:
 - `sampling`: `candidates`, `kept`, `skipped`, `reasons` (vì sao frame được đưa vào detector: `motion`, `live_track`, `periodic_probe`…; `idle_skip` là cảnh tĩnh bị bỏ qua);
 - `detect`: `batches`, `frames`, `boxes`, `frames_without_plate`, `ms_per_frame`;
 - `tracking`: `active`, `finished` (cả phiên), `rejected` (theo lý do);
-- `ocr` (cả phiên): `tracks`, `readable`, `low_confidence`, `unreadable`, `duplicates`, `threshold`, `ms_per_track`.
+- `ocr` (cả phiên): `tracks`, `readable`, `low_confidence`, `unreadable`, `duplicates`, `threshold`, `ms_per_track`, `pending` (track đã giao cho luồng OCR mà chưa ghi xong), `peak_pending` (nhiều nhất cùng lúc). Track được ghi bằng chứng và đọc OCR trên một luồng riêng, nên vòng lặp đọc khung không phải chờ.
 
 `stats.position_seconds` là giờ luồng của frame vừa xử lý; `source_duration` là độ dài file của camera demo.
 
