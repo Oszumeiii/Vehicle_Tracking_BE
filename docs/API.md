@@ -243,6 +243,24 @@ Nhãn tách khỏi review; người gán không thấy kết quả máy. Xem [EV
 - `GET /api/v2/evaluation-sets/{id}/report?target=0.95&min_labels=1` (admin): `samples`, `disagreements`, `agreement`, `exact_match`, `recommended_threshold`, `thresholds[{threshold, readable, correct, precision, coverage}]`, `bins[{from, to, samples, exact_match}]`.
   - `format=files` trả `predictions` và `ground_truth` cho `scripts.calibrate_threshold`.
 
+**Bộ mẫu theo đoạn video**, để đo cả xe bị sót (camera phát lại một video upload, `loop` tắt):
+
+- `POST /api/v2/evaluation-sets` với `{name, live_session_id, windows:[{from,to}]}`: lấy **mọi** track bắt đầu trong các đoạn đó.
+  - `from`, `to` là giây trong video, tối đa 50 đoạn, mỗi đoạn tối đa 1 800 s, không chồng nhau.
+  - Camera không phải loại phát lại video, hoặc đang bật lặp, trả `422`.
+  - Không lấy mẫu theo khoảng confidence; bỏ qua `per_bin` và `min_crop_width`.
+- Item có thêm `window_index` và `video: {url, start_seconds, end_seconds}` (vị trí của xe trong video). Với bộ lấy mẫu thường, hai trường này là `null`. `next` trả mẫu theo thứ tự thời gian trong video.
+- `GET /api/v2/evaluation-sets/{id}/windows`: `{video_url, windows[{index, from, to, items, my_labels, tracks[{start_seconds, end_seconds}], my_misses[]}]}`. `tracks` chỉ có thời điểm, không có biển máy đọc. Bộ không chia đoạn trả `404`.
+- `GET /api/v2/evaluation-sets/{id}/video`: chính file video (hỗ trợ `Range`, nhận `?asset_token=` cho thẻ `<video>`).
+- `POST /api/v2/evaluation-sets/{id}/misses`: `{window_index, video_seconds, plate_text}` → `201`. Ghi một xe máy không tìm thấy.
+  - `video_seconds` là lúc biển rõ nhất, cho phép sớm hơn đoạn 5 s hoặc muộn hơn 30 s.
+  - `plate_text` là `null` khi có xe nhưng không đọc được biển.
+- `DELETE /api/v2/evaluation-sets/{id}/misses/{miss}`: `204`. Chỉ xóa được xe mình đã ghi.
+- `GET /api/v2/evaluation-sets/{id}/export` (admin): dữ liệu để chấm ngoài hệ thống.
+  - `items`: biển máy đọc, `confidence_status`, giây bắt đầu và kết thúc, `published_at` (lúc sự kiện track được gửi), chiều rộng crop trung vị, mọi nhãn kèm email người gán.
+  - `misses`: các xe bị sót đã ghi.
+  - `sessions`: phiên, gồm `playing_at` (lúc video bắt đầu phát) để tính độ trễ.
+
 ## Quy ước
 
 List trả `{total,limit,offset,items}`. `limit=1..200`, mặc định 50; `offset>=0`. Timestamp filter dùng ISO 8601 có timezone, ví dụ `2026-10-08T00:00:00%2B07:00`. Upload time không phải capture time.

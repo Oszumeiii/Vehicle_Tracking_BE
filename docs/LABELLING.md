@@ -66,6 +66,17 @@ Camera Camboriú ở Brazil. Biển có 7 ký tự, hai kiểu:
 | `6` / `8`, `3` / `8` | Nhìn crop nét nhất; vẫn phân vân thì **Bỏ qua** |
 | `K` / `X`, `R` / `K` | Nhìn nét bên trái: `K`, `R` có nét đứng thẳng |
 
+## Bộ mẫu theo đoạn video (đo cả xe bị sót)
+
+Bộ mẫu thường chỉ gồm xe máy đã tìm thấy, nên chỉ đo được máy đọc đúng hay sai. Bộ theo đoạn video lấy **mọi** xe máy tìm thấy trong vài đoạn của một video phát lại, và người gán ghi thêm các xe máy bỏ sót. Admin tạo bộ này qua API (`windows`, xem `docs/API.md`).
+
+1. **Tab Gán nhãn:** như trên. Mẫu đi theo thứ tự thời gian, và có thêm video phát lại đúng lúc xe đi qua (nút **Xem lại lúc xe đi qua**). Dùng video khi crop mờ, hoặc để chắc đây là một xe thật chứ không phải vật khác.
+2. **Tab Xe bị sót:** chọn từng đoạn và xem hết.
+   - Vạch xanh trên dòng thời gian là lúc máy tìm thấy một xe; dưới video có dòng báo máy có ghi nhận xe ở thời điểm đang xem hay không.
+   - Có xe đi qua mà không có vạch xanh: tạm dừng ở lúc biển rõ nhất, gõ biển rồi nhấn **Ghi xe bị sót** (Enter). Thấy xe nhưng không đọc được biển thì nhấn **Có xe nhưng không đọc được biển** (Ctrl+Enter).
+   - Chỉ tính xe đi qua vùng camera thấy biển trước. Bỏ qua xe đỗ, xe máy (ở Brazil chỉ có biển sau) và xe đi ngược phía.
+   - Ghi nhầm thì xóa ở bảng bên dưới.
+
 ## Một lượt gán gợi ý
 
 1. Gán một lượt nhanh: đọc chắc thì **Lưu**, phân vân thì **Bỏ qua**, rõ ràng không đọc được thì **Không đọc được**.

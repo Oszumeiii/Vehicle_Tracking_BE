@@ -20,12 +20,25 @@ import type { Response } from 'express';
 import { z } from 'zod';
 import { Database } from '../database/database';
 import { Actor, newId, normalizePlate } from '../common/http';
-import { ApiFailures, ApiFileResponse } from '../common/openapi';
+import { ApiFailures, ApiFileResponse, ApiRangedFileResponse } from '../common/openapi';
 import { AuthGuard } from '../auth/auth.guard';
 import { Storage } from '../media/storage';
-import { BINS, sampleLiveTracks } from './sampling';
+import { settings } from '../common/config';
+import { isReplay, replaySource } from '../live/replay';
+import { BINS, sampleLiveTracks, VideoWindow, windowTracks } from './sampling';
 import { calibrationReport, LabelledItem } from './calibration';
 
+/** Longest window a labeller is asked to watch in one go. */
+const MAX_WINDOW_SECONDS = 1800;
+/** A missed plate may be marked a little outside its window (a car still in view). */
+const MISS_SLACK = { before: 5, after: 30 };
+
+const windowSchema = z
+  .object({ from: z.number().min(0), to: z.number().positive() })
+  .strict()
+  .refine((w) => w.to > w.from && w.to - w.from <= MAX_WINDOW_SECONDS, {
+    message: `A window ends after it starts and lasts at most ${MAX_WINDOW_SECONDS} s.`,
+  });
 const createSet = z
   .object({
     name: z.string().trim().min(1).max(200),
@@ -33,21 +46,37 @@ const createSet = z
     live_session_id: z.string().min(1).max(32).optional(),
     per_bin: z.number().int().min(1).max(200).default(30),
     min_crop_width: z.number().int().min(1).max(2000).optional(),
+    windows: z.array(windowSchema).min(1).max(50).optional(),
   })
   .strict()
   .refine((value) => Boolean(value.stream_source_id) !== Boolean(value.live_session_id), {
     message: 'Give exactly one of stream_source_id or live_session_id.',
+  })
+  .refine((value) => !value.windows || Boolean(value.live_session_id), {
+    message: 'Windows are positions in one replayed video: give live_session_id.',
+  })
+  .refine(
+    (value) =>
+      !value.windows ||
+      [...value.windows]
+        .sort((a, b) => a.from - b.from)
+        .every((w, i, list) => i === 0 || w.from >= list[i - 1].to),
+    { message: 'Windows must not overlap.' },
+  );
+const plateText = z
+  .string()
+  .max(32)
+  .nullable()
+  .transform((value) => (value === null ? null : normalizePlate(value)))
+  .refine((value) => value === null || /^[A-Z0-9]{2,16}$/.test(value), {
+    message: 'A plate has 2-16 letters or digits; send null if it cannot be read.',
   });
-const label = z
+const label = z.object({ plate_text: plateText }).strict();
+const miss = z
   .object({
-    plate_text: z
-      .string()
-      .max(32)
-      .nullable()
-      .transform((value) => (value === null ? null : normalizePlate(value)))
-      .refine((value) => value === null || /^[A-Z0-9]{2,16}$/.test(value), {
-        message: 'A plate has 2-16 letters or digits; send null if it cannot be read.',
-      }),
+    window_index: z.number().int().min(0),
+    video_seconds: z.number().min(0),
+    plate_text: plateText,
   })
   .strict();
 const report = z
@@ -75,13 +104,25 @@ const SET_SCHEMA = {
     params: {
       type: 'object',
       additionalProperties: true,
-      description: 'per_bin, bin edges and min_crop_width when given',
+      description:
+        'per_bin, bin edges and min_crop_width when given; windows ({from,to} seconds into the video) for a set made of video windows',
     },
     created_at: { type: 'string', format: 'date-time' },
     items: { type: 'integer' },
     labelled_items: { type: 'integer', description: 'Items with at least one label' },
     labelers: { type: 'integer' },
     my_labels: { type: 'integer', description: 'Items the caller has labelled' },
+    my_misses: { type: 'integer', description: 'Missed vehicles the caller has recorded' },
+  },
+};
+const MISS_SCHEMA = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    window_index: { type: 'integer' },
+    video_seconds: { type: 'number' },
+    plate_text: { type: 'string', nullable: true },
+    created_at: { type: 'string', format: 'date-time' },
   },
 };
 const ITEM_SCHEMA = {
@@ -92,6 +133,18 @@ const ITEM_SCHEMA = {
     set_id: { type: 'string' },
     crop_urls: { type: 'array', items: { type: 'string' } },
     frame_url: { type: 'string', nullable: true },
+    window_index: { type: 'integer', nullable: true, description: 'Window sets only' },
+    video: {
+      type: 'object',
+      nullable: true,
+      description:
+        'Window sets only: the replayed video and where the track is in it, to watch the car pass',
+      properties: {
+        url: { type: 'string' },
+        start_seconds: { type: 'number' },
+        end_seconds: { type: 'number' },
+      },
+    },
     my_label: {
       type: 'object',
       nullable: true,
@@ -166,8 +219,11 @@ const SET_VIEW = `SELECT s.*,
   (SELECT count(DISTINCT l.labeler_id)::int FROM evaluation_labels l JOIN evaluation_items i ON i.id=l.item_id
     WHERE i.set_id=s.id) AS labelers,
   (SELECT count(*)::int FROM evaluation_labels l JOIN evaluation_items i ON i.id=l.item_id
-    WHERE i.set_id=s.id AND l.labeler_id=$1) AS my_labels
+    WHERE i.set_id=s.id AND l.labeler_id=$1) AS my_labels,
+  (SELECT count(*)::int FROM evaluation_misses m WHERE m.set_id=s.id AND m.labeler_id=$1) AS my_misses
   FROM evaluation_sets s`;
+const windowsOf = (set: Record<string, any>): VideoWindow[] | null =>
+  Array.isArray(set.params?.windows) ? set.params.windows : null;
 
 /**
  * Blind, independent labelling of sampled live tracks (docs/EVALUATION.md). Any user
@@ -196,7 +252,8 @@ export class EvaluationController {
   private async item(actor: Actor, setId: string, itemId: string) {
     const item = (
       await this.db.query(
-        `SELECT i.id, i.set_id, a.id AS result_id, l.plate_text, l.labeled_at
+        `SELECT i.id, i.set_id, i.window_index, a.id AS result_id, l.plate_text, l.labeled_at,
+          a.start_seconds::float AS start_seconds, a.end_seconds::float AS end_seconds
         FROM evaluation_items i JOIN plate_appearances a ON a.job_id=i.job_id
         LEFT JOIN evaluation_labels l ON l.item_id=i.id AND l.labeler_id=$3
         WHERE i.id=$1 AND i.set_id=$2`,
@@ -221,6 +278,15 @@ export class EvaluationController {
       set_id: item.set_id,
       crop_urls: detections.map((d) => `${base}/${d.selected_order}/crop`),
       frame_url: frame ? `${base}/${frame.selected_order}/frame` : null,
+      window_index: item.window_index,
+      video:
+        item.window_index === null
+          ? null
+          : {
+              url: `/api/v2/evaluation-sets/${setId}/video`,
+              start_seconds: item.start_seconds,
+              end_seconds: item.end_seconds ?? item.start_seconds,
+            },
       my_label: item.labeled_at
         ? { plate_text: item.plate_text, labeled_at: item.labeled_at }
         : null,
@@ -230,7 +296,8 @@ export class EvaluationController {
   @Post()
   @ApiResponse({
     status: 201,
-    description: 'Set created with a stratified sample of tracks.',
+    description:
+      'Set created with a stratified sample of tracks, or with every track in the given video windows.',
     schema: SET_SCHEMA,
   })
   @ApiFailures(403, 404)
@@ -256,6 +323,17 @@ export class EvaluationController {
           maximum: 2000,
           description: 'Only tracks whose median crop is at least this wide (px), e.g. 51',
         },
+        windows: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 50,
+          description: `Instead of sampling: every track that starts in these stretches of the video (seconds, from inclusive, to exclusive, at most ${MAX_WINDOW_SECONDS} s each, no overlap). Needs live_session_id of a camera that replays a video once; labellers then also record the vehicles the system missed.`,
+          items: {
+            type: 'object',
+            required: ['from', 'to'],
+            properties: { from: { type: 'number' }, to: { type: 'number' } },
+          },
+        },
       },
     },
   })
@@ -268,13 +346,37 @@ export class EvaluationController {
       throw new NotFoundException(
         body.stream_source_id ? 'Stream source not found.' : 'Live session not found.',
       );
-    const tracks = await sampleLiveTracks(
-      this.db,
-      { source: body.stream_source_id, session: body.live_session_id },
-      body.per_bin,
-      body.min_crop_width,
-    );
-    if (!tracks.length) throw new UnprocessableEntityException('No live tracks to sample yet.');
+    const windows = body.windows ? [...body.windows].sort((a, b) => a.from - b.from) : null;
+    if (windows) {
+      // Window times are positions in the video, so only a camera that plays it once fits.
+      const camera = (
+        await this.db.query(
+          `SELECT c.source_type, c.media_id, c.replay_loop FROM live_sessions s
+          JOIN stream_sources c ON c.id=s.stream_source_id WHERE s.id=$1`,
+          [body.live_session_id],
+        )
+      ).rows[0];
+      if (!isReplay(camera) || camera.replay_loop)
+        throw new UnprocessableEntityException(
+          'Windows need a session of a camera that replays a video once (loop off).',
+        );
+    }
+    const tracks = windows
+      ? (await windowTracks(this.db, body.live_session_id!, windows)).map((t) => ({
+          job_id: t.job_id,
+          bin: 0,
+          window_index: t.window_index as number | null,
+        }))
+      : (
+          await sampleLiveTracks(
+            this.db,
+            { source: body.stream_source_id, session: body.live_session_id },
+            body.per_bin,
+            body.min_crop_width,
+          )
+        ).map((t) => ({ job_id: t.job_id, bin: t.bin, window_index: null as number | null }));
+    if (!tracks.length && !windows)
+      throw new UnprocessableEntityException('No live tracks to sample yet.');
     const id = newId();
     await this.db.transaction(async (c) => {
       await c.query(
@@ -286,20 +388,22 @@ export class EvaluationController {
           req.user.id,
           body.stream_source_id ?? null,
           body.live_session_id ?? null,
-          JSON.stringify({
-            per_bin: body.per_bin,
-            bins: BINS.slice(0, -1),
-            ...(body.min_crop_width ? { min_crop_width: body.min_crop_width } : {}),
-          }),
+          JSON.stringify(
+            windows
+              ? { windows }
+              : {
+                  per_bin: body.per_bin,
+                  bins: BINS.slice(0, -1),
+                  ...(body.min_crop_width ? { min_crop_width: body.min_crop_width } : {}),
+                },
+          ),
         ],
       );
       for (const track of tracks)
-        await c.query('INSERT INTO evaluation_items(id,set_id,job_id,bin) VALUES($1,$2,$3,$4)', [
-          newId(),
-          id,
-          track.job_id,
-          track.bin,
-        ]);
+        await c.query(
+          'INSERT INTO evaluation_items(id,set_id,job_id,bin,window_index) VALUES($1,$2,$3,$4,$5)',
+          [newId(), id, track.job_id, track.bin, track.window_index],
+        );
     });
     return this.set(req.user, id);
   }
@@ -360,13 +464,15 @@ export class EvaluationController {
   async next(@Req() req: { user: Actor }, @Param('id') id: string, @Query() input: unknown) {
     const exclude = next.parse(input);
     await this.set(req.user, id);
-    // A different, stable order per labeller spreads labellers over the set.
+    // A different, stable order per labeller spreads labellers over a sampled set; a window
+    // set goes in video order, so the labeller follows the traffic and notices missed cars.
     const rows = (
       await this.db.query(
-        `SELECT i.id FROM evaluation_items i
+        `SELECT i.id FROM evaluation_items i JOIN plate_appearances a ON a.job_id=i.job_id
         WHERE i.set_id=$1 AND NOT EXISTS (
           SELECT 1 FROM evaluation_labels l WHERE l.item_id=i.id AND l.labeler_id=$2)
-        ORDER BY md5($2 || i.id)`,
+        ORDER BY CASE WHEN i.window_index IS NULL THEN md5($2 || i.id) END,
+          i.window_index, a.start_seconds, i.id`,
         [id, req.user.id],
       )
     ).rows;
@@ -451,6 +557,242 @@ export class EvaluationController {
     const key = which === 'crop' ? detection?.crop_storage_key : detection?.frame_storage_key;
     if (!key) throw new NotFoundException('Artifact not found.');
     await this.storage.send(response, key);
+  }
+
+  private async misses(setId: string, labelerId: string) {
+    return (
+      await this.db.query(
+        `SELECT id, window_index, video_seconds, plate_text, created_at FROM evaluation_misses
+        WHERE set_id=$1 AND labeler_id=$2 ORDER BY video_seconds, id`,
+        [setId, labelerId],
+      )
+    ).rows;
+  }
+
+  private async windowSet(actor: Actor, id: string) {
+    const set = await this.set(actor, id);
+    const windows = windowsOf(set);
+    if (!windows) throw new NotFoundException('This set is not made of video windows.');
+    return { set, windows };
+  }
+
+  @Get(':id/windows')
+  @ApiResponse({
+    status: 200,
+    description:
+      'Window sets: each window with where the system found tracks (times only, no text), the caller’s progress and the misses they recorded.',
+    schema: {
+      type: 'object',
+      properties: {
+        video_url: { type: 'string' },
+        windows: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              index: { type: 'integer' },
+              from: { type: 'number' },
+              to: { type: 'number' },
+              items: { type: 'integer' },
+              my_labels: { type: 'integer' },
+              tracks: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  properties: {
+                    start_seconds: { type: 'number' },
+                    end_seconds: { type: 'number' },
+                  },
+                },
+              },
+              my_misses: { type: 'array', items: MISS_SCHEMA },
+            },
+          },
+        },
+      },
+    },
+  })
+  @ApiFailures(404)
+  async windows(@Req() req: { user: Actor }, @Param('id') id: string) {
+    const { windows } = await this.windowSet(req.user, id);
+    const items = (
+      await this.db.query(
+        `SELECT i.window_index, a.start_seconds::float AS start_seconds,
+          coalesce(a.end_seconds, a.start_seconds)::float AS end_seconds,
+          (l.item_id IS NOT NULL) AS labelled
+        FROM evaluation_items i JOIN plate_appearances a ON a.job_id=i.job_id
+        LEFT JOIN evaluation_labels l ON l.item_id=i.id AND l.labeler_id=$2
+        WHERE i.set_id=$1 ORDER BY a.start_seconds, i.id`,
+        [id, req.user.id],
+      )
+    ).rows;
+    const misses = await this.misses(id, req.user.id);
+    return {
+      video_url: `/api/v2/evaluation-sets/${id}/video`,
+      windows: windows.map((window, index) => {
+        const inside = items.filter((item) => item.window_index === index);
+        return {
+          index,
+          from: window.from,
+          to: window.to,
+          items: inside.length,
+          my_labels: inside.filter((item) => item.labelled).length,
+          tracks: inside.map(({ start_seconds, end_seconds }) => ({ start_seconds, end_seconds })),
+          my_misses: misses.filter((m) => m.window_index === index),
+        };
+      }),
+    };
+  }
+
+  @Get(':id/video')
+  @ApiRangedFileResponse('video/mp4')
+  @ApiFailures(404)
+  async video(@Req() req: { user: Actor }, @Param('id') id: string, @Res() response: Response) {
+    const { set } = await this.windowSet(req.user, id);
+    const camera = (
+      await this.db.query(
+        `SELECT c.source_type, c.url, c.media_id, c.replay_loop FROM live_sessions s
+        JOIN stream_sources c ON c.id=s.stream_source_id WHERE s.id=$1`,
+        [set.live_session_id],
+      )
+    ).rows[0];
+    const source = camera ? await replaySource(this.db, settings().dataDir, camera) : null;
+    if (!source) throw new NotFoundException('The video of this set is no longer available.');
+    response.type('video/mp4').sendFile(source.path);
+  }
+
+  @Post(':id/misses')
+  @ApiResponse({
+    status: 201,
+    description: 'A vehicle the system did not find, recorded by the caller.',
+    schema: MISS_SCHEMA,
+  })
+  @ApiFailures(404)
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['window_index', 'video_seconds', 'plate_text'],
+      additionalProperties: false,
+      properties: {
+        window_index: { type: 'integer' },
+        video_seconds: {
+          type: 'number',
+          description: `Where the plate is clearest; up to ${MISS_SLACK.before} s before and ${MISS_SLACK.after} s after the window`,
+        },
+        plate_text: {
+          type: 'string',
+          nullable: true,
+          description: 'null when the vehicle is there but its plate cannot be read',
+        },
+      },
+    },
+  })
+  async addMiss(@Req() req: { user: Actor }, @Param('id') id: string, @Body() input: unknown) {
+    const body = miss.parse(input);
+    const { windows } = await this.windowSet(req.user, id);
+    const window = windows[body.window_index];
+    if (!window) throw new UnprocessableEntityException('No such window in this set.');
+    const from = Math.max(0, window.from - MISS_SLACK.before);
+    const to = window.to + MISS_SLACK.after;
+    if (body.video_seconds < from || body.video_seconds > to)
+      throw new UnprocessableEntityException(
+        `A vehicle missed in this window is between ${from} and ${to} s of the video.`,
+      );
+    return (
+      await this.db.query(
+        `INSERT INTO evaluation_misses(id,set_id,labeler_id,window_index,video_seconds,plate_text)
+        VALUES($1,$2,$3,$4,$5,$6)
+        RETURNING id, window_index, video_seconds, plate_text, created_at`,
+        [newId(), id, req.user.id, body.window_index, body.video_seconds, body.plate_text],
+      )
+    ).rows[0];
+  }
+
+  @Delete(':id/misses/:miss')
+  @HttpCode(204)
+  @ApiResponse({ status: 204, description: 'One of the caller’s misses deleted.' })
+  @ApiFailures(404)
+  async removeMiss(
+    @Req() req: { user: Actor },
+    @Param('id') id: string,
+    @Param('miss') missId: string,
+  ) {
+    const result = await this.db.query(
+      'DELETE FROM evaluation_misses WHERE id=$1 AND set_id=$2 AND labeler_id=$3',
+      [missId, id, req.user.id],
+    );
+    if (!result.rowCount) throw new NotFoundException('Missed vehicle not found.');
+  }
+
+  @Get(':id/export')
+  @ApiResponse({
+    status: 200,
+    description:
+      'Everything needed to score a set offline: each item with the machine reading, its times in the video, when it was published, crop size and every label; the recorded misses; the session.',
+    schema: { type: 'object', additionalProperties: true },
+  })
+  @ApiFailures(403, 404)
+  async export(@Req() req: { user: Actor }, @Param('id') id: string) {
+    admin(req.user);
+    const set = await this.set(req.user, id);
+    const sessionIds = (
+      await this.db.query(
+        `SELECT DISTINCT j.live_session_id AS id FROM evaluation_items i
+        JOIN recognition_jobs j ON j.id=i.job_id WHERE i.set_id=$1`,
+        [id],
+      )
+    ).rows.map((row) => row.id);
+    const sessions = (
+      await this.db.query(
+        `SELECT s.id, s.stream_source_id, c.name AS camera, s.pipeline_snapshot->>'id' AS pipeline_id,
+          s.settings, s.status, s.started_at, s.finished_at, s.stats,
+          (SELECT min(e.created_at) FROM live_session_events e WHERE e.session_id=s.id
+            AND e.event_type='status' AND e.payload->>'status'='running'
+            AND coalesce((e.payload->>'epoch')::int, 0)=0) AS playing_at
+        FROM live_sessions s JOIN stream_sources c ON c.id=s.stream_source_id
+        WHERE s.id = ANY($1::text[])`,
+        [sessionIds],
+      )
+    ).rows;
+    // When each track reached clients (its SSE event), looked up once per session.
+    const published = new Map<string, string>(
+      (
+        await this.db.query(
+          `SELECT payload->>'job_id' AS job_id, min(created_at) AS at FROM live_session_events
+          WHERE session_id = ANY($1::text[]) AND event_type='track' GROUP BY 1`,
+          [sessionIds],
+        )
+      ).rows.map((row) => [row.job_id, row.at]),
+    );
+    const items = (
+      await this.db.query(
+        `SELECT i.id AS item_id, i.window_index, i.bin, j.id AS job_id, j.live_session_id,
+          j.live_track_key, a.id AS result_id, a.start_seconds::float AS start_seconds,
+          a.end_seconds::float AS end_seconds, a.machine_text, j.confidence_status,
+          (j.statistics->>'confidence')::float AS confidence,
+          (j.statistics->>'observations')::int AS observations, j.duplicate_of_job_id,
+          j.captured_from, j.captured_to, j.finished_at,
+          (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY d.crop_width)
+            FROM plate_detections d WHERE d.appearance_id=a.id)::float AS crop_width,
+          coalesce(json_agg(json_build_object('labeler', u.email, 'plate_text', l.plate_text,
+            'labeled_at', l.labeled_at) ORDER BY l.labeled_at)
+            FILTER (WHERE l.labeler_id IS NOT NULL), '[]') AS labels
+        FROM evaluation_items i JOIN recognition_jobs j ON j.id=i.job_id
+        JOIN plate_appearances a ON a.job_id=i.job_id
+        LEFT JOIN evaluation_labels l ON l.item_id=i.id LEFT JOIN users u ON u.id=l.labeler_id
+        WHERE i.set_id=$1 GROUP BY i.id, j.id, a.id ORDER BY a.start_seconds, i.id`,
+        [id],
+      )
+    ).rows.map((row) => ({ ...row, published_at: published.get(row.job_id) ?? null }));
+    const misses = (
+      await this.db.query(
+        `SELECT m.id, m.window_index, m.video_seconds, m.plate_text, u.email AS labeler, m.created_at
+        FROM evaluation_misses m JOIN users u ON u.id=m.labeler_id
+        WHERE m.set_id=$1 ORDER BY m.video_seconds, m.id`,
+        [id],
+      )
+    ).rows;
+    return { set, sessions, items, misses };
   }
 
   @Get(':id/report')

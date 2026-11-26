@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { createHash, randomUUID } from 'node:crypto';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { after, before, test } from 'node:test';
 import request from 'supertest';
@@ -164,7 +166,11 @@ test('sets are sampled per confidence bin, labelled blind and calibrated from co
     'id',
     'my_label',
     'set_id',
+    'video',
+    'window_index',
   ]);
+  assert.equal(next.item.video, null);
+  assert.equal(next.item.window_index, null);
   assert.doesNotMatch(JSON.stringify(next), /EVA|confidence|review/);
   assert.equal(next.item.crop_urls.length, 5);
   assert.match(next.item.frame_url, /\/3\/frame$/);
@@ -326,4 +332,205 @@ test('calibration treats plates no person can read as wrong and validates the ta
   assert.equal(report.thresholds[0].precision, 0.5);
   assert.equal(report.recommended_threshold, null);
   assert.throws(() => calibrationReport([], { targetPrecision: 0 }), /target precision/);
+});
+
+/** A camera that replays an uploaded video (once unless loop), with tracks at these seconds. */
+async function replayWithTracks(starts: number[], loop = false) {
+  const media = randomUUID().replaceAll('-', '');
+  await mkdir(join(dataDir, 'media'), { recursive: true });
+  await writeFile(join(dataDir, 'media', media), 'video bytes');
+  await db().query(
+    `INSERT INTO media_assets(id,owner_id,original_name,media_type,storage_key,mime_type,size_bytes,sha256,duration_seconds)
+    VALUES($1,$2,'eval.mp4','video',$3,'video/mp4',11,$4,7200)`,
+    [media, users.admin.id, `media/${media}`, createHash('sha256').update(media).digest('hex')],
+  );
+  const source = (
+    await api
+      .post('/api/v2/stream-sources')
+      .set(as('admin'))
+      .send({ name: 'replay', source_type: 'media', media_id: media, loop })
+      .expect(201)
+  ).body;
+  const session = (
+    await api
+      .post(`/api/v2/stream-sources/${source.id}/sessions`)
+      .set(as('admin'))
+      .send({ pipeline_id: 'joint' })
+      .expect(202)
+  ).body;
+  await db().query("UPDATE live_sessions SET status='stopped',finished_at=now() WHERE id=$1", [
+    session.id,
+  ]);
+  const row = (await db().query('SELECT * FROM live_sessions WHERE id=$1', [session.id])).rows[0];
+  const jobs: string[] = [];
+  for (const [i, start] of starts.entries()) {
+    const key = `e000-t${String(i + 1).padStart(6, '0')}`;
+    await writeTrack(dataDir, row.id, key, { ...OLD, text: `WIN${i}A11`, confidence: 0.9 });
+    const job = await ingestTrack(db(), workerOptions(), row, key);
+    await db().query(
+      'UPDATE plate_appearances SET start_seconds=$2, end_seconds=$3 WHERE job_id=$1',
+      [job, start, start + 2],
+    );
+    jobs.push(job);
+  }
+  return { session: row, jobs };
+}
+
+test('window sets hold every track in stretches of a replayed video and record missed vehicles', async () => {
+  const { session, jobs } = await replayWithTracks([130, 10, 70, 50, 200]);
+  const body = {
+    name: 'Pizza Hot 2 h',
+    live_session_id: session.id,
+    windows: [
+      { from: 120, to: 180 },
+      { from: 0, to: 60 },
+    ],
+  };
+  const create = (changes: object, status: number) =>
+    api
+      .post('/api/v2/evaluation-sets')
+      .set(as('admin'))
+      .send({ ...body, ...changes })
+      .expect(status);
+  await create({ live_session_id: undefined, stream_source_id: session.stream_source_id }, 422);
+  await create(
+    {
+      windows: [
+        { from: 0, to: 60 },
+        { from: 30, to: 90 },
+      ],
+    },
+    422,
+  );
+  await create({ windows: [{ from: 60, to: 60 }] }, 422);
+  await create({ windows: [{ from: 0, to: 4000 }] }, 422);
+  const looping = await replayWithTracks([10], true);
+  await create({ live_session_id: looping.session.id }, 422);
+  const set = (await create({}, 201)).body;
+  // Tracks at 10, 50 and 130 are inside; 70 and 200 fall outside. Windows are kept in order.
+  assert.equal(set.items, 3);
+  assert.deepEqual(set.params.windows, [
+    { from: 0, to: 60 },
+    { from: 120, to: 180 },
+  ]);
+  assert.equal(set.my_misses, 0);
+
+  // Labellers go through the video in order and can watch each car pass.
+  const next = (
+    await api.get(`/api/v2/evaluation-sets/${set.id}/next`).set(as('first')).expect(200)
+  ).body;
+  assert.equal(next.item.window_index, 0);
+  assert.deepEqual(next.item.video, {
+    url: `/api/v2/evaluation-sets/${set.id}/video`,
+    start_seconds: 10,
+    end_seconds: 12,
+  });
+  assert.doesNotMatch(JSON.stringify(next), /WIN|confidence/);
+  const video = await api.get(next.item.video.url).set(as('first')).buffer(true).expect(200);
+  assert.equal(video.headers['content-type'], 'video/mp4');
+  await api.get(next.item.video.url).expect(401);
+  await api
+    .put(`/api/v2/evaluation-sets/${set.id}/items/${next.item.id}/label`)
+    .set(as('first'))
+    .send({ plate_text: 'WIN1A11' })
+    .expect(200);
+  const second = (
+    await api.get(`/api/v2/evaluation-sets/${set.id}/next`).set(as('first')).expect(200)
+  ).body;
+  assert.equal(second.item.video.start_seconds, 50);
+
+  const add = (role: keyof typeof users, miss: object, status: number) =>
+    api.post(`/api/v2/evaluation-sets/${set.id}/misses`).set(as(role)).send(miss).expect(status);
+  await add('first', { window_index: 2, video_seconds: 10, plate_text: null }, 422);
+  await add('first', { window_index: 1, video_seconds: 100, plate_text: null }, 422);
+  await add('first', { window_index: 0, video_seconds: 30, plate_text: 'A!' }, 422);
+  const missed = (
+    await add('first', { window_index: 0, video_seconds: 30.5, plate_text: 'mis-1d23' }, 201)
+  ).body;
+  assert.equal(missed.plate_text, 'MIS1D23');
+  // A car still in view a little after the window ends.
+  const late = (await add('first', { window_index: 1, video_seconds: 205, plate_text: null }, 201))
+    .body;
+  await api
+    .delete(`/api/v2/evaluation-sets/${set.id}/misses/${late.id}`)
+    .set(as('second'))
+    .expect(404);
+  await api
+    .delete(`/api/v2/evaluation-sets/${set.id}/misses/${late.id}`)
+    .set(as('first'))
+    .expect(204);
+
+  const listed = (
+    await api.get(`/api/v2/evaluation-sets/${set.id}/windows`).set(as('first')).expect(200)
+  ).body;
+  assert.equal(listed.video_url, `/api/v2/evaluation-sets/${set.id}/video`);
+  assert.deepEqual(
+    listed.windows.map((w: any) => [w.index, w.from, w.to, w.items, w.my_labels]),
+    [
+      [0, 0, 60, 2, 1],
+      [1, 120, 180, 1, 0],
+    ],
+  );
+  assert.deepEqual(listed.windows[0].tracks, [
+    { start_seconds: 10, end_seconds: 12 },
+    { start_seconds: 50, end_seconds: 52 },
+  ]);
+  assert.deepEqual(
+    listed.windows[0].my_misses.map((m: any) => [m.video_seconds, m.plate_text]),
+    [[30.5, 'MIS1D23']],
+  );
+  assert.equal(listed.windows[1].my_misses.length, 0);
+  const others = (
+    await api.get(`/api/v2/evaluation-sets/${set.id}/windows`).set(as('second')).expect(200)
+  ).body;
+  assert.equal(others.windows[0].my_misses.length, 0);
+  const mine = (await api.get(`/api/v2/evaluation-sets/${set.id}`).set(as('first')).expect(200))
+    .body;
+  assert.equal(mine.my_misses, 1);
+
+  await api.get(`/api/v2/evaluation-sets/${set.id}/export`).set(as('first')).expect(403);
+  const exported = (
+    await api.get(`/api/v2/evaluation-sets/${set.id}/export`).set(as('admin')).expect(200)
+  ).body;
+  assert.deepEqual(
+    exported.items.map((i: any) => [i.start_seconds, i.machine_text, i.window_index]),
+    [
+      [10, 'WIN1A11', 0],
+      [50, 'WIN3A11', 0],
+      [130, 'WIN0A11', 1],
+    ],
+  );
+  assert.equal(exported.items[0].job_id, jobs[1]);
+  assert.equal(exported.items[0].crop_width, 8);
+  assert.equal(exported.items[0].labels[0].plate_text, 'WIN1A11');
+  assert.ok(exported.items[0].labels[0].labeler);
+  assert.deepEqual(exported.items[1].labels, []);
+  assert.equal(exported.misses.length, 1);
+  assert.equal(exported.sessions[0].id, session.id);
+  assert.equal(exported.sessions[0].pipeline_id, 'joint');
+
+  await api.delete(`/api/v2/evaluation-sets/${set.id}`).set(as('admin')).expect(204);
+  const left = await db().query(
+    'SELECT count(*)::int AS n FROM evaluation_misses WHERE set_id=$1',
+    [set.id],
+  );
+  assert.equal(left.rows[0].n, 0);
+});
+
+test('a sampled set has no windows or video', async () => {
+  const { source } = await cameraWithTracks();
+  const set = (
+    await api
+      .post('/api/v2/evaluation-sets')
+      .set(as('admin'))
+      .send({ name: 'sampled', stream_source_id: source.id, per_bin: 1 })
+      .expect(201)
+  ).body;
+  await api.get(`/api/v2/evaluation-sets/${set.id}/windows`).set(as('first')).expect(404);
+  await api.get(`/api/v2/evaluation-sets/${set.id}/video`).set(as('first')).expect(404);
+  await api
+    .post(`/api/v2/evaluation-sets/${set.id}/misses`)
+    .set(as('first'))
+    .send({ window_index: 0, video_seconds: 1, plate_text: null })
+    .expect(404);
 });
