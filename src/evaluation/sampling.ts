@@ -16,6 +16,38 @@ export interface SampledTrack {
   bin: number;
 }
 
+export interface VideoWindow {
+  /** Seconds into the replayed video, start inclusive and end exclusive. */
+  from: number;
+  to: number;
+}
+
+/**
+ * Every track of a session that starts inside one of the windows, in video order. Times are
+ * positions in the replayed video, so this fits a camera that plays a video once; only the
+ * first pass (epoch 0) counts, which is all such a camera plays.
+ */
+export async function windowTracks(
+  db: Queryable,
+  session: string,
+  windows: VideoWindow[],
+): Promise<{ job_id: string; window_index: number }[]> {
+  const rows = (
+    await db.query(
+      `SELECT j.id AS job_id, a.start_seconds::float AS start
+      FROM recognition_jobs j JOIN plate_appearances a ON a.job_id=j.id
+      WHERE j.live_session_id=$1 AND j.status='succeeded' AND a.start_seconds IS NOT NULL
+        AND coalesce((j.statistics->>'epoch')::int, 0)=0
+      ORDER BY a.start_seconds, j.id`,
+      [session],
+    )
+  ).rows;
+  return rows.flatMap((row) => {
+    const index = windows.findIndex((w) => row.start >= w.from && row.start < w.to);
+    return index < 0 ? [] : [{ job_id: row.job_id, window_index: index }];
+  });
+}
+
 /**
  * Up to perBin random live tracks of a camera or session from each confidence bin,
  * so precision can be measured near every candidate threshold, not only where most

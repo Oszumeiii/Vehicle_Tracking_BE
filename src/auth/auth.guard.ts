@@ -8,7 +8,7 @@ const SESSION_USER = `SELECT u.id,u.email,u.display_name,u.role,u.is_active,u.cr
 
 // Files opened by <img>/<video> tags, which cannot send an Authorization header.
 const ASSET_PATH =
-  /^\/api\/v2\/(?:media\/[^/]+\/content|detections\/[^/]+\/artifacts\/(?:crop|frame|enhanced)|recognition-results\/[^/]+\/video|stream-sources\/[^/]+\/(?:recording|demo-video|live\.m3u8|live\/[0-9a-f]{32}\/e\d{3}\/\d{6}\.ts))\/?$/;
+  /^\/api\/v2\/(?:media\/[^/]+\/content|detections\/[^/]+\/artifacts\/(?:crop|frame|enhanced)|recognition-results\/[^/]+\/video|evaluation-sets\/[^/]+\/video|stream-sources\/[^/]+\/(?:recording|demo-video|live\.m3u8|live\/[0-9a-f]{32}\/e\d{3}\/\d{6}\.ts))\/?$/;
 
 @Injectable()
 export class AuthGuard implements CanActivate {
