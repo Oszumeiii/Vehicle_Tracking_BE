@@ -58,3 +58,16 @@ export type NotifySettings = ReturnType<typeof notifySettings>;
 export function retryDelayMs(attempts: number) {
   return Math.min(30 * 60_000, 30_000 * 2 ** Math.max(0, attempts - 1));
 }
+
+/**
+ * PLATE_ALERT_ALTERNATIVE_MIN: a watched plate alerts when the model weighed it as an
+ * alternative reading with at least this probability (default 0.3; 1 turns it off, as an
+ * alternative never reaches it). On ICPR, alternatives at 30-50% were the true plate about
+ * one time in three, so these alerts say "có thể là" (docs/EVALUATION.md "Tìm kiếm xấp xỉ").
+ */
+export function alertAlternativeMin(env: NodeJS.ProcessEnv = process.env) {
+  const value = Number(env.PLATE_ALERT_ALTERNATIVE_MIN ?? 0.3);
+  if (!Number.isFinite(value) || value <= 0 || value > 1)
+    throw new Error('PLATE_ALERT_ALTERNATIVE_MIN must be above 0 and at most 1');
+  return value;
+}

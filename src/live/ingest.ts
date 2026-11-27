@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import type { QueryResult } from 'pg';
 import { Database } from '../database/database';
 import {
+  appearanceAlternatives,
   persistAppearance,
   safeStorage,
   validateResult,
@@ -12,7 +13,8 @@ import {
 import { levenshtein } from '../recognition/fusion';
 import type { AlertPayload } from '../notify/message';
 import { enqueueDeliveries, wakeAlertNotifier } from '../notify/notifier';
-import { priorityRank } from '../notify/settings';
+import { alertAlternativeMin, priorityRank } from '../notify/settings';
+import { matchReason, plateMercosul, plateSkeleton } from '../results/plate-match';
 import { folderBytes, moveFolder } from './files';
 
 export { moveFolder };
@@ -36,13 +38,23 @@ function rekey(value: any, from: string, to: string): any {
 }
 
 /**
- * Watchlist entries matching a plate read on a camera, exact or one character off for
- * plates of 5+, each with the users its alert goes to. Personal entries: those of the
- * camera owner and of admins (who see every camera), alerting their owner. Shared
+ * Watchlist entries matching a track read on a camera, each with the users its alert goes
+ * to. An entry matches as match=fuzzy would find the read: its plate up to look-alike
+ * characters and the Mercosul fifth character (plate_skeleton), or one character off from
+ * 5 characters; or when the model weighed the entry's plate as an alternative reading with
+ * at least PLATE_ALERT_ALTERNATIVE_MIN probability. `distance` counts the characters the
+ * read differs in; match_reason/match_score as plate-match matchReason (`reason` stays why
+ * the plate is watched). Personal entries: those of
+ * the camera owner and of admins (who see every camera), alerting their owner. Shared
  * entries (made by admins): everyone who sees the camera, i.e. its owner and the admins.
  * Expired entries and inactive users never alert.
  */
-async function watchlistMatches(c: Queryable, sourceId: string, plate: string) {
+async function watchlistMatches(
+  c: Queryable,
+  sourceId: string,
+  plate: string,
+  alternatives: { text: string; probability: number }[],
+) {
   const owner = (await c.query('SELECT owner_id FROM stream_sources WHERE id=$1', [sourceId]))
     .rows[0]?.owner_id;
   const entries = (
@@ -54,13 +66,27 @@ async function watchlistMatches(c: Queryable, sourceId: string, plate: string) {
       [owner],
     )
   ).rows;
-  const matches = entries
-    .map((entry) => ({ ...entry, distance: levenshtein(entry.plate, plate) }))
-    .filter(
-      (entry) =>
-        entry.distance === 0 ||
-        (entry.distance === 1 && Math.min(entry.plate.length, plate.length) >= 5),
-    );
+  const minimum = alertAlternativeMin();
+  const matches = entries.flatMap((entry) => {
+    const folded = levenshtein(plateSkeleton(entry.plate), plateSkeleton(plate));
+    const read = folded === 0 || (folded === 1 && Math.min(entry.plate.length, plate.length) >= 5);
+    const alternative = alternatives
+      .filter(
+        (a) => a.probability >= minimum && plateMercosul(a.text) === plateMercosul(entry.plate),
+      )
+      .sort((a, b) => b.probability - a.probability)[0];
+    if (!read && !alternative) return [];
+    const { reason, score } = matchReason(plate, entry.plate, alternative?.probability ?? null);
+    return [
+      {
+        ...entry,
+        distance: levenshtein(entry.plate, plate),
+        match_reason: reason,
+        match_score: score,
+        match_probability: reason === 'alternative' ? alternative!.probability : null,
+      },
+    ];
+  });
   const viewers = matches.some((entry) => entry.shared)
     ? (
         await c.query(
@@ -77,12 +103,12 @@ async function watchlistMatches(c: Queryable, sourceId: string, plate: string) {
 
 type Match = Awaited<ReturnType<typeof watchlistMatches>>[number];
 
-/** The match a recipient is told about: the closest plate, then the most urgent entry. */
+/** The match a recipient is told about: the likeliest plate, then the most urgent entry. */
 function better(candidate: Match, current: Match | undefined) {
   return (
     !current ||
-    candidate.distance < current.distance ||
-    (candidate.distance === current.distance &&
+    candidate.match_score < current.match_score ||
+    (candidate.match_score === current.match_score &&
       priorityRank(candidate.priority) > priorityRank(current.priority))
   );
 }
@@ -203,7 +229,14 @@ export async function ingestTrack(
       const text: string | null = appearance.machine_text;
       const sighting =
         (await sightingOf(c, session.stream_source_id, text, capturedFrom, duplicate)) ?? jobId;
-      const matches = text ? await watchlistMatches(c, session.stream_source_id, text) : [];
+      const matches = text
+        ? await watchlistMatches(
+            c,
+            session.stream_source_id,
+            text,
+            appearanceAlternatives(appearance),
+          )
+        : [];
       await c.query(
         `INSERT INTO recognition_jobs
         (id,live_session_id,live_track_key,job_kind,input_mode,pipeline_snapshot,status,stage,statistics,
@@ -265,6 +298,8 @@ export async function ingestTrack(
             note: match.note,
             plate: text!,
             distance: match.distance,
+            match_reason: match.match_reason,
+            match_probability: match.match_probability,
             job_id: jobId,
             result_id: appearanceId,
             stream_source_id: session.stream_source_id,
@@ -342,6 +377,8 @@ async function alertPayloads(
       plate: read.plate,
       watch_plate: match.plate,
       distance: match.distance,
+      match_reason: match.match_reason,
+      match_probability: match.match_probability,
       priority: match.priority,
       reason: match.reason,
       note: match.note,

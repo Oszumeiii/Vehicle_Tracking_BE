@@ -90,6 +90,15 @@ async function attach(root) {
 const ATTACH = option('attach') ? resolve(option('attach')) : null;
 const fixture = ATTACH ? await attach(ATTACH) : await startTestDatabase();
 const db = fixture.database;
+
+// The model's alternative readings (migration 0023), about 1.1 per read as on ICPR: the
+// plate with its last digit changed, for 70% of the reads, and a second one for 40%.
+const CANDIDATES_SQL = `INSERT INTO plate_candidates (appearance_id, rank, text, probability)
+  SELECT appearance, k, overlay(plate PLACING ((substr(plate, 7, 1)::int + 3 * k) % 10)::text FROM 7 FOR 1),
+    (0.05 + 0.4 * random()) / k
+  FROM load_reads CROSS JOIN generate_series(1, 2) k
+  WHERE g BETWEEN $1 AND $2 AND g % 10 < CASE k WHEN 1 THEN 7 ELSE 4 END`;
+const hasCandidates = async () => (await db.query("SELECT to_regclass('plate_candidates') AS t")).rows[0].t !== null;
 const dataDir = join(fixture.root, 'artifacts');
 let app;
 
@@ -240,6 +249,7 @@ try {
        CASE WHEN g % 50 = 0 THEN 'confirmed' ELSE 'pending' END, 'joint_multiframe'
      FROM load_reads WHERE g BETWEEN $1 AND $2`,
   );
+  if (await hasCandidates()) await insert('plate_candidates', CANDIDATES_SQL);
   await insert(
     'plate_detections',
     `INSERT INTO plate_detections (id, appearance_id, selected_order, frame_index, timestamp_seconds, timestamp_source,
@@ -274,7 +284,7 @@ try {
   const sizes = (
     await db.query(
       `SELECT relname AS table, n_live_tup AS rows, pg_size_pretty(pg_total_relation_size(relid)) AS size
-       FROM pg_stat_user_tables WHERE relname IN ('recognition_jobs','plate_appearances','plate_detections','live_sessions','plate_watchlist')
+       FROM pg_stat_user_tables WHERE relname IN ('recognition_jobs','plate_appearances','plate_detections','plate_candidates','live_sessions','plate_watchlist')
        ORDER BY pg_total_relation_size(relid) DESC`,
     )
   ).rows;
@@ -327,6 +337,13 @@ try {
       // reads may take longer than a measured request is allowed to.
       const migrator = new Database(`${fixture.url}?options=-c%20statement_timeout%3D0`);
       const applied = await migrate(migrator);
+      // Alternatives the older schema had no table for, so both builds search the same reads.
+      if (applied.includes('0023_plate_candidates.sql'))
+        for (let from = 1; from <= READS; from += 250_000)
+          await migrator.transaction(async (c) => {
+            await c.query('SET LOCAL session_replication_role = replica');
+            await c.query(CANDIDATES_SQL, [from, Math.min(READS, from + 250_000 - 1)]);
+          });
       await migrator.query('ANALYZE');
       await migrator.onModuleDestroy();
       log(`${checkout}: applied ${applied.join(', ') || 'no migration'} (${seconds(start)})`);

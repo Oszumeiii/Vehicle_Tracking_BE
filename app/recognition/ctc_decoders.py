@@ -11,6 +11,8 @@ import torch
 from app.recognition.icpr_model import Config
 
 DECODERS = ("greedy", "beam_plain", "beam_filter", "beam_constrained")
+# Readings kept per decoded track: the chosen one and up to four alternatives.
+MAX_CANDIDATES = 5
 
 _PLATE_OLD_PAT = re.compile(r"^[A-Z]{3}[0-9]{4}$")
 _PLATE_MERCOSUL_PAT = re.compile(r"^[A-Z]{3}[0-9][A-Z][0-9]{2}$")
@@ -83,6 +85,11 @@ class CTCDecoder:
     @staticmethod
     def ctc_prefix_beam_search(log_probs_np, idx2char, beam_width=8, format_constrained=True):
         texts_scores = CTCDecoder.ctc_prefix_beam_search_nbest(log_probs_np, idx2char, beam_width)
+        return CTCDecoder._pick_beam(texts_scores, format_constrained)
+
+    @staticmethod
+    def _pick_beam(texts_scores, format_constrained):
+        """The best beam; with format_constrained the best plate-shaped one, if any."""
         if format_constrained:
             valid = [(t, s) for t, s in texts_scores if CTCDecoder.is_valid_plate_format(t)]
             if valid:
@@ -101,6 +108,15 @@ class CTCDecoder:
 
     @staticmethod
     def ctc_prefix_beam_search_constrained(log_probs_np, idx2char, position_classes=None, beam_width=8):
+        finals = CTCDecoder.ctc_prefix_beam_search_constrained_nbest(log_probs_np, idx2char, position_classes,
+                                                                     beam_width)
+        if not finals:
+            return "", -1e9, False
+        return finals[0][0], finals[0][1], True
+
+    @staticmethod
+    def ctc_prefix_beam_search_constrained_nbest(log_probs_np, idx2char, position_classes=None, beam_width=8):
+        """Every complete reading left in the beams, best first, as (text, log score)."""
         if position_classes is None:
             position_classes = Config.PLATE_POSITION_CLASSES
         L = len(position_classes)
@@ -142,11 +158,35 @@ class CTCDecoder:
                 for _, prefix in lst[:beam_width]:
                     beams[prefix] = nxt[prefix]
 
+        # Stable sort: among equal scores the first beam wins, as max() did before.
         finals = [(CTCDecoder._constrained_log_sum_exp(pb, pnb), pfx) for pfx, (pb, pnb) in beams.items() if len(pfx) == L]
-        if not finals:
-            return "", NEG_INF, False
-        score, best = max(finals, key=lambda x: x[0])
-        return "".join(idx2char[i] for i in best), score, True
+        finals.sort(key=lambda x: x[0], reverse=True)
+        return [("".join(idx2char[i] for i in pfx), score) for score, pfx in finals]
+
+    @staticmethod
+    def candidates(texts_scores, chosen, format_constrained=False):
+        """Up to MAX_CANDIDATES readings, the chosen one first, each with its share of the
+        probability of the readings in the beam (softmax of their log scores).
+
+        With ``format_constrained`` only plate-shaped readings count (unless the chosen one
+        is not plate-shaped either). The shares rank the alternatives the model weighed;
+        they are relative to the beam (at most beam_width readings) and not calibrated.
+        """
+        if not chosen:
+            return []
+        pool = [(t, s) for t, s in texts_scores if t and math.isfinite(s) and s > -1e8]
+        if format_constrained and CTCDecoder.is_valid_plate_format(chosen):
+            pool = [(t, s) for t, s in pool if CTCDecoder.is_valid_plate_format(t)]
+        merged = {}
+        for text, score in pool:
+            merged[text] = CTCDecoder._log_sum_exp(merged.get(text, -1e9), score)
+        if chosen not in merged:
+            return []
+        peak = max(merged.values())
+        total = sum(math.exp(score - peak) for score in merged.values())
+        ordered = sorted(merged.items(), key=lambda item: (item[0] != chosen, -item[1]))
+        return [dict(text=text, probability=round(math.exp(score - peak) / total, 4))
+                for text, score in ordered[:MAX_CANDIDATES]]
 
     @staticmethod
     def decode_track(lp, decoder="beam_filter", beam_width=8):
@@ -154,6 +194,8 @@ class CTCDecoder:
 
         ``beam_confidence_proxy`` = exp(beam_log_score / length) is the notebook's
         ranking score (``MIN_BEAM_SCORE`` threshold); it is not calibrated.
+        ``candidates`` lists the readings the beam weighed (see ``candidates``), the chosen
+        ``plate_text`` first; empty for the greedy decoder, which keeps no beam.
         """
         if decoder not in DECODERS:
             raise ValueError("Unknown decoder: " + str(decoder))
@@ -161,19 +203,24 @@ class CTCDecoder:
         ids = lp.argmax(-1).tolist()
         emitted = [t for t, k in enumerate(ids) if k != 0 and (t == 0 or k != ids[t - 1])]
         confidence = math.exp(sum(float(lp[t, ids[t]]) for t in emitted) / len(emitted)) if emitted else 0.
-        text, score = greedy, None
+        text, score, candidates = greedy, None, []
         if decoder in ("beam_plain", "beam_filter"):
-            text, score, _ = CTCDecoder.ctc_prefix_beam_search(lp.numpy(), Config.IDX2CHAR, beam_width,
-                                                    format_constrained=decoder == "beam_filter")
+            constrained = decoder == "beam_filter"
+            beams = CTCDecoder.ctc_prefix_beam_search_nbest(lp.numpy(), Config.IDX2CHAR, beam_width)
+            text, score, _ = CTCDecoder._pick_beam(beams, constrained)
+            candidates = CTCDecoder.candidates(beams, text, constrained)
         elif decoder == "beam_constrained":
-            text, score, ok = CTCDecoder.ctc_prefix_beam_search_constrained(lp.numpy(), Config.IDX2CHAR, beam_width=beam_width)
-            if not ok:
-                text, score = greedy, None
+            finals = CTCDecoder.ctc_prefix_beam_search_constrained_nbest(lp.numpy(), Config.IDX2CHAR,
+                                                                         beam_width=beam_width)
+            if finals:
+                text, score = finals[0]
+                candidates = CTCDecoder.candidates(finals, text)
         proxy = (math.exp(score / len(text))
                  if score is not None and math.isfinite(score) and score <= 0 and text else None)
         return dict(plate_text=text, greedy_text=greedy, format_valid=CTCDecoder.is_valid_plate_format(text),
                     greedy_symbol_confidence=confidence, beam_log_score=score,
-                    beam_confidence_proxy=proxy, decoder=decoder, beam_width=beam_width)
+                    beam_confidence_proxy=proxy, decoder=decoder, beam_width=beam_width,
+                    candidates=candidates)
 
     @staticmethod
     def _log_sum_exp(a, b):

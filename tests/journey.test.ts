@@ -8,7 +8,19 @@ import { createApp } from '../src/main';
 import { workerOptions } from '../src/recognition/engine';
 import { ingestTrack } from '../src/live/ingest';
 import { haversineMeters, journeyLegs } from '../src/results/journey';
-import { fuzzyEdits, oneEditAway, plateQuery, plateSkeleton } from '../src/results/plate-match';
+import { CONFUSION_PAIRS } from '../src/results/confusions';
+import {
+  confusableSpellings,
+  fuzzyEdits,
+  matchReason,
+  oneEditAway,
+  oneSwap,
+  plateMercosul,
+  plateQuery,
+  plateSkeleton,
+  plateTwins,
+  withMatchReason,
+} from '../src/results/plate-match';
 import { seedUser, startTestDatabase, TestDatabase } from './helpers';
 import { livePipelines, writeTrack } from './live-fixtures';
 
@@ -93,12 +105,19 @@ async function session(sourceId: string) {
   return (await db().query('SELECT * FROM live_sessions WHERE id=$1', [created.id])).rows[0];
 }
 
-async function track(live: Record<string, any>, key: string, text: string, at: string) {
+async function track(
+  live: Record<string, any>,
+  key: string,
+  text: string,
+  at: string,
+  candidates?: { text: string; probability: number }[],
+) {
   const from = new Date(at);
   await writeTrack(dataDir, live.id, key, {
     text,
     capturedFrom: from.toISOString(),
     capturedTo: new Date(from.getTime() + 4000).toISOString(),
+    candidates,
   });
   return ingestTrack(db(), workerOptions(), live, key);
 }
@@ -433,19 +452,179 @@ test('result search matches misreads and old/Mercosul plates when fuzzy, nearest
   );
   assert.equal(exact.items[0].match_distance, undefined);
   const fuzzy = await search({ plate: 'SXE6J35', match: 'fuzzy' });
-  // Equal distances: newest first.
+  // The plate and its old plate first, then near reads (E/F and 5/S are not pairs the models
+  // often confuse); equal scores and distances: newest first.
   assert.deepEqual(
-    fuzzy.items.map((item: any) => [item.effective_text, item.match_distance]),
+    fuzzy.items.map((item: any) => [item.effective_text, item.match_reason, item.match_distance]),
     [
-      ['SXE6J35', 0],
-      ['SXF6J35', 1],
-      ['SXE6J3S', 1],
-      ['SXE6935', 1],
-      ['SXF6J3S', 2],
+      ['SXE6J35', 'same', 0],
+      ['SXE6935', 'same', 1],
+      ['SXF6J35', 'near', 1],
+      ['SXE6J3S', 'near', 1],
+      ['SXF6J3S', 'near', 2],
+    ],
+  );
+  assert.deepEqual(
+    fuzzy.items.map((item: any) => [item.match_score, item.match_probability]),
+    [
+      [0, null],
+      [0, null],
+      [2, null],
+      [2, null],
+      [2, null],
     ],
   );
   const grouped = await search({ plate: 'SXE6J35', match: 'fuzzy', group_by: 'sighting' });
   assert.equal(grouped.items[0].match_distance, 0);
+  assert.equal(grouped.items[0].match_reason, 'same');
+});
+
+test('fuzzy search also finds reads the model gave the plate as an alternative, likeliest first', async () => {
+  const live = await session((await camera('alternatives', PLACES.atlantica)).id);
+  const other = await session((await camera('alternatives 2', PLACES.brasil)).id);
+  // Searching BAK5495. The read itself; its Mercosul plate; a misread 3 characters off whose
+  // second reading was the plate (30%); one character off, also weighed as the plate (45%);
+  // one off by 5/8 (often confused) and by 5/7 (not); a reviewed read and one below 2%.
+  await track(live, 'e000-t000001', 'BAK5495', '2026-05-01T08:00:00Z');
+  await track(live, 'e000-t000002', 'BAK5E95', '2026-05-01T08:10:00Z');
+  await track(other, 'e000-t000001', 'BAK9480', '2026-05-01T08:01:00Z', [
+    { text: 'BAK9480', probability: 0.55 },
+    { text: 'BAK5495', probability: 0.3 },
+    { text: 'BAK9486', probability: 0.01 },
+  ]);
+  await track(live, 'e000-t000003', 'BXK5495', '2026-05-01T08:20:00Z', [
+    { text: 'BXK5495', probability: 0.5 },
+    { text: 'BAK5495', probability: 0.45 },
+  ]);
+  await track(live, 'e000-t000004', 'BAK5498', '2026-05-01T08:30:00Z');
+  await track(live, 'e000-t000005', 'BAK5497', '2026-05-01T08:40:00Z');
+  const reviewed = await track(live, 'e000-t000006', 'BAK9481', '2026-05-01T08:50:00Z', [
+    { text: 'BAK9481', probability: 0.6 },
+    { text: 'BAK5495', probability: 0.4 },
+  ]);
+  await db().query("UPDATE plate_appearances SET review_status='confirmed' WHERE job_id=$1", [
+    reviewed,
+  ]);
+  await track(live, 'e000-t000007', 'BAK9999', '2026-05-01T09:00:00Z', [
+    { text: 'BAK9999', probability: 0.99 },
+    { text: 'BAK5495', probability: 0.01 },
+  ]);
+  // Only alternatives from 2% are kept, never the chosen reading.
+  const kept = (
+    await db().query(
+      `SELECT a.machine_text, c.rank, c.text, c.probability FROM plate_candidates c
+      JOIN plate_appearances a ON a.id=c.appearance_id
+      WHERE a.machine_text LIKE 'BAK9%' OR a.machine_text='BXK5495' ORDER BY a.machine_text`,
+    )
+  ).rows;
+  assert.deepEqual(
+    kept.map((row) => [row.machine_text, row.rank, row.text, Number(row.probability.toFixed(2))]),
+    [
+      ['BAK9480', 1, 'BAK5495', 0.3],
+      ['BAK9481', 1, 'BAK5495', 0.4],
+      ['BXK5495', 1, 'BAK5495', 0.45],
+    ],
+  );
+  const search = async (query: Record<string, string>) =>
+    (await api.get('/api/v2/recognition-results').query(query).set(as('owner')).expect(200)).body;
+  const fuzzy = await search({ plate: 'BAK5495', match: 'fuzzy' });
+  assert.deepEqual(
+    fuzzy.items.map((item: any) => [
+      item.effective_text,
+      item.match_reason,
+      item.match_probability === null ? null : Number(item.match_probability.toFixed(2)),
+      Number(item.match_score.toFixed(2)),
+    ]),
+    [
+      ['BAK5495', 'same', null, 0],
+      ['BAK5E95', 'same', null, 0],
+      ['BXK5495', 'alternative', 0.45, 0.55],
+      ['BAK9480', 'alternative', 0.3, 0.7],
+      ['BAK5498', 'confusable', null, 1.5],
+      ['BAK5497', 'near', null, 2],
+    ],
+  );
+  assert.equal(fuzzy.total, 6);
+  const grouped = await search({ plate: 'BAK5495', match: 'fuzzy', group_by: 'sighting' });
+  assert.equal(grouped.total, 6);
+  // Exact search stays on the reading itself.
+  assert.deepEqual(
+    (await search({ plate: 'BAK5495' })).items.map((item: any) => item.effective_text),
+    ['BAK5495'],
+  );
+  // The result shows the model's readings.
+  const detail = (
+    await api.get(`/api/v2/recognition-results/${fuzzy.items[3].id}`).set(as('owner')).expect(200)
+  ).body;
+  assert.deepEqual(
+    detail.predictions[0].decoding.candidates.map((c: any) => c.text),
+    ['BAK9480', 'BAK5495', 'BAK9486'],
+  );
+
+  // A journey followed approximately takes the alternative, and says so.
+  const journey = (
+    await api.get('/api/v2/plates/BAK5495/journey?match=fuzzy').set(as('owner')).expect(200)
+  ).body;
+  const viaAlternative = journey.points.find((p: any) => p.plate === 'BAK9480');
+  assert.equal(viaAlternative.camera.name, 'alternatives 2');
+  assert.equal(viaAlternative.match_reason, 'alternative');
+  assert.equal(Number(viaAlternative.match_probability.toFixed(2)), 0.3);
+  assert.ok(!journey.points.some((p: any) => p.plate === 'BAK9481' || p.plate === 'BAK9999'));
+  const exact = (await api.get('/api/v2/plates/BAK5495/journey').set(as('owner')).expect(200)).body;
+  assert.deepEqual(
+    exact.points.map((p: any) => [p.plate, p.match_reason]),
+    [['BAK5495', null]],
+  );
+});
+
+test('match reasons: twins, often-confused spellings and the scores the SQL orders by', () => {
+  for (const pair of CONFUSION_PAIRS) assert.equal(pair, [...pair].sort().join(''));
+  assert.equal(new Set(CONFUSION_PAIRS).size, CONFUSION_PAIRS.length);
+  assert.equal(plateMercosul('abc1d23'), 'ABC1323');
+  assert.deepEqual(plateTwins('ABC1234'), ['ABC1234', 'ABC1C34']);
+  assert.deepEqual(plateTwins('ABC1C34'), ['ABC1234', 'ABC1C34']);
+  assert.deepEqual(plateTwins('ABC1K34'), ['ABC1K34']);
+  assert.deepEqual(plateTwins('51F12345'), ['51F12345']);
+  assert.equal(oneSwap('HBC1234', 'MBC1234'), 'HM');
+  assert.equal(oneSwap('HBC1284', 'MBC1234'), null);
+  assert.equal(oneSwap('BAK549', 'BAK5495'), null);
+  // The spellings the SQL calls confusable are exactly those matchReason calls so.
+  const characters = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  for (const plate of ['BAK5495', 'BAK5E95', 'HMN1234', '51F12345']) {
+    const spellings = confusableSpellings(plate);
+    assert.ok(spellings.length > 0, plate);
+    for (const spelling of spellings)
+      assert.equal(matchReason(spelling, plate, null).reason, 'confusable', `${spelling} ${plate}`);
+    for (let i = 0; i < plate.length; i++)
+      for (const c of characters) {
+        const other = plate.slice(0, i) + c + plate.slice(i + 1);
+        if (!spellings.includes(other) && matchReason(other, plate, null).reason === 'confusable')
+          assert.fail(`${other} is confusable with ${plate} but not listed`);
+      }
+  }
+  assert.ok(confusableSpellings('BAK5495').includes('BAK5498'), '5/8');
+  assert.ok(confusableSpellings('BAK5495').includes('BAK5G95'), 'Mercosul spelling of 4/6');
+  assert.deepEqual(confusableSpellings("AB'1234"), []);
+  assert.deepEqual(matchReason('BAK5E95', 'BAK5495', null), { reason: 'same', score: 0 });
+  assert.deepEqual(matchReason('BAK9480', 'BAK5495', 0.25), { reason: 'alternative', score: 0.75 });
+  assert.deepEqual(matchReason('HBC1234', 'MBC1234', null), { reason: 'confusable', score: 1.5 });
+  assert.deepEqual(matchReason('BAK5497', 'BAK5495', null), { reason: 'near', score: 2 });
+  assert.deepEqual(
+    [
+      { match_score: 0, match_probability: 0.3 },
+      { match_score: 0.7, match_probability: 0.3 },
+      { match_score: 1.5, match_probability: null },
+      { match_score: 2, match_probability: null },
+      { plate: 'exact search' },
+    ].map((row) => withMatchReason(row)),
+    [
+      { match_score: 0, match_probability: null, match_reason: 'same' },
+      { match_score: 0.7, match_probability: 0.3, match_reason: 'alternative' },
+      { match_score: 1.5, match_probability: null, match_reason: 'confusable' },
+      { match_score: 2, match_probability: null, match_reason: 'near' },
+      { plate: 'exact search' },
+    ],
+  );
 });
 
 test('the review queue filters by crop width and orders by confidence', async () => {

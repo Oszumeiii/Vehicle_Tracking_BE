@@ -93,7 +93,9 @@ def recognize_tracks(tracks, recognizer, root: Path, log=lambda message: None, f
                               latency_ms=(time.perf_counter() - started) * 1000)
         rows.append(dict(track=track, plate_text=plate, crop_width=width, crop_height=height,
                          machine_text=prediction["normalized_text"] or None,
-                         confidence=plate_confidence(prediction), latency_ms=prediction["latency_ms"]))
+                         confidence=plate_confidence(prediction), latency_ms=prediction["latency_ms"],
+                         # The readings the decoder weighed, best first (scripts/eval_candidates.mjs).
+                         candidates=(prediction.get("decoding") or {}).get("candidates")))
         if index % 250 == 0:
             log(f"{index}/{len(tracks)} tracks")
     return rows

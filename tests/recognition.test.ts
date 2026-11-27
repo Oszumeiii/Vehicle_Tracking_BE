@@ -796,11 +796,25 @@ test('PostgreSQL worker claims once, persists immutable evidence atomically, rej
         };
         await validateResult(jointJob, jointResult, folder, options);
         const decoding = jointAppearance.predictions[0].decoding;
+        // The decoder's other readings, the chosen one first (pipelines from before have none).
+        const candidates = [
+          { text: 'abc-1234', probability: 0.6 },
+          { text: 'ABC1284', probability: 0.3 },
+        ];
+        jointAppearance.predictions[0].decoding = { ...decoding, candidates };
+        await validateResult(jointJob, jointResult, folder, options);
         for (const invalid of [
           { ...decoding, plate_text: 'OTHER' },
           { ...decoding, decoder: 'vote' },
           { ...decoding, beam_confidence_proxy: 1.5 },
           { ...decoding, extra: true },
+          { ...decoding, candidates: 'ABC1284' },
+          { ...decoding, candidates: [candidates[1], candidates[0]] },
+          { ...decoding, candidates: [candidates[0], { text: 'ABC1284', probability: 1.2 }] },
+          { ...decoding, candidates: [candidates[0], { text: 'ABC1234', probability: 0.1 }] },
+          { ...decoding, candidates: [candidates[0], { ...candidates[1], probability: 0.5 }] },
+          { ...decoding, candidates: [candidates[0], { ...candidates[1], rank: 1 }] },
+          { ...decoding, candidates: [candidates[0], { text: 'AB-?', probability: 0.1 }] },
           'beam_filter',
         ]) {
           jointAppearance.predictions[0].decoding = invalid;

@@ -366,14 +366,19 @@ const DECODING_KEYS = [
   'beam_log_score',
   'beam_confidence_proxy',
 ];
+// Readings of pipelines from before alternatives were kept have no candidates.
+const OPTIONAL_DECODING_KEYS = ['candidates'];
 
 function validateDecoding(decoding: any, rawText: string) {
   const nullableFinite = (value: any) => value === null || finite(value);
   if (
     typeof decoding !== 'object' ||
     Array.isArray(decoding) ||
-    Object.keys(decoding).length !== DECODING_KEYS.length ||
+    Object.keys(decoding).some(
+      (key) => !DECODING_KEYS.includes(key) && !OPTIONAL_DECODING_KEYS.includes(key),
+    ) ||
     DECODING_KEYS.some((key) => !(key in decoding)) ||
+    ('candidates' in decoding && !validCandidates(decoding.candidates, rawText)) ||
     !DECODERS.includes(decoding.decoder) ||
     !Number.isInteger(decoding.beam_width) ||
     decoding.beam_width < 1 ||
@@ -388,6 +393,61 @@ function validateDecoding(decoding: any, rawText: string) {
     !probability(decoding.beam_confidence_proxy)
   )
     throw new Error('Invalid OCR decoding details');
+}
+
+/**
+ * The decoder's candidates (app/recognition/ctc_decoders.py): distinct readings with their
+ * share of the beam's probability, the chosen plate (raw_text) first; none without a reading.
+ */
+function validCandidates(candidates: any, rawText: string) {
+  if (!Array.isArray(candidates) || candidates.length > 16) return false;
+  if (!rawText) return candidates.length === 0;
+  const texts = new Set<string>();
+  let total = 0;
+  for (const candidate of candidates) {
+    if (
+      !candidate ||
+      typeof candidate !== 'object' ||
+      Object.keys(candidate).length !== 2 ||
+      typeof candidate.text !== 'string' ||
+      candidate.text.length > 128 ||
+      !/^[A-Z0-9]+$/.test(normalizePlate(candidate.text)) ||
+      texts.has(normalizePlate(candidate.text)) ||
+      !finite(candidate.probability) ||
+      !probability(candidate.probability)
+    )
+      return false;
+    texts.add(normalizePlate(candidate.text));
+    total += candidate.probability;
+  }
+  // Each share is rounded to 4 decimals.
+  return (candidates.length === 0 || candidates[0].text === rawText) && total <= 1.001;
+}
+
+/** Below this share of the beam an alternative reading is not kept (plate_candidates). */
+export const MIN_ALTERNATIVE = 0.02;
+
+/**
+ * The alternative readings of a validated appearance worth keeping: the joint prediction's
+ * decoder candidates after the chosen plate, from MIN_ALTERNATIVE, ranks 1-4.
+ */
+export function appearanceAlternatives(appearance: Row) {
+  const prediction =
+    (appearance.predictions ?? []).find((p: Row) => p.variant === 'joint') ??
+    appearance.predictions?.[0];
+  const candidates = prediction?.decoding?.candidates;
+  if (!appearance.machine_text || !Array.isArray(candidates)) return [];
+  return candidates
+    .slice(1, 5)
+    .map((candidate: Row, index: number) => ({
+      rank: index + 1,
+      text: normalizePlate(candidate.text),
+      probability: candidate.probability as number,
+    }))
+    .filter(
+      (candidate) =>
+        candidate.probability >= MIN_ALTERNATIVE && candidate.text !== appearance.machine_text,
+    );
 }
 
 export async function validateResult(
@@ -677,6 +737,11 @@ export async function persistAppearance(client: Client, job: Row, appearance: Ro
         prediction.decoding == null ? null : JSON.stringify(prediction.decoding),
         prediction.latency_ms,
       ],
+    );
+  for (const alternative of appearanceAlternatives(appearance))
+    await client.query(
+      'INSERT INTO plate_candidates (appearance_id,rank,text,probability) VALUES ($1,$2,$3,$4)',
+      [appearanceId, alternative.rank, alternative.text, alternative.probability],
     );
   return { appearanceId, detectionIds };
 }

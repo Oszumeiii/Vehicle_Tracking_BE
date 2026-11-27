@@ -12,11 +12,11 @@ import { Database } from '../database/database';
 import { Actor, checkDates, instant } from '../common/http';
 import { JOB_OWNER, JOB_SOURCES } from '../common/ownership';
 import { ApiFailures, ApiTimeRange } from '../common/openapi';
-import { CameraLocationResponse } from '../common/api-models';
+import { CameraLocationResponse, MATCH_REASONS } from '../common/api-models';
 import { AuthGuard } from '../auth/auth.guard';
 import { AuditLog } from '../audit/audit';
 import { locationView } from '../live/location';
-import { plateClause, plateQuery } from './plate-match';
+import { fuzzyFields, plateClause, plateQuery, withMatchReason } from './plate-match';
 import { journeyLegs, maxJourneySpeed } from './journey';
 
 // Results of the actor's uploads of one plate rarely exceed this; more are cut.
@@ -25,6 +25,19 @@ const VISIBLE = "a.review_status NOT IN ('rejected','unreadable')";
 const PRIMARY_DETECTION = `(SELECT d.id FROM plate_detections d WHERE d.appearance_id=a.id
   ORDER BY d.selected_order,d.id LIMIT 1) AS primary_detection_id`;
 type Row = Record<string, any>;
+// The fuzzy fields (plate-match fuzzyFields) of an exact search.
+const NO_FUZZY =
+  'NULL::integer AS match_distance,NULL::real AS match_score,NULL::real AS match_probability';
+
+/** A point's fuzzy fields: why its representative read matched (plate-match withMatchReason). */
+function matchView(row: Row) {
+  const match = withMatchReason(row);
+  return {
+    match_distance: match.match_distance as number | null,
+    match_reason: (match.match_reason ?? null) as string | null,
+    match_probability: (match.match_probability ?? null) as number | null,
+  };
+}
 
 function sightingMinutes() {
   const value = Number(process.env.PLATE_LIVE_SIGHTING_MINUTES ?? 5);
@@ -73,6 +86,19 @@ class JourneyPointResponse {
     description: 'match=fuzzy: characters changed from the query.',
   })
   match_distance!: number | null;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    enum: [...MATCH_REASONS],
+    description: 'match=fuzzy: why the representative read matched (see recognition-results).',
+  })
+  match_reason!: string | null;
+  @ApiProperty({
+    type: 'number',
+    nullable: true,
+    description: 'match_reason=alternative: the probability the model gave the plate.',
+  })
+  match_probability!: number | null;
 }
 
 class JourneyLegResponse {
@@ -204,7 +230,7 @@ export class JourneyController {
   /** Live results the actor may see, one point per sighting (a passage past one camera). */
   private async liveSightings(actor: Actor, plate: string, q: JourneyQuery) {
     const values: unknown[] = [actor.role === 'admin', actor.id];
-    const { where, distance } = plateClause(q.match, plate, values);
+    const { where, fuzzy } = plateClause(q.match, plate, values);
     const clauses = [JOB_OWNER, 'j.live_session_id IS NOT NULL', VISIBLE, where];
     for (const [value, sql] of [
       [q.captured_from, 'j.captured_from>='],
@@ -222,14 +248,15 @@ export class JourneyController {
         FROM (
           SELECT a.id AS result_id, a.effective_text AS plate, a.review_status, j.confidence_status,
             (j.statistics->>'confidence')::float AS confidence, j.captured_from, j.captured_to,
-            coalesce(j.sighting_id, j.id) AS sighting, ${distance ?? 'NULL::integer'} AS match_distance,
+            coalesce(j.sighting_id, j.id) AS sighting, ${fuzzy ? fuzzyFields(fuzzy) : NO_FUZZY},
             c.id AS camera_id, c.name AS camera_name, c.latitude, c.longitude, c.location_name, c.heading,
             ${PRIMARY_DETECTION}
           FROM plate_appearances a JOIN ${JOB_SOURCES} ON j.id=a.job_id
           WHERE ${clauses.join(' AND ')}
         ) h
         WINDOW w AS (PARTITION BY h.sighting)
-        ORDER BY h.sighting, (h.review_status <> 'pending') DESC, h.match_distance NULLS FIRST,
+        ORDER BY h.sighting, (h.review_status <> 'pending') DESC, h.match_score NULLS FIRST,
+          h.match_distance NULLS FIRST,
           h.confidence DESC NULLS LAST, h.result_id
       ) s ORDER BY s.first_seen, s.sighting LIMIT $${values.length}`,
       values,
@@ -251,7 +278,7 @@ export class JourneyController {
       primary_detection_id: row.primary_detection_id as string | null,
       confidence_status: row.confidence_status as string | null,
       review_status: row.review_status as string,
-      match_distance: row.match_distance as number | null,
+      ...matchView(row),
     }));
   }
 
@@ -265,7 +292,7 @@ export class JourneyController {
    */
   private async uploadSightings(actor: Actor, plate: string, q: JourneyQuery) {
     const values: unknown[] = [actor.role === 'admin', actor.id];
-    const { where, distance } = plateClause(q.match, plate, values);
+    const { where, fuzzy } = plateClause(q.match, plate, values);
     const at = (column: string) => `m.recorded_at + make_interval(secs => coalesce(${column}, 0))`;
     const base = `FROM plate_appearances a JOIN ${JOB_SOURCES} ON j.id=a.job_id
       JOIN (SELECT DISTINCT ON (media_id) id FROM recognition_jobs WHERE status='succeeded'
@@ -291,7 +318,7 @@ export class JourneyController {
         (j.statistics->>'confidence')::float AS confidence,
         ${at('a.start_seconds')} AS captured_from,
         ${at('coalesce(a.end_seconds, a.start_seconds)')} AS captured_to,
-        ${distance ?? 'NULL::integer'} AS match_distance,
+        ${fuzzy ? fuzzyFields(fuzzy) : NO_FUZZY},
         m.id AS media_id, m.original_name, m.sha256, m.uploaded_at,
         m.latitude, m.longitude, m.location_name, m.heading, ${PRIMARY_DETECTION}
       ${base} AND ${clauses.join(' AND ')}
@@ -331,6 +358,7 @@ export class JourneyController {
       [...g].sort(
         (a, b) =>
           Number(b.review_status !== 'pending') - Number(a.review_status !== 'pending') ||
+          (a.match_score ?? 0) - (b.match_score ?? 0) ||
           (a.match_distance ?? 0) - (b.match_distance ?? 0) ||
           (b.confidence ?? -1) - (a.confidence ?? -1) ||
           String(a.result_id).localeCompare(String(b.result_id)),
@@ -356,7 +384,7 @@ export class JourneyController {
           primary_detection_id: row.primary_detection_id as string | null,
           confidence_status: row.confidence_status as string | null,
           review_status: row.review_status as string,
-          match_distance: row.match_distance as number | null,
+          ...matchView(row),
         };
       }),
     };
