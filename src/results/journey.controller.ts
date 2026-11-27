@@ -10,13 +10,23 @@ import {
 import { z } from 'zod';
 import { Database } from '../database/database';
 import { Actor, checkDates, instant } from '../common/http';
-import { JOB_OWNER, JOB_SOURCES } from '../common/ownership';
+import { JOB_OWNER, JOB_SOURCES, LATEST_UPLOAD_RUN } from '../common/ownership';
 import { ApiFailures, ApiTimeRange } from '../common/openapi';
-import { CameraLocationResponse, MATCH_REASONS } from '../common/api-models';
+import {
+  CameraLocationResponse,
+  LookalikeChangeResponse,
+  MATCH_REASONS,
+} from '../common/api-models';
 import { AuthGuard } from '../auth/auth.guard';
 import { AuditLog } from '../audit/audit';
 import { locationView } from '../live/location';
-import { fuzzyFields, plateClause, plateQuery, withMatchReason } from './plate-match';
+import {
+  fuzzyFields,
+  plateClause,
+  plateQuery,
+  withMatchReason,
+  withSimilarChanges,
+} from './plate-match';
 import { journeyLegs, maxJourneySpeed } from './journey';
 
 // Results of the actor's uploads of one plate rarely exceed this; more are cut.
@@ -29,13 +39,27 @@ type Row = Record<string, any>;
 const NO_FUZZY =
   'NULL::integer AS match_distance,NULL::real AS match_score,NULL::real AS match_probability';
 
-/** A point's fuzzy fields: why its representative read matched (plate-match withMatchReason). */
-function matchView(row: Row) {
-  const match = withMatchReason(row);
+type Clause = ReturnType<typeof plateClause>;
+
+/** The SELECT list of a clause's match fields; nulls of the same types for an exact search. */
+function matchFields({ fuzzy, similar }: Clause) {
+  if (fuzzy) return fuzzyFields(fuzzy);
+  if (similar)
+    return `${similar.distance} AS match_distance,NULL::real AS match_score,NULL::real AS match_probability`;
+  return NO_FUZZY;
+}
+
+/**
+ * A point's match fields: why its representative read matched (plate-match withMatchReason)
+ * and, for match=similar, the look-alike characters it changes.
+ */
+function matchView(row: Row, clause: Clause) {
+  const match = withSimilarChanges(withMatchReason(row), clause.similar);
   return {
     match_distance: match.match_distance as number | null,
     match_reason: (match.match_reason ?? null) as string | null,
     match_probability: (match.match_probability ?? null) as number | null,
+    ...(clause.similar ? { match_changes: match.match_changes } : {}),
   };
 }
 
@@ -46,7 +70,7 @@ function sightingMinutes() {
 
 const journeyQuery = z
   .object({
-    match: z.enum(['exact', 'fuzzy']).default('exact'),
+    match: z.enum(['exact', 'fuzzy', 'similar']).default('exact'),
     sources: z.enum(['all', 'live', 'upload']).default('all'),
     captured_from: instant,
     captured_to: instant,
@@ -99,6 +123,12 @@ class JourneyPointResponse {
     description: 'match_reason=alternative: the probability the model gave the plate.',
   })
   match_probability!: number | null;
+  @ApiProperty({
+    type: () => [LookalikeChangeResponse],
+    required: false,
+    description: 'match=similar only: the look-alike characters the representative read changes.',
+  })
+  match_changes?: LookalikeChangeResponse[];
 }
 
 class JourneyLegResponse {
@@ -142,7 +172,7 @@ class JourneySummaryResponse {
 
 class JourneyResponse {
   @ApiProperty() plate!: string;
-  @ApiProperty({ enum: ['exact', 'fuzzy'] }) match!: string;
+  @ApiProperty({ enum: ['exact', 'fuzzy', 'similar'] }) match!: string;
   @ApiProperty({ type: [JourneyPointResponse] }) points!: JourneyPointResponse[];
   @ApiProperty({ type: [JourneyLegResponse] }) legs!: JourneyLegResponse[];
   @ApiProperty({ type: JourneySummaryResponse }) summary!: JourneySummaryResponse;
@@ -165,8 +195,9 @@ export class JourneyController {
   @ApiQuery({
     name: 'match',
     required: false,
-    enum: ['exact', 'fuzzy'],
-    description: 'fuzzy also follows misreads (see recognition-results match=fuzzy).',
+    enum: ['exact', 'fuzzy', 'similar'],
+    description:
+      'fuzzy also follows misreads, similar the spellings with look-alike characters (see recognition-results).',
   })
   @ApiQuery({
     name: 'limit',
@@ -230,7 +261,8 @@ export class JourneyController {
   /** Live results the actor may see, one point per sighting (a passage past one camera). */
   private async liveSightings(actor: Actor, plate: string, q: JourneyQuery) {
     const values: unknown[] = [actor.role === 'admin', actor.id];
-    const { where, fuzzy } = plateClause(q.match, plate, values);
+    const clause = plateClause(q.match, plate, values);
+    const { where } = clause;
     const clauses = [JOB_OWNER, 'j.live_session_id IS NOT NULL', VISIBLE, where];
     for (const [value, sql] of [
       [q.captured_from, 'j.captured_from>='],
@@ -248,7 +280,7 @@ export class JourneyController {
         FROM (
           SELECT a.id AS result_id, a.effective_text AS plate, a.review_status, j.confidence_status,
             (j.statistics->>'confidence')::float AS confidence, j.captured_from, j.captured_to,
-            coalesce(j.sighting_id, j.id) AS sighting, ${fuzzy ? fuzzyFields(fuzzy) : NO_FUZZY},
+            coalesce(j.sighting_id, j.id) AS sighting, ${matchFields(clause)},
             c.id AS camera_id, c.name AS camera_name, c.latitude, c.longitude, c.location_name, c.heading,
             ${PRIMARY_DETECTION}
           FROM plate_appearances a JOIN ${JOB_SOURCES} ON j.id=a.job_id
@@ -278,7 +310,7 @@ export class JourneyController {
       primary_detection_id: row.primary_detection_id as string | null,
       confidence_status: row.confidence_status as string | null,
       review_status: row.review_status as string,
-      ...matchView(row),
+      ...matchView(row, clause),
     }));
   }
 
@@ -292,12 +324,11 @@ export class JourneyController {
    */
   private async uploadSightings(actor: Actor, plate: string, q: JourneyQuery) {
     const values: unknown[] = [actor.role === 'admin', actor.id];
-    const { where, fuzzy } = plateClause(q.match, plate, values);
+    const clause = plateClause(q.match, plate, values);
+    const { where } = clause;
     const at = (column: string) => `m.recorded_at + make_interval(secs => coalesce(${column}, 0))`;
     const base = `FROM plate_appearances a JOIN ${JOB_SOURCES} ON j.id=a.job_id
-      JOIN (SELECT DISTINCT ON (media_id) id FROM recognition_jobs WHERE status='succeeded'
-        AND media_id IS NOT NULL AND (job_kind='recognize' OR pipeline_snapshot->>'task'='prepare')
-        ORDER BY media_id,created_at DESC,id DESC) latest ON latest.id=j.id
+      JOIN ${LATEST_UPLOAD_RUN} latest ON latest.id=j.id
       WHERE ${[JOB_OWNER, 'j.media_id IS NOT NULL', VISIBLE, where].join(' AND ')}`;
     const undated = Number(
       (await this.db.query(`SELECT count(*) ${base} AND m.recorded_at IS NULL`, values)).rows[0]
@@ -318,7 +349,7 @@ export class JourneyController {
         (j.statistics->>'confidence')::float AS confidence,
         ${at('a.start_seconds')} AS captured_from,
         ${at('coalesce(a.end_seconds, a.start_seconds)')} AS captured_to,
-        ${fuzzy ? fuzzyFields(fuzzy) : NO_FUZZY},
+        ${matchFields(clause)},
         m.id AS media_id, m.original_name, m.sha256, m.uploaded_at,
         m.latitude, m.longitude, m.location_name, m.heading, ${PRIMARY_DETECTION}
       ${base} AND ${clauses.join(' AND ')}
@@ -384,7 +415,7 @@ export class JourneyController {
           primary_detection_id: row.primary_detection_id as string | null,
           confidence_status: row.confidence_status as string | null,
           review_status: row.review_status as string,
-          ...matchView(row),
+          ...matchView(row, clause),
         };
       }),
     };

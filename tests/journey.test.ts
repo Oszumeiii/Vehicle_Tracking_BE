@@ -9,6 +9,7 @@ import { workerOptions } from '../src/recognition/engine';
 import { ingestTrack } from '../src/live/ingest';
 import { haversineMeters, journeyLegs } from '../src/results/journey';
 import { CONFUSION_PAIRS } from '../src/results/confusions';
+import { changeCount, LOOKALIKE_PAIRS, similarSpellings } from '../src/results/lookalikes';
 import {
   confusableSpellings,
   fuzzyEdits,
@@ -727,5 +728,183 @@ test('of two copies of one file, the copy with a corrected read stands for both'
   assert.deepEqual(
     plain.points.map((p: any) => p.camera.name),
     ['bc_1600 (2).mp4'],
+  );
+});
+
+test('look-alike spellings: one or two characters read as a look-alike, Mercosul counts none', () => {
+  for (const { pair } of LOOKALIKE_PAIRS) assert.equal(pair, [...pair].sort().join(''));
+  assert.equal(new Set(LOOKALIKE_PAIRS.map((p) => p.pair)).size, LOOKALIKE_PAIRS.length);
+  const kinds = (pair: string) => LOOKALIKE_PAIRS.find((p) => p.pair === pair)?.kinds;
+  assert.deepEqual(kinds('1I'), ['shape']);
+  assert.deepEqual(kinds('68'), ['ocr']);
+  assert.deepEqual(kinds('17'), ['shape', 'ocr']);
+  const spellings = similarSpellings('ABC3I34');
+  const changes = (spelling: string) =>
+    spellings.get(spelling)?.map((c) => `${c.from}>${c.to}:${c.kinds.join('+')}`);
+  assert.deepEqual(
+    [...spellings.keys()].slice(0, 2),
+    ['ABC3I34', 'ABC3834'],
+    'the plate, its twin',
+  );
+  assert.deepEqual(changes('ABC3I34'), []);
+  assert.deepEqual(changes('ABC3834'), ['I>8:mercosul']);
+  assert.deepEqual(changes('ABC3134'), ['I>1:shape']);
+  assert.deepEqual(changes('ABC3L34'), ['I>L:shape']);
+  assert.deepEqual(changes('A8C3I34'), ['B>8:shape']);
+  assert.deepEqual(changes('A8C3134'), ['B>8:shape', 'I>1:shape']);
+  assert.equal(spellings.get('ABC3X34'), undefined, 'I and X do not look alike');
+  assert.equal(changeCount(spellings.get('ABC3834')!), 0);
+  assert.equal(changeCount(spellings.get('A8C3134')!), 2);
+  // Ordered by the number of changes; a few hundred spellings at two changes.
+  const counts = [...spellings.values()].map(changeCount);
+  assert.deepEqual(
+    counts,
+    [...counts].sort((a, b) => a - b),
+  );
+  assert.ok(spellings.size > 300 && spellings.size < 1500, `${spellings.size} spellings`);
+  assert.ok(![...similarSpellings('ABC3I34', 1).values()].some((c) => changeCount(c) > 1));
+  assert.deepEqual([...similarSpellings('ABCD').keys()], ['ABCD'], 'too short for look-alikes');
+});
+
+test('approximate search lists the plates read with look-alike characters, grouped and ranked', async () => {
+  const gate = await camera('similar A', PLACES.atlantica);
+  const street = await camera('similar B', PLACES.brasil);
+  const a = await session(gate.id);
+  const b = await session(street.id);
+  // GKD4J31 twice; its old plate; 3 read as 8 on both cameras; 3 as 8 and G as C; an unrelated
+  // character (X); a rejected read; and a read of the stranger's own camera.
+  await track(a, 'e000-t000001', 'GKD4J31', '2026-06-01T08:00:00Z');
+  await track(a, 'e000-t000002', 'GKD4J31', '2026-06-01T08:10:00Z');
+  await track(a, 'e000-t000003', 'GKD4931', '2026-06-01T08:20:00Z');
+  await track(a, 'e000-t000004', 'GKD4J81', '2026-06-01T08:30:00Z');
+  await track(b, 'e000-t000001', 'GKD4J81', '2026-06-01T08:31:00Z');
+  await track(a, 'e000-t000005', 'CKD4J81', '2026-06-01T08:40:00Z');
+  await track(a, 'e000-t000006', 'GKD4J3X', '2026-06-01T08:50:00Z');
+  const rejected = await track(a, 'e000-t000007', 'GKD4JB1', '2026-06-01T09:00:00Z');
+  await db().query("UPDATE plate_appearances SET review_status='rejected' WHERE job_id=$1", [
+    rejected,
+  ]);
+  const theirs = (
+    await api
+      .post('/api/v2/stream-sources')
+      .set(as('stranger'))
+      .send({ name: 'their camera', url: URL })
+      .expect(201)
+  ).body;
+  const started = (
+    await api
+      .post(`/api/v2/stream-sources/${theirs.id}/sessions`)
+      .set(as('stranger'))
+      .send({ pipeline_id: 'joint' })
+      .expect(202)
+  ).body;
+  await db().query("UPDATE live_sessions SET status='stopped',finished_at=now() WHERE id=$1", [
+    started.id,
+  ]);
+  const their = (await db().query('SELECT * FROM live_sessions WHERE id=$1', [started.id])).rows[0];
+  await track(their, 'e000-t000001', 'GKD4J81', '2026-06-01T08:35:00Z');
+
+  const summary = (await api.get('/api/v2/plates/gkd-4j31/similar').set(as('owner')).expect(200))
+    .body;
+  assert.equal(summary.plate, 'GKD4J31');
+  assert.equal(summary.max_changes, 2);
+  assert.equal(summary.exact.reads, 2);
+  assert.deepEqual(summary.exact.changes, []);
+  assert.deepEqual(
+    summary.similar.map((s: any) => [
+      s.plate,
+      s.changed,
+      s.reads,
+      s.cameras.map((c: any) => c.name),
+    ]),
+    [
+      ['GKD4931', 0, 1, ['similar A']],
+      ['GKD4J81', 1, 2, ['similar A', 'similar B']],
+      ['CKD4J81', 2, 1, ['similar A']],
+    ],
+  );
+  assert.deepEqual(summary.similar[1].changes, [
+    { index: 5, from: '3', to: '8', kinds: ['shape'] },
+  ]);
+  assert.ok(summary.similar[1].primary_detection_id);
+  assert.equal(summary.similar[1].last_seen, '2026-06-01T08:31:00.000Z');
+  assert.ok(summary.spellings.includes('GKD4J81') && !summary.spellings.includes('GKD4J3X'));
+  assert.ok(summary.pairs.length > 50);
+  // One character at most; one camera; another user's reads stay theirs.
+  const one = (
+    await api.get('/api/v2/plates/GKD4J31/similar?max_changes=1').set(as('owner')).expect(200)
+  ).body;
+  assert.deepEqual(
+    one.similar.map((s: any) => s.plate),
+    ['GKD4931', 'GKD4J81'],
+  );
+  const onB = (
+    await api
+      .get('/api/v2/plates/GKD4J31/similar')
+      .query({ stream_source_id: street.id })
+      .set(as('owner'))
+      .expect(200)
+  ).body;
+  assert.equal(onB.exact, null);
+  assert.deepEqual(
+    onB.similar.map((s: any) => [s.plate, s.reads]),
+    [['GKD4J81', 1]],
+  );
+  const stranger = (await api.get('/api/v2/plates/GKD4J31/similar').set(as('stranger')).expect(200))
+    .body;
+  assert.equal(stranger.exact, null);
+  assert.deepEqual(
+    stranger.similar.map((s: any) => [s.plate, s.cameras.map((c: any) => c.name)]),
+    [['GKD4J81', ['their camera']]],
+  );
+  // Refreshing the same search is logged once.
+  const logged = await db().query(
+    "SELECT count(*)::int AS n FROM audit_log WHERE user_id=$1 AND action='results.search' AND details->>'plate'='GKD4J31' AND details->>'match'='similar'",
+    [users.owner.id],
+  );
+  assert.equal(logged.rows[0].n, 1);
+  await api.get('/api/v2/plates/GKD4J31/similar?max_changes=4').set(as('owner')).expect(422);
+
+  // The Results page lists every read (reviewed ones too), fewest changes first, then newest.
+  const list = (
+    await api
+      .get('/api/v2/recognition-results')
+      .query({ plate: 'GKD4J31', match: 'similar', stream_source_id: gate.id })
+      .set(as('owner'))
+      .expect(200)
+  ).body;
+  assert.deepEqual(
+    list.items.map((item: any) => [item.effective_text, item.match_distance]),
+    [
+      ['GKD4931', 0],
+      ['GKD4J31', 0],
+      ['GKD4J31', 0],
+      ['GKD4JB1', 1],
+      ['GKD4J81', 1],
+      ['CKD4J81', 2],
+    ],
+  );
+  assert.deepEqual(
+    list.items[5].match_changes.map((c: any) => `${c.from}>${c.to}`),
+    ['G>C', '3>8'],
+  );
+  assert.deepEqual(list.items[1].match_changes, []);
+  const grouped = (
+    await api
+      .get('/api/v2/recognition-results')
+      .query({ plate: 'GKD4J31', match: 'similar', group_by: 'sighting' })
+      .set(as('owner'))
+      .expect(200)
+  ).body;
+  assert.equal(grouped.items[0].match_distance, 0);
+  // Journeys follow the look-alike reads too.
+  const journey = (
+    await api.get('/api/v2/plates/GKD4J31/journey?match=similar').set(as('owner')).expect(200)
+  ).body;
+  const viaB = journey.points.find((p: any) => p.camera.name === 'similar B');
+  assert.equal(viaB.plate, 'GKD4J81');
+  assert.deepEqual(
+    viaB.match_changes.map((c: any) => `${c.from}>${c.to}`),
+    ['3>8'],
   );
 });

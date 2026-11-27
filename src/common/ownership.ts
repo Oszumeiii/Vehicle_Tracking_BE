@@ -15,6 +15,14 @@ export const JOB_SOURCES = `recognition_jobs j
   LEFT JOIN live_sessions s ON s.id=j.live_session_id
   LEFT JOIN stream_sources c ON c.id=s.stream_source_id`;
 export const JOB_OWNER = '($1::boolean OR coalesce(m.owner_id,c.owner_id)=$2)';
+/**
+ * The latest successful recognition of each uploaded video (prepare or recognize): only its
+ * results count. Join as `latest` on latest.id=j.id; every live track counts on its own.
+ */
+export const LATEST_UPLOAD_RUN = `(SELECT DISTINCT ON (media_id) id FROM recognition_jobs
+  WHERE status='succeeded' AND media_id IS NOT NULL
+    AND (job_kind='recognize' OR pipeline_snapshot->>'task'='prepare')
+  ORDER BY media_id,created_at DESC,id DESC)`;
 
 export const APPEARANCE_MEDIA_FIELDS = `j.media_id, m.media_type, m.duration_seconds AS media_duration_seconds, m.original_name AS media_original_name,
   (SELECT d.id FROM plate_detections d WHERE d.appearance_id=a.id ORDER BY d.selected_order,d.id LIMIT 1) AS primary_detection_id,

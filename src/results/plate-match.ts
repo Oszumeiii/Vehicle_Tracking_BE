@@ -2,8 +2,17 @@ import { UnprocessableEntityException } from '@nestjs/common';
 import { z } from 'zod';
 import { normalizePlate } from '../common/http';
 import { CONFUSION_PAIRS } from './confusions';
+import { Change, changeCount, similarSpellings } from './lookalikes';
+import { plateMercosul, plateTwins } from './plate-forms';
 
-export const plateMatch = z.enum(['exact', 'contains', 'fuzzy']);
+export { plateMercosul, plateTwins };
+
+/**
+ * exact; contains (a fragment); fuzzy (look-alikes folded plus one edit, ranked by the
+ * model's alternatives); similar (the plate and its spellings with up to 2 look-alike
+ * characters, see lookalikes.ts).
+ */
+export const plateMatch = z.enum(['exact', 'contains', 'fuzzy', 'similar']);
 export type PlateMatch = z.infer<typeof plateMatch>;
 
 /** Plate text as stored: uppercase, without spaces, hyphens or dots ("43A-123.45" -> "43A12345"). */
@@ -48,26 +57,6 @@ export function oneEditAway(skeleton: string) {
     }
   }
   return [...near];
-}
-
-/** A 7-character plate's fifth letter A-J as its digit (ABC1C34 -> ABC1234). */
-export function plateMercosul(text: string) {
-  const plate = text.toUpperCase();
-  return plate.length === 7 && plate[4] >= 'A' && plate[4] <= 'J'
-    ? plate.slice(0, 4) + String.fromCharCode(plate.charCodeAt(4) - 17) + plate.slice(5)
-    : plate;
-}
-
-/** Every spelling with the plate's plateMercosul(): as typed, and the other Brazilian format. */
-export function plateTwins(plate: string) {
-  if (plate.length !== 7) return [plate];
-  const digit = plateMercosul(plate);
-  const fifth = digit[4];
-  if (fifth < '0' || fifth > '9') return [plate];
-  return [
-    digit,
-    digit.slice(0, 4) + String.fromCharCode(fifth.charCodeAt(0) + 17) + digit.slice(5),
-  ];
 }
 
 /** The two characters (sorted) of the one place where equal-length plates differ, else null. */
@@ -150,11 +139,12 @@ export function plateClause(
 ) {
   if (match === 'contains') {
     values.push(`%${plate}%`);
-    return { where: `${column} LIKE $${values.length}`, fuzzy: null };
+    return { where: `${column} LIKE $${values.length}`, fuzzy: null, similar: null };
   }
+  if (match === 'similar') return { ...similarClause(plate, values, column), fuzzy: null };
   values.push(plate);
   const query = `$${values.length}::text`;
-  if (match === 'exact') return { where: `${column}=${query}`, fuzzy: null };
+  if (match === 'exact') return { where: `${column}=${query}`, fuzzy: null, similar: null };
   const edits = fuzzyEdits(plate);
   // The length test is implied when edits <= 1 (a skeleton keeps the plate's length) but
   // keeps the query parameter in every statement: a count without the fields must bind it.
@@ -191,7 +181,46 @@ export function plateClause(
         `(CASE WHEN ${column}=ANY(${twins}) THEN 0 ELSE coalesce(1-${probability}, ` +
         `CASE WHEN ${column}=ANY(${confusable}) THEN 1.5 ELSE 2 END) END)::real`,
     },
+    similar: null,
   };
+}
+
+/**
+ * match=similar: the plate and every spelling with up to DEFAULT_CHANGES look-alike
+ * characters (similarSpellings), looked up in the plate index. `distance` is the SQL of how
+ * many characters a read changes (0 for the plate and its other Brazilian format), from the
+ * spelling's place in the bound list, which is ordered by changes; `changes` maps each
+ * spelling to them, for the rows (withSimilarChanges).
+ */
+function similarClause(plate: string, values: unknown[], column: string) {
+  const changes = similarSpellings(plate);
+  const spellings = [...changes.keys()];
+  values.push(spellings);
+  const list = `$${values.length}::text[]`;
+  // Positions where the next number of changes starts: width_bucket counts those passed.
+  const starts: number[] = [];
+  spellings.forEach((spelling, at) => {
+    const count = changeCount(changes.get(spelling)!);
+    while (starts.length < count) starts.push(at + 1);
+  });
+  return {
+    where: `${column}=ANY(${list})`,
+    similar: {
+      changes,
+      distance: starts.length
+        ? `width_bucket(array_position(${list},${column}::text),ARRAY[${starts.join(',')}])`
+        : '0',
+    },
+  };
+}
+
+/** A row of match=similar with the look-alike characters its plate changes (match_changes). */
+export function withSimilarChanges<T extends Record<string, any>>(
+  row: T,
+  similar: { changes: Map<string, Change[]> } | null,
+) {
+  if (!similar) return row;
+  return { ...row, match_changes: similar.changes.get(row.effective_text ?? row.plate) ?? [] };
 }
 
 /** The SELECT list items of plateClause's fuzzy fields, named as the API returns them. */

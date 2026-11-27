@@ -62,7 +62,7 @@ Job Kaggle joint-frame lưu `recognition_method=joint_multiframe`, `agreement_co
 
 ## Kết quả
 
-- `GET /api/v2/recognition-results`: query `plate`, `match` (`exact` mặc định, `contains`, `fuzzy`), `min_crop_width` (chỉ lấy kết quả có độ rộng crop trung bình từ N px), `order` (`time` mặc định, mới nhất trước; `confidence`: kết quả live tin cậy cao nhất trước, dùng cho hàng đợi duyệt), `origin` (`upload`/`live`), `media_id`, `stream_source_id`, `live_session_id`, `review_status`, `confidence_status`, `exclude_duplicates`, `uploaded_from`, `uploaded_to`, `captured_from`, `captured_to`, phân trang.
+- `GET /api/v2/recognition-results`: query `plate`, `match` (`exact` mặc định, `contains`, `fuzzy`, `similar`), `min_crop_width` (chỉ lấy kết quả có độ rộng crop trung bình từ N px), `order` (`time` mặc định, mới nhất trước; `confidence`: kết quả live tin cậy cao nhất trước, dùng cho hàng đợi duyệt), `origin` (`upload`/`live`), `media_id`, `stream_source_id`, `live_session_id`, `review_status`, `confidence_status`, `exclude_duplicates`, `uploaded_from`, `uploaded_to`, `captured_from`, `captured_to`, phân trang.
   - `plate` được chuẩn hóa: chữ hoa, bỏ khoảng trắng, `-` và `.` (`43A-123.45` thành `43A12345`). `exact` khớp chính xác và không tự thay `O/0`.
   - `match=fuzzy` dùng cho biển bị OCR đọc sai: trước khi so, gộp các ký tự dễ nhầm (`O/D/Q` thành `0`, `I/L` thành `1`, `Z` thành `2`, `S` thành `5`, `B` thành `8`, `G` thành `6`), và với biển 7 ký tự coi chữ `A`–`J` ở vị trí 5 là chữ số `0`–`9` (luật đổi biển cũ `ABC1234` sang Mercosul `ABC1C34` của Brazil, nên hai biển của cùng một xe khớp nhau), rồi cho phép lệch 1 ký tự với biển 5–7 ký tự, 2 ký tự với biển từ 8 ký tự; biển dưới 5 ký tự phải khớp đúng. Ngoài ra còn ra cả kết quả **chưa duyệt** mà model đã cân nhắc biển cần tìm như một cách đọc khác (`plate_candidates`), kể cả khi cách đọc chính lệch nhiều ký tự.
     - Mỗi kết quả có:
@@ -71,12 +71,33 @@ Job Kaggle joint-frame lưu `recognition_method=joint_multiframe`, `agreement_co
       - `match_distance`: số ký tự khác so với chuỗi gõ, tính trên text gốc;
       - `match_probability`: chỉ có khi `match_reason=alternative`, còn lại `null`.
     - Thứ tự này dựa trên số đo: trong các kết quả gần đúng không trùng hẳn trên ICPR, 77% kết quả đúng là cách đọc khác của model, so với 5% kết quả sai (docs/EVALUATION.md, mục "Tìm kiếm xấp xỉ").
+  - `match=similar` (**tìm xấp xỉ theo ký tự dễ nhầm**):
+    - Ra biển cần tìm và mọi cách viết khác tối đa 2 ký tự, mỗi ký tự đổi thành một ký tự dễ nhầm với nó, cộng biển cũ ↔ Mercosul của cùng xe (tính 0 ký tự). Biển dưới 5 ký tự chỉ khớp chính xác.
+    - Bảng ký tự dễ nhầm (`src/results/lookalikes.ts`, 59 cặp) gồm:
+      - cặp giống hình, viết tay: `I/1`, `L/1`, `O/0`, `D/0`, `B/8`, `3/8`, `S/5`, `Z/2`, `G/6`, `A/4`, `H/M`, `V/Y`…;
+      - cặp hai model OCR đã nhầm trên tập validation ICPR: `6/8`, `8/9`, `4/6`, `B/D`…
+    - Kết quả xếp theo số ký tự đổi (`match_distance`), rồi theo thời gian.
+    - Mỗi kết quả có `match_changes`: `[{index, from, to, kinds}]`, với `kinds` là `shape` (giống hình), `ocr` (model hay nhầm) hoặc `mercosul`.
+    - Tra index biển bằng danh sách cách viết (khoảng 500–800 cách viết cho biển 7 ký tự), không quét toàn bảng.
   - Với video/ảnh upload: dùng job v2 prepare/recognize succeeded mới nhất theo thời điểm tạo và ID của mỗi nguồn; job queued/failed hoặc extraction v1 không che kết quả v2 succeeded cũ.
   - Với live: mọi track đều được tính.
   - Kết quả có `origin`, `captured_from/to`, `confidence` (điểm tin cậy của track live, `null` với upload), `confidence_status`, `duplicate_of_job_id`, `sighting_id`; sắp xếp theo giờ chụp (live) hoặc giờ upload.
   - `group_by=sighting`: mỗi lượt xuất hiện một dòng (ưu tiên track đã review, rồi track có confidence cao nhất), kèm `sighting_count`, `first_seen`, `last_seen`. Kết quả upload không gộp.
 - `GET /api/v2/sightings/{id}/results`: các track của một lượt xuất hiện, theo thời gian.
-- `GET /api/v2/plates/{plate}/journey`: **hành trình** của một biển qua các camera live và các video upload đã khai thời điểm quay, query `match` (`exact` | `fuzzy`), `sources` (`all` mặc định | `live` | `upload`), `captured_from`, `captured_to`, `limit` (1–1000, mặc định 500).
+- `GET /api/v2/plates/{plate}/similar`: **tóm tắt tìm xấp xỉ**, gom theo biển.
+  - Query:
+    - `max_changes`: 0–3, mặc định 2;
+    - `stream_source_id`: chỉ một camera;
+    - `captured_from`, `captured_to`.
+  - Trả về:
+    - `exact`: biển cần tìm, `null` nếu chưa đọc được lần nào;
+    - `similar[]`: các biển khác đã đọc được, xếp theo số ký tự đổi (`changed`), rồi số lượt, rồi mới nhất;
+    - `spellings`: mọi cách viết đã tra, để giao diện nhận ra ngay biển mới đến realtime;
+    - `pairs`: bảng ký tự dễ nhầm.
+  - Mỗi mục biển gồm `plate`, `changes`, `changed`, `reads`, `upload_reads`, `last_seen`, `cameras` (`id`, `name`), `result_id`, `primary_detection_id`.
+  - Chỉ tính kết quả user được xem; bỏ kết quả đã duyệt là `rejected` hoặc `unreadable`.
+  - Nhật ký ghi `results.search` (`match: "similar"`) một lần cho mỗi biển và mỗi user trong 10 phút, vì trang tải lại tóm tắt khi có biển mới.
+- `GET /api/v2/plates/{plate}/journey`: **hành trình** của một biển qua các camera live và các video upload đã khai thời điểm quay, query `match` (`exact` | `fuzzy` | `similar`), `sources` (`all` mặc định | `live` | `upload`), `captured_from`, `captured_to`, `limit` (1–1000, mặc định 500).
   - `points`: mỗi lượt xuất hiện (sighting) là một điểm, theo `first_seen`. Mỗi điểm gồm `source` (`live` | `upload`), `camera` (`id`, `name`, `kind` = `camera` | `upload`, `location`; với video upload là id và tên file video), `first_seen`, `last_seen`, `reads` (số track), `plate`, `result_id` và `primary_detection_id` để mở bằng chứng, `confidence_status`, `review_status`, `match_distance`, `match_reason` và `match_probability` (như trang tìm kiếm, `null` khi `match=exact`). Khi `match=fuzzy`, mỗi lượt lấy kết quả đại diện có `match_score` thấp nhất. Chỉ tính kết quả user được xem, bỏ kết quả đã review `rejected` hoặc `unreadable`; text đã sửa khi review được dùng thay text máy.
   - `legs[i]` nối `points[i]` với `points[i+1]`, gồm `gap_seconds` (từ lúc rời camera trước đến lúc tới camera sau), `distance_m` (đường chim bay, `null` nếu một camera chưa có vị trí), `speed_kmh`. `implausible=true` kèm `reasons`: `too_fast` khi vượt `PLATE_JOURNEY_MAX_KMH` (mặc định 150), `overlap` khi hai camera khác nhau thấy biển cùng lúc (hai xe trùng biển hoặc đọc sai).
   - `summary`: `sightings`, `cameras`, `first_seen`, `last_seen`, `plates` (các biển đã gộp khi `fuzzy`), `implausible_legs`, `max_speed_kmh`, `truncated` (còn điểm sau `limit`), `undated_upload_results` (số kết quả khớp nằm trong video chưa có `recorded_at` nên bị bỏ ra).

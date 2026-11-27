@@ -303,6 +303,13 @@ export class SearchResultResponse extends AppearanceResponse {
   })
   match_probability?: number | null;
   @ApiProperty({
+    type: () => [LookalikeChangeResponse],
+    required: false,
+    description:
+      'match=similar only: the characters of the searched plate this read has as a look-alike (match_distance counts them).',
+  })
+  match_changes?: LookalikeChangeResponse[];
+  @ApiProperty({
     type: Number,
     nullable: true,
     description:
@@ -567,6 +574,20 @@ export class AlertDeliveryResponse {
 }
 
 export const streamZones = zones;
+
+export class LookalikeChangeResponse {
+  @ApiProperty({ ...integer, description: 'Place of the character in the plate (0 = first).' })
+  index!: number;
+  @ApiProperty({ description: 'The character of the searched plate.' }) from!: string;
+  @ApiProperty({ description: 'What the read has there instead.' }) to!: string;
+  @ApiProperty({
+    type: [String],
+    enum: ['shape', 'ocr', 'mercosul'],
+    description:
+      'shape: the characters look alike; ocr: the OCR models confused them on ICPR; mercosul: the other Brazilian format of the same plate (not counted as a change).',
+  })
+  kinds!: string[];
+}
 
 export class CandidateResponse {
   @ApiProperty({ description: 'A reading of the plate.' }) text!: string;

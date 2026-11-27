@@ -25,8 +25,21 @@ import type { Response } from 'express';
 import { z } from 'zod';
 import { Database } from '../database/database';
 import { Actor, checkDates, instant, newId, normalizePlate, pagination } from '../common/http';
-import { fuzzyFields, plateClause, plateMatch, plateQuery, withMatchReason } from './plate-match';
-import { APPEARANCE_MEDIA_FIELDS, JOB_OWNER, JOB_SOURCES, Ownership } from '../common/ownership';
+import {
+  fuzzyFields,
+  plateClause,
+  plateMatch,
+  plateQuery,
+  withMatchReason,
+  withSimilarChanges,
+} from './plate-match';
+import {
+  APPEARANCE_MEDIA_FIELDS,
+  JOB_OWNER,
+  JOB_SOURCES,
+  LATEST_UPLOAD_RUN,
+  Ownership,
+} from '../common/ownership';
 import {
   ApiFailures,
   ApiFileResponse,
@@ -118,9 +131,9 @@ export class ResultsController {
   @ApiQuery({
     name: 'match',
     required: false,
-    enum: ['exact', 'contains', 'fuzzy'],
+    enum: ['exact', 'contains', 'fuzzy', 'similar'],
     description:
-      'Plate matching; exact by default. `fuzzy` folds look-alike characters (O/D/Q=0, I/L=1, Z=2, S=5, B=8, G=6) and allows 1 edit from 5 characters, 2 from 8; it also finds unreviewed reads for which the model weighed the plate as an alternative reading. Most likely first (match_score), with match_reason, match_probability and match_distance.',
+      'Plate matching; exact by default. `fuzzy` folds look-alike characters (O/D/Q=0, I/L=1, Z=2, S=5, B=8, G=6) and allows 1 edit from 5 characters, 2 from 8; it also finds unreviewed reads for which the model weighed the plate as an alternative reading. Most likely first (match_score), with match_reason, match_probability and match_distance. `similar` (from 5 characters): the plate and every spelling with up to 2 characters read as a look-alike (I/1, B/8, 6/8, H/M...: GET /plates/{plate}/similar lists the pairs); fewest changes first, with match_distance (characters changed) and match_changes.',
   })
   @ApiQuery({ name: 'origin', required: false, enum: ['upload', 'live'] })
   @ApiQuery({
@@ -179,15 +192,18 @@ export class ResultsController {
       values.push(f.min_crop_width);
       clauses.push(`${CROP_WIDTH}>=$${values.length}`);
     }
-    // Fuzzy matches say why they matched and come most likely first (plateClause).
+    // Fuzzy matches say why they matched and come most likely first; similar ones list the
+    // look-alike characters they change and come fewest changes first (plateClause).
     let fields = RESULT_FIELDS,
-      nearest = '';
+      nearest: string[] = [],
+      similar: ReturnType<typeof plateClause>['similar'] = null;
     // Most confident first: the order a reviewer works through low-confidence reads.
     const byConfidence = f.order === 'confidence';
     if (f.plate !== undefined) {
       const plate = plateQuery(f.plate);
-      const { where, fuzzy } = plateClause(f.match, plate, values);
-      clauses.push(where);
+      const clause = plateClause(f.match, plate, values);
+      clauses.push(clause.where);
+      similar = clause.similar;
       // Searching a plate is what the log is for; browsing without one is not recorded.
       await this.audit.record(req, 'results.search', {
         details: {
@@ -199,9 +215,12 @@ export class ResultsController {
           origin: f.origin,
         },
       });
-      if (fuzzy) {
-        fields += `,${fuzzyFields(fuzzy)}`;
-        nearest = 'match_score,match_distance,';
+      if (clause.fuzzy) {
+        fields += `,${fuzzyFields(clause.fuzzy)}`;
+        nearest = ['match_score', 'match_distance'];
+      } else if (similar) {
+        fields += `,${similar.distance} AS match_distance`;
+        nearest = ['match_distance'];
       }
     }
     for (const [value, sql] of [
@@ -221,9 +240,7 @@ export class ResultsController {
       }
     }
     const from = `FROM plate_appearances a JOIN ${JOB_SOURCES} ON j.id=a.job_id
-      LEFT JOIN (SELECT DISTINCT ON (media_id) id FROM recognition_jobs WHERE status='succeeded'
-        AND media_id IS NOT NULL AND (job_kind='recognize' OR pipeline_snapshot->>'task'='prepare')
-        ORDER BY media_id,created_at DESC,id DESC) latest ON latest.id=j.id
+      LEFT JOIN ${LATEST_UPLOAD_RUN} latest ON latest.id=j.id
       WHERE ${clauses.join(' AND ')}`;
     const page = `LIMIT $${values.length + 1} OFFSET $${values.length + 2}`;
     if (f.group_by === 'sighting') {
@@ -236,9 +253,9 @@ export class ResultsController {
             max(j.captured_to) OVER w AS last_seen
           ${from}
           WINDOW w AS (PARTITION BY ${SIGHTING})
-          ORDER BY ${SIGHTING}, (a.review_status <> 'pending') DESC, ${nearest}
+          ORDER BY ${SIGHTING}, (a.review_status <> 'pending') DESC, ${nearest.map((n) => `${n},`).join('')}
             (j.statistics->>'confidence')::float DESC NULLS LAST, a.id
-        ) grouped ORDER BY ${nearest && 'grouped.match_score,grouped.match_distance,'}${byConfidence ? 'grouped.confidence DESC NULLS LAST,' : ''}coalesce(grouped.first_seen, grouped.captured_from, grouped.uploaded_at) DESC, grouped.id
+        ) grouped ORDER BY ${nearest.map((n) => `grouped.${n},`).join('')}${byConfidence ? 'grouped.confidence DESC NULLS LAST,' : ''}coalesce(grouped.first_seen, grouped.captured_from, grouped.uploaded_at) DESC, grouped.id
         ${page}`,
         [...values, f.limit, f.offset],
       );
@@ -247,21 +264,21 @@ export class ResultsController {
         limit: f.limit,
         offset: f.offset,
         items: items.rows.map((row) => ({
-          ...withMatchReason(row),
+          ...withSimilarChanges(withMatchReason(row), similar),
           sighting_count: Number(row.sighting_count),
         })),
       };
     }
     const count = await this.db.query(`SELECT count(*) ${from}`, values);
     const items = await this.db.query(
-      `SELECT ${fields} ${from} ORDER BY ${nearest}${byConfidence ? `(j.statistics->>'confidence')::float DESC NULLS LAST,` : ''}coalesce(j.captured_from,m.uploaded_at) DESC,a.id ${page}`,
+      `SELECT ${fields} ${from} ORDER BY ${nearest.map((n) => `${n},`).join('')}${byConfidence ? `(j.statistics->>'confidence')::float DESC NULLS LAST,` : ''}coalesce(j.captured_from,m.uploaded_at) DESC,a.id ${page}`,
       [...values, f.limit, f.offset],
     );
     return {
       total: Number(count.rows[0].count),
       limit: f.limit,
       offset: f.offset,
-      items: items.rows.map(withMatchReason),
+      items: items.rows.map((row) => withSimilarChanges(withMatchReason(row), similar)),
     };
   }
 
