@@ -12,20 +12,26 @@
 //   fuzzy+alt        fuzzy, or one of the reading's alternatives (from --min-probability) is
 //                    the plate or its Mercosul twin.
 // "Wrong per search" counts tracks of another plate a search also returns. Prints a JSON
-// report; --confusions prints the substitution pairs of same-length misreads instead.
+// report; --confusions prints the substitution pairs of same-length misreads instead;
+// --similar scores match=similar (look-alike spellings, src/results/lookalikes.ts) at 1-3
+// changed characters.
 import { readFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
 import { fuzzyEdits, plateSkeleton } from '../dist/src/results/plate-match.js';
+import { similarSpellings } from '../dist/src/results/lookalikes.js';
 
 const { values, positionals } = parseArgs({
   allowPositionals: true,
   options: {
     'min-probability': { type: 'string', default: '0.02' },
     confusions: { type: 'boolean', default: false },
+    similar: { type: 'boolean', default: false },
   },
 });
 if (positionals.length !== 1) {
-  console.error('usage: node scripts/eval_candidates.mjs [--min-probability 0.02] [--confusions] readings.json');
+  console.error(
+    'usage: node scripts/eval_candidates.mjs [--min-probability 0.02] [--confusions | --similar] readings.json',
+  );
   process.exit(2);
 }
 const minProbability = Number(values['min-probability']);
@@ -69,6 +75,29 @@ if (values.confusions) {
       }
   }
   console.log(JSON.stringify(Object.fromEntries([...pairs].sort((a, b) => b[1] - a[1]))));
+  process.exit(0);
+}
+
+if (values.similar) {
+  // A search for each track's truth finds the reads among its look-alike spellings.
+  const share = (count) => Math.round((count / rows.length) * 1000) / 10;
+  const report = [];
+  for (const changes of [1, 2, 3]) {
+    let found = 0;
+    let wrong = 0;
+    for (const { truth, read } of rows) {
+      const spellings = similarSpellings(truth, changes);
+      if (spellings.has(read)) found++;
+      for (const other of rows) if (other.truth !== truth && spellings.has(other.read)) wrong++;
+    }
+    report.push({
+      max_changes: changes,
+      found_percent: share(found),
+      wrong_per_search: Math.round((wrong / rows.length) * 1000) / 1000,
+    });
+  }
+  const exact = rows.filter((row) => row.read === row.truth).length;
+  console.log(JSON.stringify({ tracks: rows.length, exact_percent: share(exact), similar: report }, null, 1));
   process.exit(0);
 }
 

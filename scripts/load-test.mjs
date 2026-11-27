@@ -313,6 +313,8 @@ try {
     ['Kết quả gộp theo lượt xe', '/api/v2/recognition-results?limit=50&group_by=sighting'],
     ['Camera + một ngày', `/api/v2/recognition-results?limit=50&stream_source_id=${cameras[1].id}&captured_from=${dayFrom}&captured_to=${dayTo}`],
     ['Tìm biển chính xác (biển gặp nhiều)', `/api/v2/recognition-results?limit=50&match=exact&plate=${frequent.plate}`],
+    ['Tìm xấp xỉ (ký tự dễ nhầm, ≤ 2 ký tự)', `/api/v2/recognition-results?limit=50&match=similar&plate=${frequent.plate}`],
+    ['Biển gần giống (tóm tắt xấp xỉ)', `/api/v2/plates/${frequent.plate}/similar`],
     ['Tìm biển chính xác (biển hiếm)', `/api/v2/recognition-results?limit=50&match=exact&plate=${rare}`],
     ['Tìm "có chứa" 3 ký tự', `/api/v2/recognition-results?limit=50&match=contains&plate=${fragment}`],
     ['Tìm gần đúng (đọc sai 1 ký tự)', `/api/v2/recognition-results?limit=50&match=fuzzy&plate=${misread}`],

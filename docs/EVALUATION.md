@@ -738,3 +738,45 @@ npm run build
 node scripts/eval_candidates.mjs data/evaluation/icpr/candidates/r34c-test/readings.json
 node scripts/eval_candidates.mjs --confusions data/evaluation/icpr/validation/readings.json
 ```
+
+## Tìm theo ký tự dễ nhầm (27/11/2026)
+
+- **Câu hỏi:** người dùng thấy biển `ABC3I34` trên Camera live, kiểm tra là đúng rồi tìm biển đó. Hệ thống có hiện thêm các lần đọc của cùng xe nhưng bị đọc khác ở ký tự dễ nhầm (`ABC3134`, `A8C3I34`…) không?
+- **Cách làm** (`src/results/lookalikes.ts`):
+  - Bảng 59 cặp ký tự dễ nhầm, gồm:
+    - 34 cặp giống hình, viết tay: `I/1`, `L/1`, `T/1`, `O/0`, `D/0`, `Q/0`, `B/8`, `3/8`, `S/5`, `Z/2`, `G/6`, `A/4`, `H/M`, `V/Y`…;
+    - 34 cặp hai model OCR đã nhầm trên tập validation ICPR (`CONFUSION_PAIRS`: `6/8`, `8/9`, `4/6`, `B/D`…);
+    - 8 cặp nằm trong cả hai.
+  - Là các **cặp**, không gộp thành nhóm: 1 giống I và I giống L, nhưng không vì vậy mà 1 bị coi là giống mọi chữ giống L.
+  - Từ biển cần tìm, sinh mọi cách viết khi đổi tối đa 2 ký tự (mỗi ký tự đổi một lần), cộng biển cũ ↔ Mercosul. Biển 7 ký tự có khoảng 500–800 cách viết; tra một lần trong index biển.
+- **Đo trên 3000 track ICPR test:** tìm biển đúng của từng track trong kho 3000 lần đọc (`node scripts/eval_candidates.mjs --similar <readings.json>`).
+
+| Cách tìm | SE-ResNet34-C: tìm ra | Biển sai mỗi lần tìm | SVTRv2: tìm ra | Biển sai mỗi lần tìm |
+|---|---|---|---|---|
+| Chỉ khớp chính xác | 77,1% | 0 | 79,6% | 0 |
+| Lệch 1 ký tự dễ nhầm | **87,0%** | 0,007 | **88,8%** | 0,009 |
+| Lệch tối đa 2 ký tự | 88,8% | 0,036 | 90,2% | 0,039 |
+| Lệch tối đa 3 ký tự | 89,2% | 0,114 | 90,7% | 0,122 |
+
+- **Đọc bảng:**
+  - Đổi 1 ký tự dễ nhầm đã tìm ra thêm khoảng 10 điểm mà gần như không lẫn biển khác.
+  - Cho đổi 2 ký tự chỉ được thêm khoảng 2 điểm, nhưng số biển sai tăng khoảng 5 lần.
+  - Vì vậy giao diện hiện **hai tầng**: lệch 1 ký tự hiện ngay; lệch 2 ký tự hiện riêng, ghi "ít chắc hơn". API cho tới 3 ký tự (`max_changes`), mặc định 2.
+  - Riêng bảng giống hình (đo trước khi làm) chỉ thêm khoảng 4 điểm: `I/1`, `O/0` gần như không xảy ra trên biển Brazil, vì định dạng cố định vị trí chữ và số. Bảng vẫn giữ các cặp này cho biển nơi khác.
+- **So với "Gần đúng":**
+  - "Gần đúng" (gộp ký tự giống nhau rồi cho lệch thêm 1 ký tự bất kỳ) tìm ra 90,8% nhưng lẫn 0,026 biển sai mỗi lần tìm.
+  - "Xấp xỉ" lệch 1 ký tự lẫn ít hơn khoảng 4 lần và luôn nói rõ ký tự nào đã đổi.
+- **Tốc độ** (500 nghìn lần đọc, `scripts/load-test.mjs`):
+  - danh sách `match=similar`: 95 ms;
+  - tóm tắt `/plates/{plate}/similar`: 50 ms;
+  - tìm chính xác cùng biển: 73 ms.
+- **Ví dụ thật để thử** (hai camera "… 30 phút", cùng xe đi qua hai camera nhưng đọc khác nhau):
+
+  | Biển | Đọc thành | Cặp ký tự |
+  |---|---|---|
+  | `GKD4J31` | `GKD4J81` | 3↔8 |
+  | `SDV2G62` | `SDV2G42` | 6↔4 |
+  | `SXT5C88` | `SXT5C68` | 8↔6 |
+  | `LSZ2E29` | `LSZ7E29` | 2↔7 |
+  | `PZU2114` | `PZU2174` | 1↔7 |
+  | `TQE2J36` | `TQE2J16` | 3↔1 |
