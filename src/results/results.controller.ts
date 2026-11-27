@@ -25,7 +25,7 @@ import type { Response } from 'express';
 import { z } from 'zod';
 import { Database } from '../database/database';
 import { Actor, checkDates, instant, newId, normalizePlate, pagination } from '../common/http';
-import { plateClause, plateMatch, plateQuery } from './plate-match';
+import { fuzzyFields, plateClause, plateMatch, plateQuery, withMatchReason } from './plate-match';
 import { APPEARANCE_MEDIA_FIELDS, JOB_OWNER, JOB_SOURCES, Ownership } from '../common/ownership';
 import {
   ApiFailures,
@@ -120,7 +120,7 @@ export class ResultsController {
     required: false,
     enum: ['exact', 'contains', 'fuzzy'],
     description:
-      'Plate matching; exact by default. `fuzzy` folds look-alike characters (O/D/Q=0, I/L=1, Z=2, S=5, B=8, G=6) and allows 1 edit from 5 characters, 2 from 8; nearest first, with match_distance.',
+      'Plate matching; exact by default. `fuzzy` folds look-alike characters (O/D/Q=0, I/L=1, Z=2, S=5, B=8, G=6) and allows 1 edit from 5 characters, 2 from 8; it also finds unreviewed reads for which the model weighed the plate as an alternative reading. Most likely first (match_score), with match_reason, match_probability and match_distance.',
   })
   @ApiQuery({ name: 'origin', required: false, enum: ['upload', 'live'] })
   @ApiQuery({
@@ -179,14 +179,14 @@ export class ResultsController {
       values.push(f.min_crop_width);
       clauses.push(`${CROP_WIDTH}>=$${values.length}`);
     }
-    // Fuzzy matches carry their edit distance and come nearest first.
+    // Fuzzy matches say why they matched and come most likely first (plateClause).
     let fields = RESULT_FIELDS,
       nearest = '';
     // Most confident first: the order a reviewer works through low-confidence reads.
     const byConfidence = f.order === 'confidence';
     if (f.plate !== undefined) {
       const plate = plateQuery(f.plate);
-      const { where, distance } = plateClause(f.match, plate, values);
+      const { where, fuzzy } = plateClause(f.match, plate, values);
       clauses.push(where);
       // Searching a plate is what the log is for; browsing without one is not recorded.
       await this.audit.record(req, 'results.search', {
@@ -199,9 +199,9 @@ export class ResultsController {
           origin: f.origin,
         },
       });
-      if (distance) {
-        fields += `,${distance} AS match_distance`;
-        nearest = 'match_distance,';
+      if (fuzzy) {
+        fields += `,${fuzzyFields(fuzzy)}`;
+        nearest = 'match_score,match_distance,';
       }
     }
     for (const [value, sql] of [
@@ -238,7 +238,7 @@ export class ResultsController {
           WINDOW w AS (PARTITION BY ${SIGHTING})
           ORDER BY ${SIGHTING}, (a.review_status <> 'pending') DESC, ${nearest}
             (j.statistics->>'confidence')::float DESC NULLS LAST, a.id
-        ) grouped ORDER BY ${nearest && 'grouped.match_distance,'}${byConfidence ? 'grouped.confidence DESC NULLS LAST,' : ''}coalesce(grouped.first_seen, grouped.captured_from, grouped.uploaded_at) DESC, grouped.id
+        ) grouped ORDER BY ${nearest && 'grouped.match_score,grouped.match_distance,'}${byConfidence ? 'grouped.confidence DESC NULLS LAST,' : ''}coalesce(grouped.first_seen, grouped.captured_from, grouped.uploaded_at) DESC, grouped.id
         ${page}`,
         [...values, f.limit, f.offset],
       );
@@ -246,7 +246,10 @@ export class ResultsController {
         total: Number(count.rows[0].count),
         limit: f.limit,
         offset: f.offset,
-        items: items.rows.map((row) => ({ ...row, sighting_count: Number(row.sighting_count) })),
+        items: items.rows.map((row) => ({
+          ...withMatchReason(row),
+          sighting_count: Number(row.sighting_count),
+        })),
       };
     }
     const count = await this.db.query(`SELECT count(*) ${from}`, values);
@@ -258,7 +261,7 @@ export class ResultsController {
       total: Number(count.rows[0].count),
       limit: f.limit,
       offset: f.offset,
-      items: items.rows,
+      items: items.rows.map(withMatchReason),
     };
   }
 

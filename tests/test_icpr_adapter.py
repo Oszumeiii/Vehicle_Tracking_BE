@@ -9,7 +9,7 @@ from PIL import Image
 import pytest
 import torch
 
-from app.recognition.ctc_decoders import CTCDecoder
+from app.recognition.ctc_decoders import MAX_CANDIDATES, CTCDecoder
 from app.recognition.icpr_adapter import ICPRRecognizer
 from app.recognition.icpr_model import Config, SingleLRLPRModel
 
@@ -129,6 +129,42 @@ def test_decode_track_reports_uncalibrated_scores():
     assert greedy["beam_log_score"] is None and greedy["beam_confidence_proxy"] is None
     with pytest.raises(ValueError):
         CTCDecoder.decode_track(lp, "vote", 8)
+
+
+def test_decode_track_lists_the_readings_the_beam_weighed():
+    sequence = [0] + sum(([c, 0] for c in _chars("ABC1234")), [])
+    logits = torch.full((len(sequence), 37), -8.0)
+    for time, index in enumerate(sequence):
+        logits[time, index] = 8.0
+    logits[sequence.index(_chars("4")[0]), _chars("6")[0]] = 7.0  # 6 nearly as likely as 4
+    lp = torch.log_softmax(logits, dim=-1)
+    result = CTCDecoder.decode_track(lp, "beam_filter", 8)
+    texts = [candidate["text"] for candidate in result["candidates"]]
+    shares = [candidate["probability"] for candidate in result["candidates"]]
+    assert texts[0] == result["plate_text"] == "ABC1234"
+    assert texts[1] == "ABC1236"
+    assert shares == sorted(shares, reverse=True) and sum(shares) <= 1.0001
+    assert 0.6 < shares[0] < 0.8 and 0.2 < shares[1] < 0.4  # e^8 : e^7
+    assert all(CTCDecoder.is_valid_plate_format(text) for text in texts)
+    assert len(set(texts)) == len(texts) <= MAX_CANDIDATES
+    assert CTCDecoder.decode_track(lp, "greedy", 8)["candidates"] == []
+    constrained = CTCDecoder.decode_track(lp, "beam_constrained", 8)["candidates"]
+    assert [candidate["text"] for candidate in constrained[:2]] == ["ABC1234", "ABC1236"]
+
+
+def test_listing_candidates_leaves_the_chosen_reading_as_the_searches_pick_it():
+    generator = torch.Generator().manual_seed(7)
+    for _ in range(25):
+        lp = torch.log_softmax(torch.randn((24, 37), generator=generator) * 3, dim=-1)
+        for decoder in ("beam_plain", "beam_filter"):
+            text, _, _ = CTCDecoder.ctc_prefix_beam_search(lp.numpy(), Config.IDX2CHAR, 8,
+                                                           format_constrained=decoder == "beam_filter")
+            result = CTCDecoder.decode_track(lp, decoder, 8)
+            assert result["plate_text"] == text
+            assert result["candidates"][0]["text"] == text if text else result["candidates"] == []
+        text, _, ok = CTCDecoder.ctc_prefix_beam_search_constrained(lp.numpy(), Config.IDX2CHAR, beam_width=8)
+        result = CTCDecoder.decode_track(lp, "beam_constrained", 8)
+        assert result["plate_text"] == (text if ok else result["greedy_text"])
 
 
 def test_architecture_retains_exact_notebook_state_names_and_shapes():

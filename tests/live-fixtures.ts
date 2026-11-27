@@ -56,6 +56,8 @@ export async function writeTrack(
     capturedFrom?: string;
     capturedTo?: string;
     confidence?: number;
+    /** The decoder's readings, `text` first (decoding.candidates); no decoding without. */
+    candidates?: { text: string; probability: number }[];
   } = {},
 ) {
   const base = `live/${sessionId}/tracks/${key}`;
@@ -112,7 +114,20 @@ export async function writeTrack(
           character_scores: null,
           input_storage_keys: detections.map((d) => d.crop_storage_key),
           frame_weights: null,
-          decoding: null,
+          decoding: options.candidates
+            ? {
+                decoder: 'beam_filter',
+                beam_width: 8,
+                use_tta: false,
+                plate_text: text,
+                greedy_text: text,
+                format_valid: true,
+                greedy_symbol_confidence: 0.9,
+                beam_log_score: -0.5,
+                beam_confidence_proxy: 0.93,
+                candidates: options.candidates,
+              }
+            : null,
           latency_ms: 5,
         },
       ],

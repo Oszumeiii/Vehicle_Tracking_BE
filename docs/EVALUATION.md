@@ -668,3 +668,73 @@ GPU dùng trung bình 38% (cũ) và 37% (mới); VRAM cao nhất 5,2 và 5,5 GB.
   - Lần đầu nạp cả 10 triệu dòng trong một câu lệnh làm máy hết RAM: mỗi dòng giữ một sự kiện kiểm tra khóa ngoại trong bộ nhớ tới cuối câu.
   - Script giờ nạp theo lô 250 nghìn dòng, tắt kiểm tra khóa ngoại khi nạp dữ liệu giả (dữ liệu tự nhất quán) và dựng index sau khi nạp. Tổng thời gian nạp khoảng 24 phút.
   - `--attach` đo tiếp trên một database đã nạp mà không phải nạp lại.
+
+## Tìm kiếm xấp xỉ: các cách đọc khác của model (27/11/2026)
+
+- **Câu hỏi:** khi model đọc sai biển, tìm biển thật có ra không? Ý tưởng ban đầu là sinh thêm các biến thể theo cặp ký tự trông giống nhau (`I/1`, `O/0`...). Trước khi làm, đo trên 3000 track ICPR test có nhãn đúng (`data/evaluation/icpr/test`, model SE-ResNet34-C).
+- **Bảng ký tự giống nhau viết tay gần như vô dụng:**
+  - Trong 682 lần đọc sai mà vẫn đủ độ dài, chỉ 30 lần (4%) thành đúng sau khi gộp `O/D/Q=0`, `I/L=1`, `Z=2`, `S=5`, `B=8`, `G=6` như `plate_skeleton()` đang làm.
+  - Lỗi thật là nhầm trong cùng loại ký tự: `6↔8` (69 lần), `H↔M` (48), `B↔D` (48), `8↔9` (37), `4↔6` (33), `0↔8` (28), `1↔3` (27), `V↔Y` (24), `M↔N` (22).
+  - `I↔1` gần như không xảy ra: biển Brazil cố định vị trí chữ và số, và bộ giải mã `beam_filter` đã buộc kết quả đúng định dạng. SVTRv2 cho bảng gần giống.
+  - Mô phỏng thêm quy tắc "cho lệch 2 ký tự nếu cả hai là cặp hay nhầm" (cặp lấy từ tập validation): tìm ra 92,0% thay vì 90,8% (+1,2 điểm), nhưng số biển sai trả về tăng gấp đôi. Không làm.
+- **Cách làm:** bộ giải mã CTC vốn đã tính 8 beam rồi bỏ đi, chỉ giữ cách đọc tốt nhất.
+  - Giờ `decode_track` trả thêm `candidates`: tối đa 5 cách đọc đúng định dạng, kèm phần xác suất trong beam.
+  - Giữ nguyên beam width 8, nên cách đọc chính không đổi: chạy lại 3000 track, **0 track** khác lần đo trước, với cả hai model.
+  - Các cách đọc khác từ 2% trở lên được lưu vào `plate_candidates` (migration 0023). Kết quả chính vẫn là cách đọc được chọn; trạng thái "đọc rõ / tin cậy thấp" không đổi.
+- **Cách đo:** chạy model trên tập test bằng `scripts/calibrate_icpr.py` (giờ ghi thêm `candidates`), rồi chấm bằng `node scripts/eval_candidates.mjs <readings.json>` (sau `npm run build`):
+  - "Tìm ra": tìm biển đúng của từng track trong kho 3000 lần đọc, như trang Kết quả.
+  - "Biển sai mỗi lần tìm": số track của biển khác cũng bị trả về.
+  - Bảng cặp hay nhầm (`src/results/confusions.ts`) rút từ tập **validation** (`--confusions`, gộp hai model, cặp xuất hiện từ 6 lần), không lấy từ tập test.
+
+| | SE-ResNet34-C | SVTRv2 |
+|---|---|---|
+| Biển đúng là cách đọc chính (top-1) | 77,1% | 79,6% |
+| Biển đúng nằm trong 2 / 3 / 5 cách đọc đầu | 84,2% / 86,8% / 89,1% | 86,1% / 87,8% / 89,6% |
+| Tìm ra bằng "Gần đúng" như trước | 90,8% | 91,9% |
+| "Gần đúng" + cách đọc khác | 91,5% (+0,7) | 92,3% (+0,4) |
+| Biển sai mỗi lần tìm (kho 3000 lần đọc) | 0,026, không tăng | 0,026, không tăng |
+| Số cách đọc khác được lưu mỗi track | 1,1 | 1,0 |
+
+- **Tìm ra thêm ít, vì sao vẫn giữ:**
+  - Hầu hết cách đọc khác chỉ lệch 1 ký tự, mà "Gần đúng" vốn đã tìm được.
+  - Nhưng cách đọc khác **tách kết quả đúng khỏi kết quả sai** rất rõ. Trong các kết quả gần đúng không trùng hẳn (ResNet): ở 411 kết quả đúng, 76,9% có biển cần tìm nằm trong cách đọc khác; ở 76 kết quả sai, chỉ 5,3%.
+  - Cặp ký tự hay nhầm tách kém hơn: 65,5% so với 19,7%.
+  - Khi kho lớn, mỗi lần tìm gần đúng kéo theo nhiều biển sai. Với tỷ lệ trên, kho 2 triệu lần đọc ước khoảng 17 biển sai mỗi lần tìm (ước thô). Xếp theo cách đọc khác đưa xe đúng lên đầu.
+- **Thứ tự kết quả "Gần đúng"** (`match_score`, tăng dần):
+  1. đúng biển, hoặc biển kia của cùng xe theo luật Mercosul (0);
+  2. model cân nhắc biển này, xếp theo xác suất (1 − xác suất);
+  3. lệch 1 ký tự thuộc cặp hay nhầm (1,5);
+  4. gần đúng khác (2).
+  Lần đọc đã duyệt thì không dùng cách đọc khác.
+- **Xác suất có đáng tin không** (tỷ lệ là biển đúng thật, ResNet):
+
+| Phần xác suất | Cách đọc chính | Cách đọc khác |
+|---|---|---|
+| 0,9–1 | 97,8% (1 895 track) | — |
+| 0,7–0,9 | 69,2% | — |
+| 0,5–0,7 | 47,1% | — |
+| 0,3–0,5 | 21,0% | 31,5% (203 cách đọc) |
+| 0,1–0,3 | 2,7% | 11,2% |
+| 0,02–0,1 | — | 6,0% |
+
+  SVTRv2: cách đọc khác 0,3–0,5 đúng 31,3%, 0,1–0,3 đúng 10,5%. Vì vậy watchlist báo cả khi model cân nhắc biển theo dõi với xác suất từ 30% (`PLATE_ALERT_ALTERNATIVE_MIN`), nhưng tin ghi "có thể là": khoảng một lần trong ba là đúng xe.
+- **Cho người duyệt:** ở 52% số track ResNet đọc sai, biển đúng nằm trong 4 cách đọc khác, nên chỉ cần chọn thay vì gõ lại.
+- **Tốc độ** (`scripts/load-test.mjs`, giờ sinh cả cách đọc khác: 500 nghìn lần đọc, 550 nghìn cách đọc khác; cùng dữ liệu, 11 lần, trung vị):
+
+| Kịch bản | main `79a6f01` | Bản này |
+|---|---|---|
+| Tìm gần đúng, đọc sai 1 ký tự (1 812 kết quả) | 128 ms | 92 ms |
+| Hành trình, gần đúng | 79 ms | 87 ms |
+
+  - Câu truy vấn dùng `BitmapOr` của index `plate_skeleton` và khóa chính: danh sách kết quả có cách đọc khác khớp được lấy trước một lần qua index `plate_candidates_text`, nên không quét cả bảng.
+  - Tính lý do và điểm cho 1 800 dòng khớp tốn khoảng 10 ms.
+  - Hai lần đo đầu cho "trước 111 ms, sau 197 ms", nhưng đo lại nhiều lần trên cùng dữ liệu thì không chậm hơn. Laptop vẫn chạy việc khác, nên từng lần đo dao động nhiều.
+- **Chạy lại:**
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.calibrate_icpr --dataset data/evaluation/icpr/dataset `
+  --split test --payload data/live/SESSION_ID/payload.json --out data/evaluation/icpr/candidates/r34c-test
+npm run build
+node scripts/eval_candidates.mjs data/evaluation/icpr/candidates/r34c-test/readings.json
+node scripts/eval_candidates.mjs --confusions data/evaluation/icpr/validation/readings.json
+```

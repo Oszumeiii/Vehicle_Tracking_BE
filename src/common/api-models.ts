@@ -7,6 +7,8 @@ const nullableNumber = { type: Number, nullable: true } as const;
 const dateTime = { type: String, format: 'date-time' } as const;
 const nullableDateTime = { ...dateTime, nullable: true } as const;
 const integer = { type: 'integer', minimum: 0 } as const;
+// Why a read matched match=fuzzy (plate-match matchReason).
+export const MATCH_REASONS = ['same', 'alternative', 'confusable', 'near'] as const;
 const nullableInteger = { ...integer, nullable: true } as const;
 const boundingBox = {
   type: 'array',
@@ -278,6 +280,29 @@ export class SearchResultResponse extends AppearanceResponse {
   })
   match_distance?: number;
   @ApiProperty({
+    type: 'number',
+    required: false,
+    description:
+      'match=fuzzy only: how likely the read is the searched plate, lower first (results come in this order): 0 same, 1 - match_probability alternative, 1.5 confusable, 2 near.',
+  })
+  match_score?: number;
+  @ApiProperty({
+    enum: [...MATCH_REASONS],
+    required: false,
+    description:
+      'match=fuzzy only. same: the plate, or its other Brazilian format (ABC1234 = ABC1C34); alternative: the model weighed the plate as an alternative reading (unreviewed reads); confusable: one character off by a pair the OCR models often confuse (e.g. 6/8, H/M); near: any other near read.',
+  })
+  match_reason?: string;
+  @ApiProperty({
+    ...nullableNumber,
+    required: false,
+    minimum: 0,
+    maximum: 1,
+    description:
+      'match=fuzzy only: probability the model gave the plate as an alternative reading (relative to the decoder beam, not calibrated); null unless match_reason=alternative.',
+  })
+  match_probability?: number | null;
+  @ApiProperty({
     type: Number,
     nullable: true,
     description:
@@ -543,6 +568,17 @@ export class AlertDeliveryResponse {
 
 export const streamZones = zones;
 
+export class CandidateResponse {
+  @ApiProperty({ description: 'A reading of the plate.' }) text!: string;
+  @ApiProperty({
+    minimum: 0,
+    maximum: 1,
+    description:
+      'Its share of the probability of the readings in the decoder beam (softmax of their scores): ranks them, not calibrated. On ICPR, alternatives at 30-50% were the true plate 31% of the time.',
+  })
+  probability!: number;
+}
+
 export class DecodingResponse {
   @ApiProperty({ enum: ['greedy', 'beam_plain', 'beam_filter', 'beam_constrained'] })
   decoder!: string;
@@ -571,6 +607,13 @@ export class DecodingResponse {
       'exp(beam_log_score / length): relative ranking score used by the notebook threshold (0.80). Not a probability of correctness.',
   })
   beam_confidence_proxy!: number | null;
+  @ApiProperty({
+    type: [CandidateResponse],
+    required: false,
+    description:
+      'Readings the decoder weighed, plate_text first, at most 5; empty for the greedy decoder. Absent on reads made before alternatives were kept.',
+  })
+  candidates?: CandidateResponse[];
 }
 
 export class PredictionResponse {

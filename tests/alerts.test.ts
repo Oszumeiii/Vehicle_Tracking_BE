@@ -11,7 +11,7 @@ import { workerOptions } from '../src/recognition/engine';
 import { ingestTrack } from '../src/live/ingest';
 import { AlertNotifier } from '../src/notify/notifier';
 import { privateAddress, telegramApi, webhookUrl } from '../src/notify/senders';
-import { notifySettings } from '../src/notify/settings';
+import { alertAlternativeMin, notifySettings } from '../src/notify/settings';
 import { TelegramLinker } from '../src/notify/telegram';
 import { alertText } from '../src/notify/message';
 import { seedUser, startTestDatabase, TestDatabase } from './helpers';
@@ -177,9 +177,10 @@ async function ingest(
   session: Record<string, any>,
   text: string,
   times: { capturedFrom?: string; capturedTo?: string } = {},
+  candidates?: { text: string; probability: number }[],
 ) {
   const key = `e000-t${String(++tracks).padStart(6, '0')}`;
-  await writeTrack(dataDir, session.id, key, { text, ...times });
+  await writeTrack(dataDir, session.id, key, { text, ...times, candidates });
   return ingestTrack(db(), workerOptions(), session, key);
 }
 
@@ -345,6 +346,45 @@ test('a shared entry alerts everyone who sees the camera; expired entries stay s
     [hit]: true,
     [quiet]: false,
   });
+  await clearWatchlists();
+});
+
+test('a watched plate alerts when the model weighed it, and on its Mercosul or look-alike reads', async () => {
+  const session = await ownerSession();
+  for (const plate of ['WAT5495', 'OLD1234', 'QOD7777'])
+    await api.post('/api/v2/watchlist').set(as('owner')).send({ plate }).expect(201);
+  // Read WAT9480 (3 characters off), but the model weighed WAT5495 at 35%: "có thể là".
+  const maybe = await ingest(session, 'WAT9480', {}, [
+    { text: 'WAT9480', probability: 0.6 },
+    { text: 'WAT5495', probability: 0.35 },
+  ]);
+  const [alert, ...others] = await alertsOf(maybe);
+  assert.deepEqual(others, []);
+  assert.equal(alert.watch_plate, 'WAT5495');
+  assert.equal(alert.plate, 'WAT9480');
+  assert.equal(alert.match_reason, 'alternative');
+  assert.equal(Number(alert.match_probability.toFixed(2)), 0.35);
+  // Weighed below PLATE_ALERT_ALTERNATIVE_MIN (0.3): no alert.
+  const weak = await ingest(session, 'WAT9481', {}, [
+    { text: 'WAT9481', probability: 0.75 },
+    { text: 'WAT5495', probability: 0.2 },
+  ]);
+  assert.deepEqual(await alertsOf(weak), []);
+  // The Mercosul plate of a watched old plate; a read with two look-alikes (Q/0, O/0), which
+  // the raw one-character rule missed.
+  const mercosul = await ingest(session, 'OLD1C34');
+  assert.deepEqual(
+    (await alertsOf(mercosul)).map((a) => [a.watch_plate, a.match_reason, a.distance]),
+    [['OLD1234', 'same', 1]],
+  );
+  const lookalike = await ingest(session, '00D7777');
+  assert.deepEqual(
+    (await alertsOf(lookalike)).map((a) => [a.watch_plate, a.match_reason, a.distance]),
+    [['QOD7777', 'near', 2]],
+  );
+  assert.equal(alertAlternativeMin({}), 0.3);
+  assert.equal(alertAlternativeMin({ PLATE_ALERT_ALTERNATIVE_MIN: '1' }), 1);
+  assert.throws(() => alertAlternativeMin({ PLATE_ALERT_ALTERNATIVE_MIN: '0' }), /above 0/);
   await clearWatchlists();
 });
 
@@ -688,6 +728,34 @@ test('message text: Vietnamese, local time, map and link; test messages name the
   assert.match(
     alertText({ kind: 'test', label: 'Nhóm trực' }, { publicUrl: null, timeZone: 'UTC' }),
     /Kênh "Nhóm trực"/,
+  );
+  const plain = { publicUrl: null, timeZone: 'UTC' };
+  assert.match(
+    alertText(
+      {
+        kind: 'alert',
+        plate: 'WAT9480',
+        watch_plate: 'WAT5495',
+        distance: 3,
+        match_reason: 'alternative',
+        match_probability: 0.35,
+      },
+      plain,
+    ),
+    /\nMáy đọc ra WAT9480, nhưng cũng có thể là WAT5495 \(model cân nhắc 35%\)\n/,
+  );
+  assert.match(
+    alertText(
+      {
+        kind: 'alert',
+        plate: 'OLD1C34',
+        watch_plate: 'OLD1234',
+        distance: 1,
+        match_reason: 'same',
+      },
+      plain,
+    ),
+    /\nCùng xe với OLD1234 \(biển cũ và biển Mercosul\)\n/,
   );
   assert.throws(() => notifySettings({ PLATE_ALERT_TIMEZONE: 'Mars/Base' }), /time zone/);
 });

@@ -8,6 +8,10 @@ export interface AlertPayload {
   plate?: string;
   watch_plate?: string;
   distance?: number;
+  /** How the read matched the watched plate (plate-match matchReason); absent on older alerts. */
+  match_reason?: 'same' | 'alternative' | 'confusable' | 'near';
+  /** match_reason=alternative: the probability the model gave the watched plate. */
+  match_probability?: number | null;
   priority?: Priority;
   reason?: Reason;
   note?: string | null;
@@ -65,6 +69,19 @@ export function resultsUrl(plate: string | undefined, settings: Pick<NotifySetti
     : null;
 }
 
+/** How the read relates to the watched plate, unless it is that plate. */
+function matchLine(payload: AlertPayload) {
+  if (payload.match_reason === 'alternative' && typeof payload.match_probability === 'number')
+    return (
+      `Máy đọc ra ${payload.plate}, nhưng cũng có thể là ${payload.watch_plate} ` +
+      `(model cân nhắc ${Math.round(payload.match_probability * 100)}%)`
+    );
+  if (!payload.distance) return null;
+  if (payload.match_reason === 'same')
+    return `Cùng xe với ${payload.watch_plate} (biển cũ và biển Mercosul)`;
+  return `Khớp gần đúng với ${payload.watch_plate} (lệch ${payload.distance} ký tự)`;
+}
+
 /** The message text (Vietnamese, plain text: no markup to escape). */
 export function alertText(
   payload: AlertPayload,
@@ -79,9 +96,7 @@ export function alertText(
   const url = resultsUrl(payload.plate, settings);
   const lines = [
     `🚨 Biển số theo dõi: ${payload.plate}`,
-    payload.distance
-      ? `Khớp gần đúng với ${payload.watch_plate} (lệch ${payload.distance} ký tự)`
-      : null,
+    matchLine(payload),
     `Mức ưu tiên: ${PRIORITY_TEXT[payload.priority ?? 'normal']} · Lý do: ${REASON_TEXT[payload.reason ?? 'other']}`,
     camera ? `Camera: ${camera.name}` : null,
     payload.captured_from ? `Lúc: ${formatTime(payload.captured_from, settings.timeZone)}` : null,
@@ -119,6 +134,8 @@ export function webhookBody(
             plate: p.plate,
             watch_plate: p.watch_plate,
             distance: p.distance,
+            match_reason: p.match_reason ?? null,
+            match_probability: p.match_probability ?? null,
             priority: p.priority,
             reason: p.reason,
             note: p.note ?? null,
